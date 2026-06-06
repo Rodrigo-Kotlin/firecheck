@@ -424,3 +424,166 @@ input[type="checkbox"], input[type="radio"] {
 @media (min-width: 1024px) {
   .min-readable { font-size: 0.9375rem; }
 }
+
+/* ===== QR Code printable label ===== */
+.print-area {
+  display: flex;
+  justify-content: center;
+}
+.qr-label {
+  width: 100%;
+  max-width: 28rem;
+  background: white;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  color: #111827;
+}
+.qr-label__header {
+  background: var(--color-primary);
+  color: white;
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.qr-label__brand {
+  font-size: 1rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.qr-label__subtitle {
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+.qr-label__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+}
+@media (min-width: 480px) {
+  .qr-label__body {
+    flex-direction: row;
+    align-items: center;
+    gap: 1.25rem;
+  }
+}
+.qr-label__qr {
+  flex-shrink: 0;
+  width: 10rem;
+  height: 10rem;
+  margin: 0 auto;
+  background: white;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.qr-label__qr img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.qr-label__qr-placeholder {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #9CA3AF;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.qr-label__info {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+}
+.qr-label__id {
+  font-size: 1.25rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  color: #111827;
+}
+.qr-label__type {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #4B5563;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+.qr-label__row {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+.qr-label__row-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6B7280;
+  flex-shrink: 0;
+  min-width: 4.5rem;
+}
+.qr-label__row-value {
+  font-weight: 600;
+  color: #1F2937;
+  word-break: break-word;
+}
+.qr-label__footer {
+  border-top: 1px dashed #E5E7EB;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6B7280;
+  background: #FAFAFA;
+}
+
+/* ===== Print rules ===== */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .no-print,
+  .app-sidebar,
+  .sidebar-backdrop,
+  .app-bottom-nav,
+  .app-top-bar,
+  header.page-header,
+  .sticky {
+    display: none !important;
+  }
+  .app-main,
+  .app-content {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+  .print-area {
+    display: block;
+  }
+  .qr-label {
+    border: 1px solid #111111;
+    box-shadow: none;
+    page-break-inside: avoid;
+  }
+  @page {
+    margin: 1cm;
+  }
+}

@@ -3,8 +3,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { ChevronLeft, Save, ShieldCheck } from 'lucide-react';
+import { ChevronLeft, Save } from 'lucide-react';
 import { useState } from 'react';
+import QrCodePrintCard from '../../components/QrCodePrintCard';
+import type { Equipment } from '../../types';
 
 const EQUIP_TYPES = [
   'Extintor', 'Hidrante', 'Mangueira', 'Abrigo de mangueira', 'Esguicho',
@@ -41,7 +43,7 @@ type FormData = z.infer<typeof schema>;
 export default function NovoEquipamento() {
   const navigate = useNavigate();
   const { addEquipment, equipments } = useAppStore();
-  const [success, setSuccess] = useState(false);
+  const [createdEquipment, setCreatedEquipment] = useState<Equipment | null>(null);
   const [duplicateError, setDuplicateError] = useState('');
 
   const {
@@ -64,7 +66,7 @@ export default function NovoEquipamento() {
     }
     setDuplicateError('');
 
-    addEquipment({
+    const newEquipment: Equipment = {
       id: data.id,
       tipo: data.tipo,
       subtipo: data.subtipo || '',
@@ -82,13 +84,15 @@ export default function NovoEquipamento() {
       dataProximaInspecao: data.dataProximaInspecao,
       qrcode: data.qrcode,
       observacoes: data.observacoes
-    });
+    };
 
-    setSuccess(true);
-    setTimeout(() => {
-      setSuccess(false);
-      navigate('/equipamentos');
-    }, 1500);
+    addEquipment(newEquipment);
+    setCreatedEquipment(newEquipment);
+  };
+
+  const handleCloseSuccess = () => {
+    setCreatedEquipment(null);
+    navigate('/equipamentos');
   };
 
   return (
@@ -110,16 +114,8 @@ export default function NovoEquipamento() {
         </div>
       </header>
 
-      {success ? (
-        <div className="card-subtle bg-white py-12 flex flex-col items-center justify-center text-center gap-3 border-l-4 border-l-success">
-          <div className="w-16 h-16 bg-green-50 text-success rounded-full flex items-center justify-center">
-            <ShieldCheck className="w-10 h-10" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-gray-800">Equipamento Salvo!</h3>
-            <p className="text-sm text-gray-500 mt-1">Dispositivo adicionado ao inventário.</p>
-          </div>
-        </div>
+      {createdEquipment ? (
+        <QrCodePrintCard equipment={createdEquipment} onClose={handleCloseSuccess} />
       ) : (
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 sm:space-y-6">
           {duplicateError && (
