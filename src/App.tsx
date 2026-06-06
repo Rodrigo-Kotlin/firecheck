@@ -11,6 +11,8 @@ import ScanQr from './pages/scan/ScanQr';
 import Relatorios from './pages/relatorios/Relatorios';
 import PlanoDeAcao from './pages/planodeacao/PlanoDeAcao';
 import Configuracoes from './pages/configuracoes/Configuracoes';
+import Toaster from './components/Toaster';
+import { usePwaUpdate } from './hooks/usePwaUpdate';
 import { useAppStore } from './store';
 
 export default function App() {
@@ -21,6 +23,8 @@ export default function App() {
     // dos mocks na primeira execução) e dispara a sincronização inicial.
     void hydrate();
   }, [hydrate]);
+
+  usePwaUpdate();
 
   return (
     <Router>
@@ -43,6 +47,7 @@ export default function App() {
         {/* Fallback redirect */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <Toaster />
     </Router>
   );
 }

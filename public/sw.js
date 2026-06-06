@@ -1,4 +1,4 @@
-const CACHE_NAME = 'firecheck-v1';
+const CACHE_NAME = 'firecheck-v2';
 const ASSETS = [
   '/',
   '/index.html',
@@ -30,6 +30,12 @@ self.addEventListener('activate', (e) => {
       );
     }).then(() => self.clients.claim())
   );
+});
+
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('fetch', (e) => {
