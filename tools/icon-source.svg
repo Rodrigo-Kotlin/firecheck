@@ -1,57 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="FireCheck">
-  <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#E11D48"/>
-      <stop offset="100%" stop-color="#B80035"/>
-    </linearGradient>
-    <linearGradient id="shieldShade" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#FFFFFF"/>
-      <stop offset="100%" stop-color="#F1F5F9"/>
-    </linearGradient>
-  </defs>
+  <!-- Solid red rounded square (matches Login.tsx: bg-primary + rounded-2xl) -->
+  <rect width="512" height="512" rx="96" fill="#DC2626"/>
 
-  <!-- Red gradient background with rounded corners (iOS-style) -->
-  <rect width="512" height="512" rx="96" fill="url(#bgGrad)"/>
-
-  <!-- Subtle top highlight for depth (no exaggerated shadows) -->
-  <path d="M 0 96 Q 0 0 96 0 L 416 0 Q 512 0 512 96 L 512 192 Q 256 232 0 192 Z"
-        fill="white" opacity="0.07"/>
-
-  <!-- White shield (heraldic: rounded shoulders, pointed bottom) -->
-  <path d="M 256 92
-           L 384 142
-           L 384 260
-           C 384 342 326 402 256 426
-           C 186 402 128 342 128 260
-           L 128 142
-           Z"
-        fill="url(#shieldShade)"/>
-
-  <!-- Inner shield accent line (very subtle) -->
-  <path d="M 256 110
-           L 368 154
-           L 368 260
-           C 368 332 318 388 256 410"
-        stroke="#E5E7EB" stroke-width="2" fill="none" opacity="0.5"/>
-
-  <!-- Red flame (negative space inside shield) -->
-  <path d="M 256 178
-           C 256 178 318 230 318 284
-           C 318 310 300 332 272 336
-           C 290 324 298 308 296 288
-           C 292 260 272 232 256 214
-           C 248 244 232 260 220 280
-           C 212 296 214 320 232 336
-           C 208 332 192 312 192 280
-           C 192 230 256 178 256 178 Z"
-        fill="#B80035"/>
-
-  <!-- Green check mark (compliance accent) -->
-  <path d="M 200 348 L 240 388 L 318 310"
-        stroke="#16A34A"
-        stroke-width="24"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        fill="none"/>
+  <!-- White Flame outline (lucide-react Flame, scaled 16x and centered) -->
+  <g transform="translate(72 64) scale(16)"
+     fill="none"
+     stroke="white"
+     stroke-width="1"
+     stroke-linecap="round"
+     stroke-linejoin="round">
+    <path d="M12 3 q1 4 4 6.5 t3 5.5 a1 1 0 0 1 -14 0 a5 5 0 0 1 1-3 a1 1 0 0 0 5 0 c0-2 -1.5-3 -1.5-5 q0-2 2.5-4"/>
+  </g>
 </svg>

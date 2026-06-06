@@ -50,7 +50,7 @@
   "start_url": "/firecheck/",
   "scope": "/firecheck/",
   "background_color": "#FFFFFF",
-  "theme_color": "#E11D48",
+  "theme_color": "#DC2626",
   "display": "standalone",
   "orientation": "portrait",
   "categories": ["utilities", "productivity"],
