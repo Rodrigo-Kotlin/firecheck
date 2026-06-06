@@ -100,9 +100,12 @@ firecheck/
 │       ├── 0001_init_schema.sql
 │       └── 0002_seed_data.sql
 ├── public/
-│   ├── manifest.webmanifest
-│   ├── sw.js               # service worker
-│   └── icon-{192,512}.png
+│   ├── manifest.json       # PWA manifest (theme_color #E11D48)
+│   ├── sw.js               # service worker (cache firecheck-v2)
+│   ├── favicon.ico         # multi-size (16+32+48)
+│   ├── favicon-{16,32,48}.png
+│   ├── apple-touch-icon.png
+│   └── icon-{192,512,maskable-512}.png
 └── src/
     ├── App.tsx             # rotas + Toaster + usePwaUpdate
     ├── main.tsx            # entrypoint

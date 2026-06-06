@@ -42,8 +42,14 @@ firecheck/
 │       └── deploy.yml                   # build & publish em GitHub Pages
 ├── public/
 │   ├── sw.js                            # service worker (cache firecheck-v2)
-│   ├── manifest.webmanifest             # PWA manifest
-│   └── icon-{192,512}.png
+│   ├── manifest.json                    # PWA manifest
+│   ├── favicon.ico                      # multi-size 16+32+48
+│   ├── favicon-{16,32,48}.png
+│   ├── apple-touch-icon.png             # 180x180
+│   └── icon-{192,512,maskable-512}.png
+├── tools/
+│   ├── icon-source.svg                  # SVG mestre do ícone PWA
+│   └── generate-icons.mjs               # Node script: SVG -> PNG/ICO via sharp + to-ico
 ├── supabase/
 │   ├── config.toml                      # project_id = "firecheck"
 │   └── migrations/
@@ -477,11 +483,12 @@ usePwaUpdate();   // detecta nova versão → toast "Atualizar" → reload
 
 ## 13. PWA
 
-- **Manifest**: `public/manifest.webmanifest` (icons 192/512).
+- **Manifest**: `public/manifest.json` (icons 16/32/48/180/192/512 + maskable 512, theme `#E11D48`, background `#FFFFFF`).
 - **Service Worker**: `public/sw.js` (estratégia simples de cache, chave `firecheck-v2`).
 - **Update flow**: `registerSW.ts` → `usePwaUpdate` → toast "Nova versão disponível" → `SKIP_WAITING` → reload automático.
 - **Install**: botão "Adicionar à tela inicial" no Chrome (manifest válido + SW registrado).
 - **Modo offline**: tudo funciona localmente. Toasts mostram estado online/offline no `AppLayout` (badge superior direito).
+- **Ícones**: SVG mestre em `tools/icon-source.svg`; regerar PNGs/ICO com `node tools/generate-icons.mjs` (requer `sharp` e `to-ico` instalados). O design atual é escudo branco + chama vermelha em espaço negativo + check verde sobre fundo com gradiente vermelho `#E11D48` → `#B80035`.
 
 ---
 
