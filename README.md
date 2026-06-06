@@ -4,7 +4,7 @@
 [![Deploy Pages](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/deploy.yml/badge.svg)](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Supabase](https://img.shields.io/badge/Supabase-Backend-3FCF8E?logo=supabase&logoColor=white)](https://supabase.com)
 [![PWA](https://img.shields.io/badge/PWA-Installable-5A0FC8?logo=pwa&logoColor=white)](https://web.dev/progressive-web-apps/)
 
@@ -19,10 +19,14 @@ automática para a nuvem via Supabase.
 ## ✨ Features
 
 - 📱 **PWA instalável** — funciona no celular como app nativo (Android/iOS).
+- 🔐 **Autenticação local-first** com PBKDF2-SHA-256 (Web Crypto, zero deps);
+  o primeiro usuário do dispositivo vira admin automaticamente.
+- 👥 **RBAC** (admin/inspector) com permissões baseadas em ownership:
+  inspetores só editam os próprios cadastros; admin edita tudo.
 - 📷 **Scanner de QR Code** com `html5-qrcode`.
 - 📋 **Checklists dinâmicos** por tipo de equipamento.
 - 📑 **Relatórios em PDF** com `jsPDF` + `html2canvas`.
-- 🔄 **Sincronização bidirecional** Dexie ↔ Supabase.
+- 🔄 **Sincronização bidirecional** Dexie ↔ Supabase (oportunística).
 - 📡 **Modo offline** completo — todas as escritas vão para IndexedDB
   instantaneamente; a sincronização acontece quando a conexão volta.
 - 🚨 **Plano de ação** com criticidade inferida automaticamente.
@@ -32,7 +36,7 @@ automática para a nuvem via Supabase.
 
 | Camada | Tecnologia |
 |---|---|
-| Framework | React 19 + TypeScript 5 |
+| Framework | React 19 + TypeScript 6 |
 | Build | Vite 8 |
 | Estado | Zustand (com `persist` no localStorage) |
 | Banco local | Dexie 4 (IndexedDB) |
@@ -60,8 +64,11 @@ npm run dev
 npm run build
 ```
 
-Login: qualquer e-mail/senha (autenticação mock mantida para o demo).
-Entre como "Ricardo Silva".
+**Login (local):** cadastre-se com nome, e-mail, cargo e senha (≥ 8 caracteres,
+1 maiúscula, 1 dígito). A **primeira conta** do dispositivo vira **admin**
+automaticamente; contas subsequentes são **inspector** e podem ser promovidas
+na tela `Configurações → Gerenciar Usuários`. A senha é protegida com
+**PBKDF2-SHA-256** (100k iterações, salt 16 bytes) e nunca sai do dispositivo.
 
 ## ☁️ Setup do Supabase
 
@@ -116,14 +123,22 @@ firecheck/
 
 ## 🗺 Roadmap
 
-- [ ] Trocar mock login por Supabase Auth (`signInWithPassword`)
-- [ ] RLS restritivo com `auth.uid()` por usuário
+- [x] Autenticação local-first com PBKDF2 (Web Crypto)
+- [x] RBAC admin/inspector com permissões por ownership
+- [ ] RLS restritivo no Supabase (atualmente permissivo para o demo)
 - [ ] Conflict resolution (last-write-wins com campo `version`)
 - [ ] Sincronização periódica em background (Service Worker)
 - [ ] Supabase CLI para versionar migrations (`supabase db push`)
 - [ ] CI completo com preview deploy por PR
 - [ ] Testes E2E com Playwright
 - [ ] Multi-tenant com `organization_id`
+
+## 🤖 Documentação para IAs
+
+Se você é um assistente de IA começando a trabalhar neste projeto, leia
+[`PROJECT.md`](./PROJECT.md) — ele contém o modelo de domínio, o fluxo
+de auth, a matriz de RBAC, o esquema do Dexie, o orquestrador de sync, as
+convenções de código e receitas para adicionar features.
 
 ## 📜 Licença
 
