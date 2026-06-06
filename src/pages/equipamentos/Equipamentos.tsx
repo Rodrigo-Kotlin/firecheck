@@ -75,25 +75,23 @@ export default function Equipamentos() {
       </header>
 
       {/* Search Field */}
-      <div className="relative">
-        <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
-          <Search className="w-4 h-4" />
-        </span>
+      <div className="flex items-center gap-3 h-14 px-4 bg-white border-[1.5px] border-rose-200 rounded-xl focus-within:border-rose-600 focus-within:ring-4 focus-within:ring-rose-600/10 transition-all">
+        <Search className="w-5 h-5 text-slate-500 shrink-0" aria-hidden="true" />
         <input
           type="text"
           placeholder="Buscar por código, tipo, setor ou local..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="field-input pl-11 pr-10"
+          className="flex-1 min-w-0 h-full bg-transparent outline-none border-0 text-base font-medium text-slate-900 placeholder:text-slate-500 placeholder:font-medium"
         />
         {search && (
           <button
             type="button"
             onClick={() => setSearch('')}
-            className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
             aria-label="Limpar busca"
+            className="w-10 h-10 -mr-1 flex items-center justify-center text-slate-400 hover:text-slate-700 active:scale-95 transition-all rounded-full shrink-0"
           >
-            <span className="text-lg leading-none">×</span>
+            <span className="text-xl leading-none">×</span>
           </button>
         )}
       </div>
