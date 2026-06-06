@@ -31,6 +31,8 @@ automática para a nuvem via Supabase.
   instantaneamente; a sincronização acontece quando a conexão volta.
 - 🚨 **Plano de ação** com criticidade inferida automaticamente.
 - 🎨 **UI responsiva** (mobile / tablet / desktop) com sidebar e bottom nav.
+  Barra de filtros com scroll horizontal natural, campo de busca com
+  área de toque confortável (≥ 40px) e foco destacado em vermelho.
 
 ## 🛠 Stack
 
@@ -98,18 +100,24 @@ firecheck/
 │       ├── 0001_init_schema.sql
 │       └── 0002_seed_data.sql
 ├── public/
-│   ├── manifest.json
+│   ├── manifest.webmanifest
 │   ├── sw.js               # service worker
 │   └── icon-{192,512}.png
 └── src/
-    ├── components/layout/  # AppLayout (sidebar + bottom nav)
-    ├── data/mock.ts        # dados seed
-    ├── db/index.ts         # Dexie schema
+    ├── App.tsx             # rotas + Toaster + usePwaUpdate
+    ├── main.tsx            # entrypoint
+    ├── registerSW.ts       # PWA service worker
+    ├── index.css           # design system (classes utilitárias + tokens)
+    ├── components/         # Toaster, ToggleSwitch, QrCodePrintCard, etc.
+    │   └── layout/         # AppLayout (sidebar + bottom nav)
+    ├── data/mock.ts        # seed inicial
+    ├── db/index.ts         # Dexie schema v3
+    ├── hooks/              # useToasts, usePwaUpdate
     ├── lib/supabase.ts     # client singleton
-    ├── pages/              # 9 páginas (login, dashboard, etc.)
-    ├── services/           # sync + mappers + CRUD Supabase
-    ├── store/              # Zustand store
-    └── types/              # tipos compartilhados
+    ├── pages/              # login, dashboard, equipamentos, etc.
+    ├── services/           # auth, permissions, sync, mappers, CRUD
+    ├── store/              # Zustand store (persist v2)
+    └── types/              # tipos de domínio
 ```
 
 ## 🧪 Scripts
