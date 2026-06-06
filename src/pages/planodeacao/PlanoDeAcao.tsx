@@ -2,7 +2,8 @@ import { useState, useMemo } from 'react';
 import { useAppStore } from '../../store';
 import { useNavigate } from 'react-router-dom';
 import type { ActionPlanStatus, Criticidade } from '../../types';
-import { ChevronLeft, AlertOctagon, ClipboardCheck, Plus, X, Trash2, Search } from 'lucide-react';
+import { ChevronLeft, AlertOctagon, ClipboardCheck, Plus, X, Trash2, Search, Lock, User } from 'lucide-react';
+import { canEditActionPlan, canDeleteActionPlan } from '../../services/permissions';
 
 const CRITICIDADE_STYLES: Record<Criticidade, string> = {
   'Crítico': 'bg-red-100 text-[#DC2626] border-red-200',
@@ -22,7 +23,7 @@ const STATUS_OPTIONS: ActionPlanStatus[] = ['Aberta', 'Em andamento', 'Concluíd
 const CRITICIDADE_OPTIONS: Criticidade[] = ['Crítico', 'Alto', 'Médio', 'Baixo'];
 
 export default function PlanoDeAcao() {
-  const { actionPlans, addActionPlan, updateActionPlan, deleteActionPlan, equipments } = useAppStore();
+  const { actionPlans, addActionPlan, updateActionPlan, deleteActionPlan, equipments, user, users } = useAppStore();
   const navigate = useNavigate();
 
   const [statusFilter, setStatusFilter] = useState<'Todos' | ActionPlanStatus>('Todos');
@@ -115,7 +116,7 @@ export default function PlanoDeAcao() {
 
       {/* Search */}
       <div className="relative">
-        <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+        <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
           <Search className="w-4 h-4" />
         </span>
         <input
@@ -123,7 +124,7 @@ export default function PlanoDeAcao() {
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Buscar por equipamento, local, responsável..."
-          className="field-input pl-10"
+          className="field-input pl-11"
         />
       </div>
 
@@ -151,18 +152,33 @@ export default function PlanoDeAcao() {
 
       {/* Action Plan Cards — 1 col mobile, 2 col xl */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {filtered.map(plan => (
-          <div key={plan.id} className="card-subtle bg-white space-y-4 relative">
-            <button
-              type="button"
-              onClick={() => {
-                if (confirm('Excluir este plano de ação?')) deleteActionPlan(plan.id);
-              }}
-              className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center text-gray-300 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0 transition-all"
-              aria-label="Excluir plano"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+        {filtered.map(plan => {
+          const editable = canEditActionPlan(user, plan);
+          const deletable = canDeleteActionPlan(user, plan);
+          const owner = plan.userId ? users.find((u) => u.id === plan.userId) : null;
+          return (
+          <div key={plan.id} className={`card-subtle bg-white space-y-4 relative ${!editable ? 'opacity-95' : ''}`}>
+            {!editable && (
+              <span
+                title="Somente leitura — você não é o responsável"
+                className="absolute top-3 right-3 flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded"
+              >
+                <Lock className="w-3 h-3" />
+                Leitura
+              </span>
+            )}
+            {deletable && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm('Excluir este plano de ação?')) deleteActionPlan(plan.id);
+                }}
+                className={`absolute top-3 w-8 h-8 flex items-center justify-center text-gray-300 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0 transition-all ${editable ? 'right-3' : 'right-14'}`}
+                aria-label="Excluir plano"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
 
             {/* Top row */}
             <div className="flex items-start justify-between gap-2 pr-10">
@@ -178,6 +194,12 @@ export default function PlanoDeAcao() {
                     </span>
                   </div>
                   <div className="text-xs text-gray-500 font-semibold mt-0.5 truncate">{plan.local}</div>
+                  {owner && (
+                    <div className="flex items-center gap-1 text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-1">
+                      <User className="w-3 h-3" />
+                      <span>por {owner.nome}</span>
+                    </div>
+                  )}
                 </div>
               </div>
               <span className={`pill flex-shrink-0 ${STATUS_STYLES[plan.status]}`}>
@@ -195,7 +217,8 @@ export default function PlanoDeAcao() {
                 <input
                   type="text"
                   value={plan.responsavel}
-                  onChange={e => updateActionPlan(plan.id, { responsavel: e.target.value })}
+                  onChange={e => editable && updateActionPlan(plan.id, { responsavel: e.target.value })}
+                  readOnly={!editable}
                   placeholder="Nome do responsável..."
                   className="field-input"
                   style={{ height: '2.75rem' }}
@@ -206,7 +229,8 @@ export default function PlanoDeAcao() {
                 <input
                   type="date"
                   value={plan.prazo}
-                  onChange={e => updateActionPlan(plan.id, { prazo: e.target.value })}
+                  onChange={e => editable && updateActionPlan(plan.id, { prazo: e.target.value })}
+                  readOnly={!editable}
                   className="field-input"
                   style={{ height: '2.75rem' }}
                 />
@@ -220,8 +244,9 @@ export default function PlanoDeAcao() {
                   <button
                     key={s}
                     type="button"
-                    onClick={() => updateActionPlan(plan.id, { status: s })}
-                    className={`h-10 rounded-lg text-[11px] font-black uppercase tracking-wider transition-all border ${
+                    disabled={!editable}
+                    onClick={() => editable && updateActionPlan(plan.id, { status: s })}
+                    className={`h-10 rounded-lg text-[11px] font-black uppercase tracking-wider transition-all border disabled:opacity-60 disabled:cursor-not-allowed ${
                       plan.status === s
                         ? STATUS_STYLES[s] + ' border-current'
                         : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
@@ -238,7 +263,8 @@ export default function PlanoDeAcao() {
               <span className="font-mono">ID: {plan.id}</span>
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {filtered.length === 0 && (
           <div className="xl:col-span-2 card-subtle bg-white text-center py-12 space-y-3">

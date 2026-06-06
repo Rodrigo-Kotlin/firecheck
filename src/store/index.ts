@@ -1,10 +1,21 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, AppConfig } from '../types';
-import { equipamentos, inspecoes, inspetores, estatisticas } from '../data/mock';
+import { equipamentos, inspecoes, estatisticas } from '../data/mock';
 import { db, type LocalActionPlan, type LocalEquipment, type LocalInspection } from '../db';
 import { syncAll, pendingSyncCount, seedFromMock, type SyncReport } from '../services/sync';
 import { isSupabaseConfigured } from '../lib/supabase';
+import {
+  loginUser,
+  registerUser,
+  resolveSession,
+  logoutUser,
+  listUsers,
+  deleteUser,
+  setUserRole,
+  type PublicUser,
+  type AuthError,
+} from '../services/authService';
 
 type Tab = 'dashboard' | 'equipamentos' | 'inspecionar' | 'relatorios';
 
@@ -64,12 +75,20 @@ function nextInspectionId(existing: Inspection[]): string {
 
 interface AppState {
   user: Inspector | null;
+  /** True after the first auth resolution has run (session check + orphan cleanup). */
+  authReady: boolean;
+  /** True while a login/register request is in flight. */
+  authLoading: boolean;
   equipments: Equipment[];
   inspections: Inspection[];
   stats: Stats;
   actionPlans: ActionPlan[];
   config: AppConfig;
   currentTab: Tab;
+
+  /** Cached public-user list, refreshed via `loadUsers`. Admin-only screen. */
+  users: PublicUser[];
+  usersLoading: boolean;
 
   /** Cloud sync telemetry. */
   syncing: boolean;
@@ -79,15 +98,21 @@ interface AppState {
   syncEnabled: boolean;
 
   // ---- actions ----
-  login: (email: string, pass: string) => void;
-  logout: () => void;
+  login: (email: string, pass: string) => Promise<void>;
+  register: (input: { email: string; password: string; nome: string; cargo: string }) => Promise<void>;
+  logout: () => Promise<void>;
   setCurrentTab: (tab: Tab) => void;
   addInspection: (inspection: Omit<Inspection, 'id'>) => void;
   addEquipment: (eq: Equipment) => void;
   addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'>) => void;
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
   deleteActionPlan: (id: string) => void;
+  updateEquipment: (id: string, updates: Partial<Equipment>) => void;
+  deleteEquipment: (id: string) => void;
   updateConfig: (updates: Partial<AppConfig>) => void;
+  loadUsers: () => Promise<void>;
+  setUserRole: (id: string, role: 'admin' | 'inspector') => Promise<void>;
+  deleteUserAccount: (id: string) => Promise<void>;
   hydrate: () => Promise<void>;
   triggerSync: () => Promise<void>;
   refreshPendingCount: () => Promise<void>;
@@ -129,6 +154,8 @@ export const useAppStore = create<AppState>()(
 
       return {
         user: null,
+        authReady: false,
+        authLoading: false,
         equipments: equipamentos,
         inspections: inspecoes,
         stats: estatisticas,
@@ -140,6 +167,8 @@ export const useAppStore = create<AppState>()(
           notificationsEnabled: true,
         },
         currentTab: 'dashboard',
+        users: [],
+        usersLoading: false,
         syncing: false,
         lastSync: null,
         pending: 0,
@@ -147,13 +176,30 @@ export const useAppStore = create<AppState>()(
         syncEnabled: isSupabaseConfigured,
 
         // -----------------------------------------------------------------
-        // Auth
+        // Auth — local-first, backed by Dexie + Web Crypto (PBKDF2).
         // -----------------------------------------------------------------
-        login: (email, pass) => {
-          if (!email || !pass) return;
-          set({ user: inspetores[0] });
+        login: async (email, pass) => {
+          set({ authLoading: true });
+          try {
+            const user = await loginUser({ email, password: pass });
+            set({ user, authLoading: false });
+          } catch (err) {
+            set({ authLoading: false });
+            throw err as AuthError;
+          }
         },
-        logout: () => {
+        register: async (input) => {
+          set({ authLoading: true });
+          try {
+            const user = await registerUser(input);
+            set({ user, authLoading: false });
+          } catch (err) {
+            set({ authLoading: false });
+            throw err as AuthError;
+          }
+        },
+        logout: async () => {
+          await logoutUser();
           set({ user: null });
         },
         setCurrentTab: (tab) => set({ currentTab: tab }),
@@ -161,21 +207,30 @@ export const useAppStore = create<AppState>()(
           set((state) => ({ config: { ...state.config, ...updates } })),
 
         // -----------------------------------------------------------------
-        // Hydration: load from Dexie (seed from mocks on first run)
+        // Hydration: load from Dexie (seed from mocks on first run) and
+        // resolve the current auth session (with orphan cleanup).
         // -----------------------------------------------------------------
         hydrate: async () => {
           const eqCount = await db.equipamentos.count();
           if (eqCount === 0) {
             await seedFromMock(equipamentos, inspecoes);
           }
-          const [localEqs, localInsps] = await Promise.all([
+          const [localEqs, localInsps, allUsers] = await Promise.all([
             db.equipamentos.toArray(),
             db.inspecoes.toArray(),
+            listUsers(),
           ]);
+          // Resolve auth: if the persisted user no longer exists in the
+          // `users` table (e.g. legacy mock-login state), drop them.
+          const sessionUser = await resolveSession();
+
           set({
             equipments: localEqs.map(toEquipment),
             inspections: localInsps.map(toInspection),
             stats: recomputeStats(localEqs.map(toEquipment)),
+            user: sessionUser ?? get().user,
+            users: allUsers,
+            authReady: true,
           });
           await get().refreshPendingCount();
           // Try an initial sync in the background.
@@ -202,15 +257,58 @@ export const useAppStore = create<AppState>()(
         // Mutations
         // -----------------------------------------------------------------
         addEquipment: (newEq) => {
+          // Stamp ownership on the equipment itself (idempotent — the form
+          // may already set it, this is a defensive fallback).
+          const stamped: Equipment = {
+            ...newEq,
+            createdBy: newEq.createdBy ?? get().user?.id,
+          };
           set((state) => {
-            const updated = [newEq, ...state.equipments];
+            const updated = [stamped, ...state.equipments];
             return {
               equipments: updated,
               stats: recomputeStats(updated),
             };
           });
           // Persist + mark unsynced
-          void db.equipamentos.put({ ...newEq, sincronizado: false } as LocalEquipment);
+          void db.equipamentos.put({ ...stamped, sincronizado: false } as LocalEquipment);
+          void runSync().then(() => get().refreshPendingCount());
+        },
+
+        updateEquipment: (id, updates) => {
+          set((state) => {
+            const updated = state.equipments.map((eq) =>
+              eq.id === id ? { ...eq, ...updates } : eq,
+            );
+            return {
+              equipments: updated,
+              stats: recomputeStats(updated),
+            };
+          });
+          const current = get().equipments.find((e) => e.id === id);
+          if (current) {
+            void db.equipamentos.put({ ...current, sincronizado: false } as LocalEquipment);
+          }
+          void runSync().then(() => get().refreshPendingCount());
+        },
+
+        deleteEquipment: (id) => {
+          set((state) => {
+            const updated = state.equipments.filter((eq) => eq.id !== id);
+            return {
+              equipments: updated,
+              stats: recomputeStats(updated),
+            };
+          });
+          void db.equipamentos.delete(id);
+          // Cascade: remove the equipment's inspections and pending photos.
+          void (async () => {
+            const inspections = await db.inspecoes.where('equipmentId').equals(id).toArray();
+            for (const insp of inspections) {
+              await db.fotos.where('inspectionId').equals(insp.id).delete();
+            }
+            await db.inspecoes.where('equipmentId').equals(id).delete();
+          })();
           void runSync().then(() => get().refreshPendingCount());
         },
 
@@ -218,8 +316,12 @@ export const useAppStore = create<AppState>()(
           let id = '';
           set((state) => {
             id = nextInspectionId(state.inspections);
-            const full: Inspection = { ...newInspection, id };
-            const updatedInspections = [full, ...state.inspections];
+            const stamped: Inspection = {
+              ...newInspection,
+              id,
+              userId: newInspection.userId ?? get().user?.id,
+            };
+            const updatedInspections = [stamped, ...state.inspections];
 
             const updatedEquipments = state.equipments.map((eq) =>
               eq.id === newInspection.equipmentId
@@ -241,6 +343,7 @@ export const useAppStore = create<AppState>()(
                 prazo: '',
                 status: 'Aberta',
                 createdAt: new Date().toISOString().split('T')[0],
+                userId: get().user?.id,
                 sincronizado: false,
               };
               updatedActionPlans = [toActionPlan(newPlan), ...state.actionPlans];
@@ -256,7 +359,12 @@ export const useAppStore = create<AppState>()(
           // Persist to Dexie (inspection + the updated equipment status)
           const finalId = id;
           void (async () => {
-            const full: LocalInspection = { ...newInspection, id: finalId, sincronizado: false };
+            const stamped: Inspection = {
+              ...newInspection,
+              id: finalId,
+              userId: newInspection.userId ?? get().user?.id,
+            };
+            const full: LocalInspection = { ...stamped, sincronizado: false };
             await db.inspecoes.put(full);
             const eq = await db.equipamentos.get(newInspection.equipmentId);
             if (eq) {
@@ -276,6 +384,7 @@ export const useAppStore = create<AppState>()(
             id: `PAC-${Date.now()}`,
             status: 'Aberta',
             createdAt: new Date().toISOString().split('T')[0],
+            userId: plan.userId ?? get().user?.id,
             sincronizado: false,
           };
           set((state) => ({ actionPlans: [toActionPlan(newPlan), ...state.actionPlans] }));
@@ -303,17 +412,86 @@ export const useAppStore = create<AppState>()(
           // need to make sure that array reflects the deletion.
           void runSync().then(() => get().refreshPendingCount());
         },
+
+        // -----------------------------------------------------------------
+        // User management (admin only — enforcement is at the call site)
+        // -----------------------------------------------------------------
+        loadUsers: async () => {
+          set({ usersLoading: true });
+          try {
+            const users = await listUsers();
+            set({ users, usersLoading: false });
+          } catch (err) {
+            console.error('[store.loadUsers]', err);
+            set({ usersLoading: false });
+          }
+        },
+
+        setUserRole: async (id, role) => {
+          await setUserRole(id, role);
+          const users = await listUsers();
+          set({ users });
+        },
+
+        deleteUserAccount: async (id) => {
+          const current = get().user;
+          if (current?.id === id) {
+            // The admin can't delete their own account from this screen.
+            throw new Error('Você não pode excluir a própria conta por aqui.');
+          }
+          await deleteUser(id);
+          const users = await listUsers();
+          set({ users });
+        },
       };
     },
     {
       name: 'firecheck-storage',
+      version: 2,
       // Persist only the small/user-scoped data. Equipments & inspections
-      // now live in Dexie and are loaded via `hydrate()`.
+      // now live in Dexie and are loaded via `hydrate()`. `user` is no
+      // longer persisted — it is re-derived on each launch from the auth
+      // session in localStorage + the `users` table in Dexie (see
+      // `resolveSession`). `authReady` and `authLoading` are transient
+      // and must always be re-derived on each launch.
       partialize: (state) => ({
-        user: state.user,
         actionPlans: state.actionPlans,
         config: state.config,
+        // `users` is intentionally persisted as well so the admin panel
+        // renders instantly on reload, before the (async) reload finishes.
+        // No sensitive data — passwords never live in this projection.
+        users: state.users,
       }),
+      // Bump-version migration: strip the legacy `user` field that was
+      // persisted by the mock login. Real user identity now lives in
+      // the auth session + Dexie users table.
+      migrate: (persistedState, version) => {
+        const base = (persistedState && typeof persistedState === 'object'
+          ? persistedState
+          : {}) as { actionPlans?: ActionPlan[]; config?: AppConfig; user?: unknown };
+        if (version < 2) {
+          const { user: _drop, ...rest } = base;
+          void _drop;
+          return {
+            actionPlans: rest.actionPlans ?? [],
+            config: rest.config ?? {
+              empresa: 'FireCheck Corp',
+              unidade: 'Sede São Paulo',
+              offlineMode: false,
+              notificationsEnabled: true,
+            },
+          };
+        }
+        return {
+          actionPlans: base.actionPlans ?? [],
+          config: base.config ?? {
+            empresa: 'FireCheck Corp',
+            unidade: 'Sede São Paulo',
+            offlineMode: false,
+            notificationsEnabled: true,
+          },
+        };
+      },
     }
   )
 );

@@ -715,3 +715,112 @@ input[type="checkbox"], input[type="radio"] {
     transform: translateY(0) scale(1);
   }
 }
+
+/* ===== Premium ON/OFF toggle switch (compact) ===== */
+
+.toggle-switch {
+  width: 112px;
+  height: 38px;
+  border-radius: 999px;
+  border: none;
+  position: relative;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  flex-shrink: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.25s ease;
+}
+
+.toggle-switch:focus {
+  outline: none;
+}
+
+.toggle-switch:focus-visible {
+  box-shadow:
+    0 0 0 2px rgba(220, 38, 38, 0.35);
+}
+
+.toggle-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* The circular knob, rendered as a pseudo-element so the markup stays
+   clean (just the text node inside the button). */
+.toggle-switch::before {
+  content: '';
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  top: 3px;
+  background: #f8f9fa;
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.22),
+    inset 0 1px 2px rgba(255, 255, 255, 0.9);
+  transition: all 0.25s ease;
+  z-index: 2;
+}
+
+.toggle-switch__text {
+  position: relative;
+  z-index: 1;
+  line-height: 1;
+}
+
+/* ON state — green gradient with subtle inset highlight */
+.toggle-switch.on {
+  background: linear-gradient(180deg, #16a34a 0%, #008f4c 100%);
+  color: #ffffff;
+  box-shadow:
+    inset 0 2px 4px rgba(255, 255, 255, 0.22),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.18);
+}
+
+.toggle-switch.on::before {
+  left: 3px;
+}
+
+/* OFF state — off-white gradient, gray label, inset simulating a
+   depressed physical button. */
+.toggle-switch.off {
+  background: linear-gradient(180deg, #f8f8f8 0%, #dedede 100%);
+  color: #9ca3af;
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.16),
+    inset 0 -2px 4px rgba(255, 255, 255, 0.9);
+}
+
+.toggle-switch.off::before {
+  left: auto;
+  right: 3px;
+}
+
+@media (max-width: 480px) {
+  .toggle-switch {
+    width: 104px;
+    height: 36px;
+    font-size: 14px;
+  }
+
+  .toggle-switch::before {
+    width: 30px;
+    height: 30px;
+    top: 3px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggle-switch,
+  .toggle-switch::before {
+    transition: none;
+  }
+}

@@ -62,6 +62,7 @@ export interface DbInspetor {
   id: string;
   nome: string;
   cargo: string;
+  role?: 'admin' | 'inspector';
 }
 
 // ---------------------------------------------------------------------------
@@ -167,5 +168,5 @@ export function actionPlanToDb(plan: Partial<ActionPlan>): Partial<DbPlanoAcao> 
 }
 
 export function dbToInspector(row: DbInspetor): Inspector {
-  return { id: row.id, nome: row.nome, cargo: row.cargo };
+  return { id: row.id, nome: row.nome, cargo: row.cargo, role: row.role ?? 'inspector' };
 }

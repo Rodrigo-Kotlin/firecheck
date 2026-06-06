@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin } from 'lucide-react';
+import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock } from 'lucide-react';
+import { canEditEquipment } from '../../services/permissions';
 
 const CATEGORIES = [
   { label: 'Tudo', filter: 'Tudo' },
@@ -16,7 +17,7 @@ const CATEGORIES = [
 ];
 
 export default function Equipamentos() {
-  const { equipments, inspections } = useAppStore();
+  const { equipments, inspections, user } = useAppStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [activeChip, setActiveChip] = useState('Tudo');
@@ -75,15 +76,15 @@ export default function Equipamentos() {
 
       {/* Search Field */}
       <div className="relative">
-        <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-          <Search className="w-5 h-5" />
+        <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
+          <Search className="w-4 h-4" />
         </span>
         <input
           type="text"
           placeholder="Buscar por código, tipo, setor ou local..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="field-input pl-10 pr-10"
+          className="field-input pl-11 pr-10"
         />
         {search && (
           <button
@@ -97,24 +98,28 @@ export default function Equipamentos() {
         )}
       </div>
 
-      {/* Filter Chips */}
-      <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 sm:mx-0 px-4 sm:px-0 scrollbar-none">
-        {CATEGORIES.map((cat) => {
-          const isActive = activeChip === cat.filter;
-          return (
-            <button
-              key={cat.filter}
-              onClick={() => setActiveChip(cat.filter)}
-              className={`h-9 px-4 rounded-full text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border ${
-                isActive
-                  ? 'bg-primary text-white border-primary shadow-sm'
-                  : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              {cat.label}
-            </button>
-          );
-        })}
+      {/* Filter Chips — scrollable on mobile, with edge fade for affordance */}
+      <div className="relative">
+        <div className="absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-neutralBg to-transparent pointer-events-none z-10 sm:hidden" />
+        <div className="absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-neutralBg to-transparent pointer-events-none z-10 sm:hidden" />
+        <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 sm:mx-0 px-4 sm:px-0 scrollbar-none snap-x snap-mandatory">
+          {CATEGORIES.map((cat) => {
+            const isActive = activeChip === cat.filter;
+            return (
+              <button
+                key={cat.filter}
+                onClick={() => setActiveChip(cat.filter)}
+                className={`h-9 px-4 rounded-full text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border snap-start ${
+                  isActive
+                    ? 'bg-primary text-white border-primary shadow-sm'
+                    : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                {cat.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Equipment List */}
@@ -122,6 +127,7 @@ export default function Equipamentos() {
         {filtered.map((eq) => {
           const lastInsp = inspections.find(i => i.equipmentId === eq.id);
           const isExpiring = eq.status === 'vencido' || eq.status === 'pendente';
+          const editable = canEditEquipment(user, eq);
 
           return (
             <div
@@ -136,6 +142,15 @@ export default function Equipamentos() {
                     {getStatusBadge(eq.status)}
                   </div>
                 </div>
+                {!editable && (
+                  <span
+                    title="Somente leitura — você não é o responsável"
+                    className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded flex-shrink-0"
+                  >
+                    <Lock className="w-3 h-3" />
+                    Leitura
+                  </span>
+                )}
               </div>
 
               <div>

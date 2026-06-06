@@ -190,7 +190,7 @@ export default function Inspecionar() {
       id: inspectionId,
       equipmentId: selectedEquipment.id,
       data: new Date().toISOString().split('T')[0],
-      inspetor: user?.nome || 'Ricardo Silva',
+      inspetor: user?.nome || 'Rodrigo Silva',
       status: finalStatus,
       observacoes,
       sincronizado: false

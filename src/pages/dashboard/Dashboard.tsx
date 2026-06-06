@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { Plus, QrCode, AlertTriangle, ShieldAlert, ArrowRight, TrendingUp } from 'lucide-react';
+import { isAdmin } from '../../services/permissions';
 
 export default function Dashboard() {
   const { user, stats, equipments, setCurrentTab } = useAppStore();
@@ -38,8 +39,13 @@ export default function Dashboard() {
             {initials}
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="text-lg lg:text-xl font-black text-gray-900 truncate">
-              Olá, {user?.nome?.split(' ')[0] || 'Inspetor'}!
+            <h2 className="text-lg lg:text-xl font-black text-gray-900 truncate flex items-center gap-2">
+              <span className="truncate">Olá, {user?.nome?.split(' ')[0] || 'Inspetor'}!</span>
+              {isAdmin(user) && (
+                <span className="text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary text-white flex-shrink-0">
+                  Admin
+                </span>
+              )}
             </h2>
             <p className="text-xs lg:text-sm text-gray-500 mt-0.5 line-clamp-2">
               {user?.cargo || 'Inspetor'} · {stats.total} equipamentos cadastrados · {stats.conformidade}% de conformidade

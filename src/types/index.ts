@@ -12,6 +12,8 @@ export interface ActionPlan {
   prazo: string;
   status: ActionPlanStatus;
   createdAt: string;
+  /** ID of the user who created this action plan. */
+  userId?: string;
 }
 
 export interface AppConfig {
@@ -40,6 +42,8 @@ export interface Equipment {
   qrcode?: string;
   fotoUrl?: string;
   observacoes?: string;
+  /** ID of the user who created this equipment. */
+  createdBy?: string;
 }
 
 export interface Inspection {
@@ -49,12 +53,28 @@ export interface Inspection {
   inspetor: string;
   status: EquipmentStatus;
   observacoes?: string;
+  /** ID of the user who performed this inspection. */
+  userId?: string;
 }
 
 export interface Inspector {
   id: string;
   nome: string;
   cargo: string;
+  role: 'admin' | 'inspector';
+}
+
+/** Local user account row stored in Dexie. Never sent to the UI. */
+export interface UserAccount {
+  id: string;
+  email: string;
+  nome: string;
+  cargo: string;
+  role: 'admin' | 'inspector';
+  passwordHash: string;
+  salt: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Stats {

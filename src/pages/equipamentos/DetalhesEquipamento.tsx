@@ -1,7 +1,9 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { ChevronLeft, Play, User, Eye, CheckCircle2, AlertTriangle, XCircle, Info, MapPin, Calendar, Tag, Hash, Wrench } from 'lucide-react';
+import { ChevronLeft, Play, User, Eye, CheckCircle2, AlertTriangle, XCircle, Info, MapPin, Calendar, Tag, Hash, Wrench, Trash2, Lock } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
+import { showToast } from '../../hooks/useToasts';
 
 type FieldProps = {
   label: string;
@@ -24,7 +26,7 @@ function Field({ label, value, icon: Icon }: FieldProps) {
 export default function DetalhesEquipamento() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { equipments, inspections, setCurrentTab } = useAppStore();
+  const { equipments, inspections, setCurrentTab, user, deleteEquipment, users } = useAppStore();
 
   const eq = equipments.find((e) => e.id === id);
   if (!eq) {
@@ -102,6 +104,20 @@ export default function DetalhesEquipamento() {
     navigate(`/inspecionar?id=${eq.id}`);
   };
 
+  const editable = canEditEquipment(user, eq);
+  const deletable = canDeleteEquipment(user, eq);
+  const owner = eq.createdBy ? users.find((u) => u.id === eq.createdBy) : null;
+
+  const handleDelete = () => {
+    if (!deletable) return;
+    if (!window.confirm(`Excluir o equipamento ${eq.id}? Esta ação também remove as inspeções vinculadas e não pode ser desfeita.`)) {
+      return;
+    }
+    deleteEquipment(eq.id);
+    showToast({ kind: 'success', title: 'Equipamento excluído.' });
+    navigate('/equipamentos', { replace: true });
+  };
+
   return (
     <div className="space-y-4 sm:space-y-6 pb-24">
       {/* Header */}
@@ -121,7 +137,27 @@ export default function DetalhesEquipamento() {
           </h1>
           {eq.subtipo && <p className="text-[11px] sm:text-xs text-gray-500 truncate">{eq.subtipo}</p>}
         </div>
+        {deletable && (
+          <button
+            type="button"
+            onClick={handleDelete}
+            className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0"
+            aria-label="Excluir equipamento"
+            title="Excluir equipamento"
+          >
+            <Trash2 className="w-5 h-5" />
+          </button>
+        )}
       </header>
+
+      {!editable && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-100 text-amber-800 text-xs font-bold uppercase tracking-wider px-3 py-2 rounded-lg">
+          <Lock className="w-4 h-4 flex-shrink-0" />
+          <span>
+            Somente leitura{owner ? ` · cadastrado por ${owner.nome}` : ''}
+          </span>
+        </div>
+      )}
 
       {/* Top: status + expiration side-by-side on desktop */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">

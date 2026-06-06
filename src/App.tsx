@@ -11,6 +11,7 @@ import ScanQr from './pages/scan/ScanQr';
 import Relatorios from './pages/relatorios/Relatorios';
 import PlanoDeAcao from './pages/planodeacao/PlanoDeAcao';
 import Configuracoes from './pages/configuracoes/Configuracoes';
+import AdminUsuarios from './pages/admin/AdminUsuarios';
 import Toaster from './components/Toaster';
 import { usePwaUpdate } from './hooks/usePwaUpdate';
 import { useAppStore } from './store';
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="relatorios" element={<Relatorios />} />
           <Route path="planodeacao" element={<PlanoDeAcao />} />
           <Route path="configuracoes" element={<Configuracoes />} />
+          <Route path="admin/usuarios" element={<AdminUsuarios />} />
         </Route>
 
         {/* Fallback redirect */}

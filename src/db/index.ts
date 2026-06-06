@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Equipment, Inspection, ActionPlan } from '../types';
+import type { Equipment, Inspection, ActionPlan, UserAccount } from '../types';
 
 // ---------------------------------------------------------------------------
 // Local storage layer. Mirrors the Supabase schema but is the source of truth
@@ -46,6 +46,7 @@ export class FireCheckDatabase extends Dexie {
   inspecoes!: Table<LocalInspection, string>;
   fotos!: Table<PhotoData, string>;
   acoes_pendentes!: Table<PendingAction, number>;
+  users!: Table<UserAccount, string>;
 
   constructor() {
     super('FireCheckDatabase');
@@ -66,6 +67,18 @@ export class FireCheckDatabase extends Dexie {
       inspecoes: 'id, equipmentId, sincronizado',
       fotos: 'id, inspectionId',
       acoes_pendentes: '++id, type, timestamp',
+    });
+
+    // v3 — local auth. `users` holds registered accounts with a PBKDF2
+    // hash + salt. Email is the natural unique key (case-insensitive at
+    // the service layer; Dexie unique index is case-sensitive so we
+    // normalize on write).
+    this.version(3).stores({
+      equipamentos: 'id, tipo, status, sincronizado',
+      inspecoes: 'id, equipmentId, sincronizado',
+      fotos: 'id, inspectionId',
+      acoes_pendentes: '++id, type, timestamp',
+      users: 'id, &email, createdAt',
     });
   }
 }

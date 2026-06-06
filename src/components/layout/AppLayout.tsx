@@ -1,21 +1,23 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { LayoutDashboard, Shield, QrCode, FileBarChart, WifiOff, X, ClipboardList, Settings, LogOut, Menu, User, RefreshCw, Cloud, CloudOff } from 'lucide-react';
+import { LayoutDashboard, Shield, QrCode, FileBarChart, WifiOff, X, ClipboardList, Settings, LogOut, Menu, User, RefreshCw, Cloud, CloudOff, Users } from 'lucide-react';
+import { isAdmin } from '../../services/permissions';
 
 export default function AppLayout() {
-  const { user, currentTab, setCurrentTab, logout, pending, syncing, lastSyncAt, syncEnabled, triggerSync } = useAppStore();
+  const { user, authReady, currentTab, setCurrentTab, logout, pending, syncing, lastSyncAt, syncEnabled, triggerSync } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [sideMenuOpen, setSideMenuOpen] = useState(false);
 
-  // Route auth guard
+  // Route auth guard — wait for the initial session check (which may clear
+  // an orphan legacy user) before deciding to bounce to /login.
   useEffect(() => {
-    if (!user) {
+    if (authReady && !user) {
       navigate('/login');
     }
-  }, [user, navigate]);
+  }, [authReady, user, navigate]);
 
   // Sync route path with Zustand store tab selection
   useEffect(() => {
@@ -58,7 +60,7 @@ export default function AppLayout() {
   ];
 
   const handleLogout = () => {
-    logout();
+    void logout();
     navigate('/login');
   };
 
@@ -72,6 +74,13 @@ export default function AppLayout() {
 
   const currentTitle = tabs.find(t => t.id === currentTab)?.label ?? 'FireCheck';
 
+  if (!authReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-neutralBg">
+        <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin" aria-label="Carregando" />
+      </div>
+    );
+  }
   if (!user) return null;
 
   return (
@@ -113,8 +122,15 @@ export default function AppLayout() {
           <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center text-primary font-black text-sm flex-shrink-0">
             {initials}
           </div>
-          <div className="min-w-0">
-            <div className="text-sm font-black text-gray-900 truncate">{user.nome}</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-black text-gray-900 truncate flex items-center gap-1.5">
+              <span className="truncate">{user.nome}</span>
+              {isAdmin(user) && (
+                <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary text-white flex-shrink-0">
+                  Admin
+                </span>
+              )}
+            </div>
             <div className="text-[11px] text-gray-400 uppercase font-bold truncate">{user.cargo}</div>
           </div>
         </div>
@@ -129,6 +145,7 @@ export default function AppLayout() {
             { label: 'Relatórios', icon: FileBarChart, path: '/relatorios' },
             { label: 'Plano de Ação', icon: ClipboardList, path: '/planodeacao' },
             { label: 'Configurações', icon: Settings, path: '/configuracoes' },
+            ...(isAdmin(user) ? [{ label: 'Usuários', icon: Users, path: '/admin/usuarios' }] : []),
           ].map(item => {
             const isActive = location.pathname === item.path ||
               (item.path !== '/' && location.pathname.startsWith(item.path));

@@ -6,13 +6,13 @@ import jsPDF from 'jspdf';
 
 // Extended mock history for reports
 const HISTORICO_MOCK = [
-  { id: 'H001', data: '15/10/2023', inspetor: 'Ricardo Silva', equipId: 'EXT-402-B', status: 'APROVADO' as const },
+  { id: 'H001', data: '15/10/2023', inspetor: 'Rodrigo Silva', equipId: 'EXT-402-B', status: 'APROVADO' as const },
   { id: 'H002', data: '14/10/2023', inspetor: 'Ana Paula', equipId: 'HYD-991-A', status: 'OBSERVAÇÃO' as const },
   { id: 'H003', data: '12/10/2023', inspetor: 'Marcos Rocha', equipId: 'EXT-105-C', status: 'REPROVADO' as const },
-  { id: 'H004', data: '11/10/2023', inspetor: 'Ricardo Silva', equipId: 'EXT-001', status: 'APROVADO' as const },
+  { id: 'H004', data: '11/10/2023', inspetor: 'Rodrigo Silva', equipId: 'EXT-001', status: 'APROVADO' as const },
   { id: 'H005', data: '10/10/2023', inspetor: 'Ana Paula', equipId: 'HID-042', status: 'OBSERVAÇÃO' as const },
   { id: 'H006', data: '08/10/2023', inspetor: 'Marcos Rocha', equipId: 'EXT-109', status: 'REPROVADO' as const },
-  { id: 'H007', data: '07/10/2023', inspetor: 'Ricardo Silva', equipId: 'ALM-005', status: 'APROVADO' as const },
+  { id: 'H007', data: '07/10/2023', inspetor: 'Rodrigo Silva', equipId: 'ALM-005', status: 'APROVADO' as const },
   { id: 'H008', data: '05/10/2023', inspetor: 'Ana Paula', equipId: 'ILU-018', status: 'OBSERVAÇÃO' as const },
 ];
 

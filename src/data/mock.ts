@@ -9,9 +9,9 @@ export const equipamentos: Equipment[] = [
 ];
 
 export const inspetores: Inspector[] = [
-  { id: "1", nome: "Ricardo Silva", cargo: "Inspetor Líder" },
-  { id: "2", nome: "Ana Paula", cargo: "Inspetora Plena" },
-  { id: "3", nome: "Marcos Rocha", cargo: "Inspetor Técnico" }
+  { id: "1", nome: "Rodrigo Silva", cargo: "Inspetor Líder", role: "inspector" },
+  { id: "2", nome: "Ana Paula", cargo: "Inspetora Plena", role: "inspector" },
+  { id: "3", nome: "Marcos Rocha", cargo: "Inspetor Técnico", role: "inspector" }
 ];
 
 export const estatisticas: Stats = {
@@ -27,7 +27,7 @@ export const inspecoes: Inspection[] = [
     id: "INSP-001",
     equipmentId: "EXT-001",
     data: "2026-06-01",
-    inspetor: "Ricardo Silva",
+    inspetor: "Rodrigo Silva",
     status: "regular",
     observacoes: "Manômetro na faixa verde, lacre intacto."
   },

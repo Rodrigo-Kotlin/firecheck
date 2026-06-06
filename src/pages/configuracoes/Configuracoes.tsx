@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { ChevronLeft, LogOut, Building2, Bell, Wifi, WifiOff, User } from 'lucide-react';
+import { ChevronLeft, LogOut, Building2, Bell, Wifi, WifiOff, User, Shield } from 'lucide-react';
+import { isAdmin } from '../../services/permissions';
+import ToggleSwitch from '../../components/ToggleSwitch';
 
 export default function Configuracoes() {
   const { user, config, updateConfig, logout } = useAppStore();
@@ -22,7 +24,7 @@ export default function Configuracoes() {
   };
 
   const handleLogout = () => {
-    logout();
+    void logout();
     navigate('/login');
   };
 
@@ -55,12 +57,29 @@ export default function Configuracoes() {
               <div className="w-14 h-14 sm:w-16 sm:h-16 bg-primary rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-md flex-shrink-0">
                 {initials}
               </div>
-              <div className="min-w-0">
-                <h3 className="text-base font-black text-gray-900 truncate">{user?.nome || 'Inspetor'}</h3>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-black text-gray-900 truncate flex items-center gap-1.5">
+                  <span className="truncate">{user?.nome || 'Inspetor'}</span>
+                  {isAdmin(user) && (
+                    <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary text-white flex-shrink-0">
+                      Admin
+                    </span>
+                  )}
+                </h3>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">{user?.cargo || 'Cargo não definido'}</p>
                 <p className="text-xs text-gray-500 mt-0.5 truncate">{config.empresa} · {config.unidade}</p>
               </div>
             </div>
+            {isAdmin(user) && (
+              <button
+                onClick={() => navigate('/admin/usuarios')}
+                className="w-full h-10 flex items-center justify-center gap-2 border border-primary/30 text-primary font-bold text-xs uppercase tracking-wider rounded-lg hover:bg-primary/5 transition-all"
+                type="button"
+              >
+                <Shield className="w-4 h-4" />
+                Gerenciar Usuários
+              </button>
+            )}
           </div>
 
           {/* Company settings */}
@@ -101,7 +120,7 @@ export default function Configuracoes() {
           <div className="card-subtle bg-white space-y-1">
             <span className="label-uppercase block border-b border-gray-50 pb-2 mb-3">Preferências</span>
 
-            <div className="flex items-center justify-between py-3 border-b border-gray-50">
+            <div className="flex items-center justify-between gap-3 py-3 border-b border-gray-50">
               <div className="flex items-center gap-3 min-w-0">
                 {config.offlineMode ? (
                   <WifiOff className="w-5 h-5 text-pending flex-shrink-0" />
@@ -115,19 +134,14 @@ export default function Configuracoes() {
                   </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => updateConfig({ offlineMode: !config.offlineMode })}
-                className={`relative w-12 h-6 rounded-full transition-colors focus:outline-none border-none flex-shrink-0 ${config.offlineMode ? 'bg-pending' : 'bg-success'}`}
-                aria-label="Alternar modo offline"
-              >
-                <span
-                  className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${config.offlineMode ? 'translate-x-6' : 'translate-x-0.5'}`}
-                />
-              </button>
+              <ToggleSwitch
+                checked={config.offlineMode}
+                onChange={() => updateConfig({ offlineMode: !config.offlineMode })}
+                ariaLabel="Alternar modo offline"
+              />
             </div>
 
-            <div className="flex items-center justify-between py-3">
+            <div className="flex items-center justify-between gap-3 py-3">
               <div className="flex items-center gap-3 min-w-0">
                 <Bell className={`w-5 h-5 flex-shrink-0 ${config.notificationsEnabled ? 'text-primary' : 'text-gray-300'}`} />
                 <div className="min-w-0">
@@ -137,16 +151,11 @@ export default function Configuracoes() {
                   </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => updateConfig({ notificationsEnabled: !config.notificationsEnabled })}
-                className={`relative w-12 h-6 rounded-full transition-colors focus:outline-none border-none flex-shrink-0 ${config.notificationsEnabled ? 'bg-primary' : 'bg-gray-200'}`}
-                aria-label="Alternar notificações"
-              >
-                <span
-                  className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${config.notificationsEnabled ? 'translate-x-6' : 'translate-x-0.5'}`}
-                />
-              </button>
+              <ToggleSwitch
+                checked={config.notificationsEnabled}
+                onChange={() => updateConfig({ notificationsEnabled: !config.notificationsEnabled })}
+                ariaLabel="Alternar notificações"
+              />
             </div>
           </div>
         </div>
