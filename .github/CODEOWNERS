@@ -1,0 +1,11 @@
+# CODEOWNERS —，这些人会被自动指派为 reviewer de PRs.
+# 文档: https://docs.github.com/pt/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repo
+*       @Rodrigo-Kotlin
+
+# Supabase migrations — require explicit approval before touching prod
+/supabase/migrations/  @Rodrigo-Kotlin
+
+# CI / deploy workflows
+/.github/workflows/    @Rodrigo-Kotlin

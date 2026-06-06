@@ -23,8 +23,8 @@
       "purpose": "maskable"
     }
   ],
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "/firecheck/",
+  "scope": "/firecheck/",
   "background_color": "#DC2626",
   "theme_color": "#DC2626",
   "display": "standalone",
