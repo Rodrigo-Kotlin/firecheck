@@ -102,14 +102,14 @@ export default function Equipamentos() {
       <div className="relative">
         <div className="absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-neutralBg to-transparent pointer-events-none z-10 sm:hidden" />
         <div className="absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-neutralBg to-transparent pointer-events-none z-10 sm:hidden" />
-        <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 sm:mx-0 px-4 sm:px-0 scrollbar-none snap-x snap-mandatory">
+        <div className="flex gap-2 overflow-x-auto overflow-y-hidden pb-2 -mx-4 sm:mx-0 px-4 sm:px-0 pr-5 sm:pr-0 scroll-px-4 scrollbar-none">
           {CATEGORIES.map((cat) => {
             const isActive = activeChip === cat.filter;
             return (
               <button
                 key={cat.filter}
                 onClick={() => setActiveChip(cat.filter)}
-                className={`h-9 px-4 rounded-full text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border snap-start ${
+                className={`flex-none h-9 px-4 rounded-full text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border ${
                   isActive
                     ? 'bg-primary text-white border-primary shadow-sm'
                     : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
