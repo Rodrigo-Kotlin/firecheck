@@ -1,33 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { Flame, Eye, EyeOff, LogIn } from 'lucide-react';
+import { Flame, Eye, EyeOff, UserPlus, ArrowLeft } from 'lucide-react';
 import { showToast } from '../../hooks/useToasts';
 import { isAuthError } from '../../services/authService';
 import { isSupabaseConfigured } from '../../lib/supabase';
+import PasswordStrengthMeter from '../../components/PasswordStrengthMeter';
 
 const LAST_EMAIL_KEY = 'firecheck-last-email';
 
-export default function Login() {
+export default function Cadastro() {
   const navigate = useNavigate();
-  const user = useAppStore((s) => s.user);
-  const authReady = useAppStore((s) => s.authReady);
   const authLoading = useAppStore((s) => s.authLoading);
-  const login = useAppStore((s) => s.login);
+  const register = useAppStore((s) => s.register);
 
-  const [email, setEmail] = useState(() => {
-    if (typeof localStorage === 'undefined') return '';
-    return localStorage.getItem(LAST_EMAIL_KEY) ?? '';
-  });
+  const [nome, setNome] = useState('');
+  const [cargo, setCargo] = useState('Inspetor');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (authReady && user) {
-      void navigate('/', { replace: true });
-    }
-  }, [authReady, user, navigate]);
 
   const handleAuthError = (err: unknown) => {
     if (isAuthError(err)) {
@@ -37,15 +30,19 @@ export default function Login() {
     console.error('[auth]', err);
     showToast({
       kind: 'error',
-      title: 'Não foi possível entrar.',
-      description: 'Verifique sua conexão e tente novamente.',
+      title: 'Não foi possível criar a conta.',
+      description: 'Tente novamente em instantes.',
     });
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
-      showToast({ kind: 'warning', title: 'Preencha e-mail e senha.' });
+    if (!email || !password || !nome || !cargo) {
+      showToast({ kind: 'warning', title: 'Preencha todos os campos.' });
+      return;
+    }
+    if (password !== confirmPassword) {
+      showToast({ kind: 'warning', title: 'As senhas não coincidem.' });
       return;
     }
     if (!isSupabaseConfigured) {
@@ -58,9 +55,13 @@ export default function Login() {
     }
     setSubmitting(true);
     try {
-      await login(email, password);
+      await register({ email, password, nome, cargo });
       localStorage.setItem(LAST_EMAIL_KEY, email.trim().toLowerCase());
-      showToast({ kind: 'success', title: 'Bem-vindo de volta!' });
+      showToast({
+        kind: 'success',
+        title: 'Conta criada!',
+        description: `Bem-vindo, ${nome.split(' ')[0]}.`,
+      });
       void navigate('/', { replace: true });
     } catch (err) {
       handleAuthError(err);
@@ -88,19 +89,53 @@ export default function Login() {
       <div className="mx-auto w-full max-w-md">
         <div className="bg-white py-7 px-6 sm:py-8 sm:px-8 border border-gray-100 rounded-2xl shadow-subtle">
           <div className="flex items-center gap-2 mb-6">
-            <LogIn className="w-5 h-5 text-primary" />
+            <UserPlus className="w-5 h-5 text-primary" />
             <h2 className="text-base font-black text-gray-900 uppercase tracking-wide">
-              Entrar na sua conta
+              Criar nova conta
             </h2>
           </div>
 
-          <form className="space-y-5" onSubmit={handleLogin} noValidate>
+          <form className="space-y-4" onSubmit={handleSubmit} noValidate>
             <div>
-              <label htmlFor="login-email" className="label-uppercase block mb-2">
+              <label htmlFor="reg-nome" className="label-uppercase block mb-2">
+                Nome completo
+              </label>
+              <input
+                id="reg-nome"
+                name="nome"
+                type="text"
+                autoComplete="name"
+                required
+                value={nome}
+                onChange={(e) => setNome(e.target.value)}
+                placeholder="Seu nome"
+                className="field-input"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="reg-cargo" className="label-uppercase block mb-2">
+                Cargo / Função
+              </label>
+              <input
+                id="reg-cargo"
+                name="cargo"
+                type="text"
+                autoComplete="organization-title"
+                required
+                value={cargo}
+                onChange={(e) => setCargo(e.target.value)}
+                placeholder="Inspetor, Engenheiro, etc."
+                className="field-input"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="reg-email" className="label-uppercase block mb-2">
                 E-mail
               </label>
               <input
-                id="login-email"
+                id="reg-email"
                 name="email"
                 type="email"
                 autoComplete="email"
@@ -113,27 +148,19 @@ export default function Login() {
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <label htmlFor="login-password" className="label-uppercase">
-                  Senha
-                </label>
-                <Link
-                  to="/recuperar-senha"
-                  className="text-[11px] font-black uppercase tracking-wider text-primary hover:underline"
-                >
-                  Esqueci minha senha
-                </Link>
-              </div>
+              <label htmlFor="reg-password" className="label-uppercase block mb-2">
+                Senha
+              </label>
               <div className="relative">
                 <input
-                  id="login-password"
+                  id="reg-password"
                   name="password"
                   type={showPassword ? 'text' : 'password'}
-                  autoComplete="current-password"
+                  autoComplete="new-password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="Mínimo 8 caracteres"
                   className="field-input pr-12"
                 />
                 <button
@@ -149,6 +176,29 @@ export default function Login() {
                   )}
                 </button>
               </div>
+              <PasswordStrengthMeter password={password} className="mt-2" />
+            </div>
+
+            <div>
+              <label htmlFor="reg-confirm" className="label-uppercase block mb-2">
+                Confirmar senha
+              </label>
+              <input
+                id="reg-confirm"
+                name="confirmPassword"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="new-password"
+                required
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Repita a senha"
+                className="field-input"
+              />
+              {confirmPassword && password !== confirmPassword && (
+                <p className="text-[11px] font-bold text-critical uppercase tracking-wider mt-1.5">
+                  As senhas não coincidem.
+                </p>
+              )}
             </div>
 
             <button
@@ -156,24 +206,28 @@ export default function Login() {
               disabled={busy}
               className="btn-primary"
             >
-              {busy ? 'Autenticando...' : 'Entrar'}
+              {busy ? 'Criando conta...' : 'Criar conta'}
             </button>
           </form>
 
           <p className="text-center text-[11px] text-gray-400 mt-5">
-            Ainda não tem conta?{' '}
+            Já tem conta?{' '}
             <Link
-              to="/cadastro"
+              to="/login"
               className="text-primary font-black uppercase tracking-wider hover:underline"
             >
-              Criar conta
+              Entrar
             </Link>
           </p>
         </div>
 
-        <p className="text-center text-[11px] text-gray-400 mt-6">
-          FireCheck v1.0.0 · PWA Offline-First
-        </p>
+        <Link
+          to="/login"
+          className="flex items-center justify-center gap-1.5 text-[11px] text-gray-400 mt-6 hover:text-gray-600"
+        >
+          <ArrowLeft className="w-3 h-3" />
+          Voltar para o login
+        </Link>
       </div>
     </div>
   );

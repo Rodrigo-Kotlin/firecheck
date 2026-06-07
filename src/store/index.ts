@@ -4,7 +4,7 @@ import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanSta
 import { equipamentos, inspecoes, estatisticas } from '../data/mock';
 import { db, type LocalActionPlan, type LocalEquipment, type LocalInspection } from '../db';
 import { syncAll, pendingSyncCount, seedFromMock, type SyncReport } from '../services/sync';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   loginUser,
   registerUser,
@@ -176,13 +176,16 @@ export const useAppStore = create<AppState>()(
         syncEnabled: isSupabaseConfigured,
 
         // -----------------------------------------------------------------
-        // Auth — local-first, backed by Dexie + Web Crypto (PBKDF2).
+        // Auth — Supabase Auth + tabela `profiles`. A sessão é mantida pelo
+        // próprio client Supabase em `localStorage['firecheck-auth']`. Aqui
+        // só sincronizamos o `user: Inspector` derivado do perfil.
         // -----------------------------------------------------------------
         login: async (email, pass) => {
           set({ authLoading: true });
           try {
             const user = await loginUser({ email, password: pass });
             set({ user, authLoading: false });
+            void runSync();
           } catch (err) {
             set({ authLoading: false });
             throw err as AuthError;
@@ -208,7 +211,7 @@ export const useAppStore = create<AppState>()(
 
         // -----------------------------------------------------------------
         // Hydration: load from Dexie (seed from mocks on first run) and
-        // resolve the current auth session (with orphan cleanup).
+        // resolve the current auth session (Supabase getSession + profile).
         // -----------------------------------------------------------------
         hydrate: async () => {
           const eqCount = await db.equipamentos.count();
@@ -220,8 +223,6 @@ export const useAppStore = create<AppState>()(
             db.inspecoes.toArray(),
             listUsers(),
           ]);
-          // Resolve auth: if the persisted user no longer exists in the
-          // `users` table (e.g. legacy mock-login state), drop them.
           const sessionUser = await resolveSession();
 
           set({
@@ -233,8 +234,7 @@ export const useAppStore = create<AppState>()(
             authReady: true,
           });
           await get().refreshPendingCount();
-          // Try an initial sync in the background.
-          void runSync();
+          if (sessionUser) void runSync();
         },
 
         refreshPendingCount: async () => {
@@ -257,8 +257,6 @@ export const useAppStore = create<AppState>()(
         // Mutations
         // -----------------------------------------------------------------
         addEquipment: (newEq) => {
-          // Stamp ownership on the equipment itself (idempotent — the form
-          // may already set it, this is a defensive fallback).
           const stamped: Equipment = {
             ...newEq,
             createdBy: newEq.createdBy ?? get().user?.id,
@@ -270,7 +268,6 @@ export const useAppStore = create<AppState>()(
               stats: recomputeStats(updated),
             };
           });
-          // Persist + mark unsynced
           void db.equipamentos.put({ ...stamped, sincronizado: false } as LocalEquipment);
           void runSync().then(() => get().refreshPendingCount());
         },
@@ -301,7 +298,6 @@ export const useAppStore = create<AppState>()(
             };
           });
           void db.equipamentos.delete(id);
-          // Cascade: remove the equipment's inspections and pending photos.
           void (async () => {
             const inspections = await db.inspecoes.where('equipmentId').equals(id).toArray();
             for (const insp of inspections) {
@@ -356,7 +352,6 @@ export const useAppStore = create<AppState>()(
               stats: recomputeStats(updatedEquipments),
             };
           });
-          // Persist to Dexie (inspection + the updated equipment status)
           const finalId = id;
           void (async () => {
             const stamped: Inspection = {
@@ -404,12 +399,6 @@ export const useAppStore = create<AppState>()(
           set((state) => ({
             actionPlans: state.actionPlans.filter((ap) => ap.id !== id),
           }));
-          // For Dexie/Supabase deletes: only the cloud-side plan with that ID
-          // needs to be removed. Action plans live in localStorage, so we
-          // additionally push a delete to the cloud via syncAll's `pendingDelete`
-          // mechanism. The simplest path is to mark a sentinel that syncAll
-          // understands; since our syncAll uses the array passed in, we just
-          // need to make sure that array reflects the deletion.
           void runSync().then(() => get().refreshPendingCount());
         },
 
@@ -436,7 +425,6 @@ export const useAppStore = create<AppState>()(
         deleteUserAccount: async (id) => {
           const current = get().user;
           if (current?.id === id) {
-            // The admin can't delete their own account from this screen.
             throw new Error('Você não pode excluir a própria conta por aqui.');
           }
           await deleteUser(id);
@@ -450,21 +438,13 @@ export const useAppStore = create<AppState>()(
       version: 2,
       // Persist only the small/user-scoped data. Equipments & inspections
       // now live in Dexie and are loaded via `hydrate()`. `user` is no
-      // longer persisted — it is re-derived on each launch from the auth
-      // session in localStorage + the `users` table in Dexie (see
-      // `resolveSession`). `authReady` and `authLoading` are transient
-      // and must always be re-derived on each launch.
+      // longer persisted — it is re-derived on each launch from the
+      // Supabase session + the `profiles` table (see `resolveSession`).
       partialize: (state) => ({
         actionPlans: state.actionPlans,
         config: state.config,
-        // `users` is intentionally persisted as well so the admin panel
-        // renders instantly on reload, before the (async) reload finishes.
-        // No sensitive data — passwords never live in this projection.
         users: state.users,
       }),
-      // Bump-version migration: strip the legacy `user` field that was
-      // persisted by the mock login. Real user identity now lives in
-      // the auth session + Dexie users table.
       migrate: (persistedState, version) => {
         const base = (persistedState && typeof persistedState === 'object'
           ? persistedState
@@ -495,6 +475,35 @@ export const useAppStore = create<AppState>()(
     }
   )
 );
+
+// ---------------------------------------------------------------------------
+// Reage a mudanças de sessão do Supabase (login, logout, refresh, recovery).
+// Sincroniza `user`/`authReady` com o estado real da sessão e dispara sync.
+// ---------------------------------------------------------------------------
+
+if (typeof window !== 'undefined' && supabase) {
+  supabase.auth.onAuthStateChange((event, session) => {
+    void (async () => {
+      const store = useAppStore.getState();
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        const user = await resolveSession();
+        if (user) {
+          useAppStore.setState({ user, authReady: true });
+          if (event === 'SIGNED_IN') void store.triggerSync();
+        }
+      } else if (event === 'SIGNED_OUT') {
+        useAppStore.setState({ user: null, authReady: true });
+      } else if (event === 'PASSWORD_RECOVERY') {
+        // O usuário está no fluxo de recovery; o componente que chamou
+        // verifyOtp já cuida da próxima etapa.
+        useAppStore.setState({ authReady: true });
+      }
+      // `event` carrega também `INITIAL_SESSION` no primeiro carregamento —
+      // nesse caso o `hydrate()` já lida, então não duplicamos.
+      void session;
+    })();
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Auto-sync listeners (browser only)

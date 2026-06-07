@@ -64,15 +64,14 @@ export interface Inspector {
   role: 'admin' | 'inspector';
 }
 
-/** Local user account row stored in Dexie. Never sent to the UI. */
-export interface UserAccount {
+/** Linha da tabela `public.profiles` no Supabase. Espelha `auth.users` 1:1
+ *  e adiciona os campos de aplicação (nome, cargo, role). */
+export interface UserProfile {
   id: string;
   email: string;
   nome: string;
   cargo: string;
   role: 'admin' | 'inspector';
-  passwordHash: string;
-  salt: string;
   createdAt: string;
   updatedAt: string;
 }

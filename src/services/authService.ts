@@ -1,23 +1,18 @@
-import { db } from '../db';
-import type { Inspector, UserAccount } from '../types';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import type { AuthError as SupabaseAuthError } from '@supabase/supabase-js';
+import type { Inspector, UserProfile } from '../types';
 
 // ---------------------------------------------------------------------------
-// Local-first authentication
+// Autenticação via Supabase Auth + tabela `public.profiles`.
 //
-// Passwords are hashed with PBKDF2-SHA-256 (Web Crypto API, no dependencies).
-// Hash + salt are stored in Dexie's `users` table. The current session is
-// tracked by an opaque user id in localStorage; the full account record is
-// never persisted outside the encrypted-at-rest IndexedDB.
-//
-// If/when Supabase auth is wired in, swap the bodies of `registerUser`,
-// `loginUser` and `clearSession` for calls to `supabase.auth.*` — the rest
-// of the app depends only on the shapes returned here.
+// • A senha nunca toca o client além do input — Supabase faz hash + storage.
+// • Sessão persistida em `localStorage['firecheck-auth']` (chave controlada
+//   pelo cliente Supabase).
+// • O `users` table do Dexie foi removido (Dexie v4) — a fonte da verdade
+//   de identidade agora é o Supabase.
+// • Recuperação de senha usa OTP por e-mail (6 dígitos), conforme decisão
+//   do projeto: `signInWithOtp` → `verifyOtp` → `updateUser({ password })`.
 // ---------------------------------------------------------------------------
-
-const SESSION_KEY = 'firecheck-auth-session';
-const PBKDF2_ITERATIONS = 100_000;
-const HASH_BITS = 256;
-const SALT_BYTES = 16;
 
 export interface RegisterInput {
   email: string;
@@ -31,11 +26,10 @@ export interface LoginInput {
   password: string;
 }
 
-/** Result of a password check. `ok: true` for valid, otherwise explain. */
 export type PasswordCheck = { ok: true } | { ok: false; reason: string };
 
 // ---------------------------------------------------------------------------
-// Validation
+// Validation (client-side; Supabase reforça no servidor)
 // ---------------------------------------------------------------------------
 
 export function normalizeEmail(email: string): string {
@@ -70,7 +64,7 @@ export function isValidCargo(cargo: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Password strength meter (0..4)
+// Password strength meter (0..4) — reusado pela UI
 // ---------------------------------------------------------------------------
 
 export type StrengthScore = 0 | 1 | 2 | 3 | 4;
@@ -104,107 +98,7 @@ export function getPasswordStrength(password: string): {
 }
 
 // ---------------------------------------------------------------------------
-// Cryptographic primitives
-// ---------------------------------------------------------------------------
-
-function bytesToHex(bytes: Uint8Array): string {
-  let s = '';
-  for (let i = 0; i < bytes.length; i++) {
-    s += bytes[i].toString(16).padStart(2, '0');
-  }
-  return s;
-}
-
-function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
-  const out = new Uint8Array(new ArrayBuffer(hex.length / 2));
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(hex.substr(i * 2, 2), 16);
-  }
-  return out;
-}
-
-function generateSalt(): string {
-  const salt = new Uint8Array(SALT_BYTES);
-  crypto.getRandomValues(salt);
-  return bytesToHex(salt);
-}
-
-async function deriveHash(password: string, saltHex: string): Promise<string> {
-  const enc = new TextEncoder();
-  const baseKey = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(password),
-    { name: 'PBKDF2' },
-    false,
-    ['deriveBits'],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      salt: hexToBytes(saltHex),
-      iterations: PBKDF2_ITERATIONS,
-      hash: 'SHA-256',
-    },
-    baseKey,
-    HASH_BITS,
-  );
-  return bytesToHex(new Uint8Array(bits));
-}
-
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
-}
-
-// ---------------------------------------------------------------------------
-// Session (localStorage)
-// ---------------------------------------------------------------------------
-
-interface SessionRef {
-  userId: string;
-  email: string;
-  savedAt: number;
-}
-
-function readSession(): SessionRef | null {
-  if (typeof localStorage === 'undefined') return null;
-  const raw = localStorage.getItem(SESSION_KEY);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as SessionRef;
-    if (typeof parsed.userId === 'string' && typeof parsed.email === 'string') {
-      return parsed;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function writeSession(ref: SessionRef): void {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(SESSION_KEY, JSON.stringify(ref));
-}
-
-function clearLocalSession(): void {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.removeItem(SESSION_KEY);
-}
-
-// ---------------------------------------------------------------------------
-// Projections
-// ---------------------------------------------------------------------------
-
-function toInspector(account: UserAccount): Inspector {
-  return { id: account.id, nome: account.nome, cargo: account.cargo, role: account.role };
-}
-
-// ---------------------------------------------------------------------------
-// Public API
+// AuthError factory (erasableSyntaxOnly proíbe classes)
 // ---------------------------------------------------------------------------
 
 export type AuthErrorCode =
@@ -214,6 +108,11 @@ export type AuthErrorCode =
   | 'NOME_INVALID'
   | 'CARGO_INVALID'
   | 'CREDENTIALS_INVALID'
+  | 'NETWORK'
+  | 'NOT_CONFIGURED'
+  | 'RATE_LIMITED'
+  | 'OTP_INVALID'
+  | 'OTP_EXPIRED'
   | 'UNKNOWN';
 
 export interface AuthError extends Error {
@@ -231,7 +130,91 @@ export function isAuthError(err: unknown): err is AuthError {
   return err instanceof Error && (err as AuthError).code !== undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Supabase error → AuthError mapping
+// ---------------------------------------------------------------------------
+
+function mapSupabaseError(err: SupabaseAuthError | { message: string }): AuthError {
+  const msg = (err.message || '').toLowerCase();
+  if (msg.includes('user already registered') || msg.includes('already been registered')) {
+    return authError('EMAIL_TAKEN', 'Já existe uma conta com este e-mail.');
+  }
+  if (msg.includes('invalid login credentials') || msg.includes('invalid credentials')) {
+    return authError('CREDENTIALS_INVALID', 'E-mail ou senha incorretos.');
+  }
+  if (msg.includes('email not confirmed')) {
+    return authError(
+      'CREDENTIALS_INVALID',
+      'Confirme seu e-mail antes de entrar (verifique a caixa de entrada).',
+    );
+  }
+  if (msg.includes('otp') && (msg.includes('expired') || msg.includes('invalid'))) {
+    return msg.includes('expired')
+      ? authError('OTP_EXPIRED', 'Código expirado. Solicite um novo.')
+      : authError('OTP_INVALID', 'Código inválido. Verifique e tente novamente.');
+  }
+  if (msg.includes('rate limit') || msg.includes('too many requests')) {
+    return authError(
+      'RATE_LIMITED',
+      'Muitas tentativas em pouco tempo. Aguarde um instante e tente novamente.',
+    );
+  }
+  if (msg.includes('failed to fetch') || msg.includes('network')) {
+    return authError(
+      'NETWORK',
+      'Sem conexão com a nuvem. Verifique sua internet e tente novamente.',
+    );
+  }
+  return authError('UNKNOWN', err.message || 'Erro desconhecido na autenticação.');
+}
+
+// ---------------------------------------------------------------------------
+// Profile helpers
+// ---------------------------------------------------------------------------
+
+function toInspector(profile: UserProfile): Inspector {
+  return {
+    id: profile.id,
+    nome: profile.nome,
+    cargo: profile.cargo,
+    role: profile.role,
+  };
+}
+
+async function fetchOwnProfile(): Promise<UserProfile | null> {
+  if (!supabase) return null;
+  const { data: sessionData } = await supabase.auth.getUser();
+  const uid = sessionData.user?.id;
+  if (!uid) return null;
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, email, nome, cargo, role, created_at, updated_at')
+    .eq('id', uid)
+    .maybeSingle();
+  if (error) {
+    console.error('[auth] fetchOwnProfile:', error);
+    return null;
+  }
+  if (!data) return null;
+  return {
+    id: data.id,
+    email: data.email,
+    nome: data.nome,
+    cargo: data.cargo,
+    role: data.role as 'admin' | 'inspector',
+    createdAt: data.created_at,
+    updatedAt: data.updated_at,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Public API — Auth
+// ---------------------------------------------------------------------------
+
 export async function registerUser(input: RegisterInput): Promise<Inspector> {
+  if (!supabase) {
+    throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
+  }
   const email = normalizeEmail(input.email);
   if (!isValidEmail(email)) {
     throw authError('EMAIL_INVALID', 'Informe um e-mail válido.');
@@ -247,146 +230,188 @@ export async function registerUser(input: RegisterInput): Promise<Inspector> {
     throw authError('PASSWORD_WEAK', policy.reason);
   }
 
-  const existing = await db.users.where('email').equals(email).first();
-  if (existing) {
-    throw authError(
-      'EMAIL_TAKEN',
-      'Já existe uma conta com este e-mail. Faça login.',
-    );
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password: input.password,
+    options: {
+      data: { nome: input.nome.trim(), cargo: input.cargo.trim() },
+    },
+  });
+  if (error) throw mapSupabaseError(error);
+  if (!data.user) {
+    throw authError('UNKNOWN', 'Cadastro não retornou um usuário.');
   }
 
-  const now = new Date().toISOString();
-  const salt = generateSalt();
-  const passwordHash = await deriveHash(input.password, salt);
-  // First registered account on the device is promoted to admin so the
-  // PWA always has a privileged user; subsequent users join as inspectors.
-  const userCount = await db.users.count();
-  const role: UserAccount['role'] = userCount === 0 ? 'admin' : 'inspector';
-  const account: UserAccount = {
-    id: crypto.randomUUID(),
-    email,
-    nome: input.nome.trim(),
-    cargo: input.cargo.trim(),
-    role,
-    passwordHash,
-    salt,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  await db.users.add(account);
-  writeSession({ userId: account.id, email: account.email, savedAt: Date.now() });
-  return toInspector(account);
+  // Trigger `handle_new_user` cria a linha em `public.profiles`. Pode haver
+  // um pequeno delay até o SELECT enxergar a linha; fazemos 1 retry rápido.
+  let profile = await fetchOwnProfile();
+  for (let attempt = 0; !profile && attempt < 3; attempt++) {
+    await new Promise((r) => setTimeout(r, 250));
+    profile = await fetchOwnProfile();
+  }
+  if (!profile) {
+    // Fallback mínimo: monta Inspector a partir dos metadados do user.
+    return {
+      id: data.user.id,
+      nome: input.nome.trim(),
+      cargo: input.cargo.trim(),
+      role: 'inspector',
+    };
+  }
+  return toInspector(profile);
 }
 
 export async function loginUser(input: LoginInput): Promise<Inspector> {
+  if (!supabase) {
+    throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
+  }
   const email = normalizeEmail(input.email);
   if (!isValidEmail(email)) {
     throw authError('EMAIL_INVALID', 'Informe um e-mail válido.');
   }
-  const policy = checkPasswordPolicy(input.password);
-  if (!policy.ok) {
-    throw authError('PASSWORD_WEAK', policy.reason);
-  }
 
-  const account = await db.users.where('email').equals(email).first();
-  if (!account) {
+  const { error } = await supabase.auth.signInWithPassword({ email, password: input.password });
+  if (error) throw mapSupabaseError(error);
+
+  const profile = await fetchOwnProfile();
+  if (!profile) {
     throw authError(
-      'CREDENTIALS_INVALID',
-      'E-mail ou senha incorretos.',
+      'UNKNOWN',
+      'Login efetuado, mas não foi possível carregar o perfil. Tente novamente.',
     );
   }
-  const candidate = await deriveHash(input.password, account.salt);
-  if (!constantTimeEqual(candidate, account.passwordHash)) {
-    throw authError(
-      'CREDENTIALS_INVALID',
-      'E-mail ou senha incorretos.',
-    );
-  }
-  writeSession({ userId: account.id, email: account.email, savedAt: Date.now() });
-  return toInspector(account);
+  return toInspector(profile);
 }
 
-/**
- * Resolves the currently logged-in user. Returns `null` if no session, or if
- * the session points to a record that no longer exists in the local DB
- * (orphan — happens after the mock-login migration).
- */
 export async function resolveSession(): Promise<Inspector | null> {
-  const ref = readSession();
-  if (!ref) return null;
-  const account = await db.users.get(ref.userId);
-  if (!account) {
-    clearLocalSession();
-    return null;
-  }
-  return toInspector(account);
+  if (!supabase) return null;
+  const { data } = await supabase.auth.getSession();
+  if (!data.session) return null;
+  const profile = await fetchOwnProfile();
+  return profile ? toInspector(profile) : null;
 }
 
 export async function logoutUser(): Promise<void> {
-  clearLocalSession();
-}
-
-export async function listUsersCount(): Promise<number> {
-  return db.users.count();
+  if (!supabase) return;
+  await supabase.auth.signOut();
 }
 
 // ---------------------------------------------------------------------------
-// Admin operations
+// Password recovery (OTP by e-mail)
 // ---------------------------------------------------------------------------
 
-/** Public-facing user record (no password material). */
+/** Etapa 1: envia código de 6 dígitos para o e-mail. */
+export async function requestPasswordRecovery(email: string): Promise<void> {
+  if (!supabase) {
+    throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
+  }
+  const normalized = normalizeEmail(email);
+  if (!isValidEmail(normalized)) {
+    throw authError('EMAIL_INVALID', 'Informe um e-mail válido.');
+  }
+  const { error } = await supabase.auth.signInWithOtp({
+    email: normalized,
+    options: { shouldCreateUser: false },
+  });
+  if (error) throw mapSupabaseError(error);
+}
+
+/** Etapa 2: verifica o código e devolve o e-mail em caso de sucesso. */
+export async function verifyRecoveryOtp(
+  email: string,
+  token: string,
+): Promise<{ email: string }> {
+  if (!supabase) {
+    throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
+  }
+  const normalized = normalizeEmail(email);
+  const { data, error } = await supabase.auth.verifyOtp({
+    email: normalized,
+    token: token.trim(),
+    type: 'email',
+  });
+  if (error) throw mapSupabaseError(error);
+  return { email: data.user?.email ?? normalized };
+}
+
+/** Etapa 3: redefine a senha do usuário logado (vínculo feito via OTP). */
+export async function updateOwnPassword(newPassword: string): Promise<void> {
+  if (!supabase) {
+    throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
+  }
+  const policy = checkPasswordPolicy(newPassword);
+  if (!policy.ok) {
+    throw authError('PASSWORD_WEAK', policy.reason);
+  }
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw mapSupabaseError(error);
+}
+
+// ---------------------------------------------------------------------------
+// Admin: listar perfis
+// ---------------------------------------------------------------------------
+
 export interface PublicUser {
   id: string;
   email: string;
   nome: string;
   cargo: string;
-  role: UserAccount['role'];
+  role: 'admin' | 'inspector';
   createdAt: string;
 }
 
-function toPublic(account: UserAccount): PublicUser {
-  return {
-    id: account.id,
-    email: account.email,
-    nome: account.nome,
-    cargo: account.cargo,
-    role: account.role,
-    createdAt: account.createdAt,
-  };
-}
-
 export async function listUsers(): Promise<PublicUser[]> {
-  const all = await db.users.toArray();
-  return all
-    .map(toPublic)
-    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-}
-
-export async function getPublicUser(id: string): Promise<PublicUser | null> {
-  const account = await db.users.get(id);
-  return account ? toPublic(account) : null;
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, email, nome, cargo, role, created_at')
+    .order('nome', { ascending: true });
+  if (error) {
+    console.error('[auth] listUsers:', error);
+    return [];
+  }
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    email: row.email,
+    nome: row.nome,
+    cargo: row.cargo,
+    role: row.role as 'admin' | 'inspector',
+    createdAt: row.created_at,
+  }));
 }
 
 export async function setUserRole(
   id: string,
-  role: UserAccount['role'],
+  role: 'admin' | 'inspector',
 ): Promise<void> {
-  const account = await db.users.get(id);
-  if (!account) return;
-  await db.users.put({ ...account, role, updatedAt: new Date().toISOString() });
+  if (!supabase) {
+    throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
+  }
+  const { error } = await supabase.from('profiles').update({ role }).eq('id', id);
+  if (error) throw mapSupabaseError(error);
 }
 
 export async function deleteUser(id: string): Promise<void> {
-  await db.users.delete(id);
-  const ref = readSession();
-  if (ref?.userId === id) {
-    clearLocalSession();
+  if (!supabase) {
+    throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
+  }
+  // O client não tem permissão de `auth.admin.deleteUser`, então usamos a RPC
+  // SECURITY DEFINER criada em 0003_supabase_auth.sql.
+  const { error } = await supabase.rpc('admin_delete_user', { target_id: id });
+  if (error) {
+    throw authError(
+      'UNKNOWN',
+      error.message || 'Não foi possível excluir o usuário.',
+    );
   }
 }
 
-export async function isFirstUserAdmin(): Promise<boolean> {
-  const all = await db.users.toArray();
-  if (all.length === 0) return true;
-  return all.some((u) => u.role === 'admin');
+export async function isSupabaseReady(): Promise<boolean> {
+  if (!isSupabaseConfigured) return false;
+  try {
+    const { error } = await supabase!.auth.getSession();
+    return !error;
+  } catch {
+    return false;
+  }
 }

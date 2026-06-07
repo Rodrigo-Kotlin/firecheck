@@ -1,6 +1,9 @@
 import { useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/login/Login';
+import Cadastro from './pages/login/Cadastro';
+import RecuperarSenha from './pages/login/RecuperarSenha';
+import RedefinirSenha from './pages/login/RedefinirSenha';
 import AppLayout from './components/layout/AppLayout';
 import Dashboard from './pages/dashboard/Dashboard';
 import Equipamentos from './pages/equipamentos/Equipamentos';
@@ -54,6 +57,9 @@ export default function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/cadastro" element={<Cadastro />} />
+        <Route path="/recuperar-senha" element={<RecuperarSenha />} />
+        <Route path="/redefinir-senha" element={<RedefinirSenha />} />
 
         {/* Main layout with bottom nav (protected inside layout) */}
         <Route path="/" element={<AppLayout />}>

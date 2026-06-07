@@ -3,8 +3,11 @@
  *
  * Credentials are pulled from Vite env vars (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).
  * If they're missing or set to the placeholder values from `.env.example`, the
- * client is created in a "disabled" state — all sync calls will short-circuit so
- * the rest of the app can keep running against Dexie / localStorage only.
+ * client is created in a "disabled" state and the auth service short-circuits.
+ *
+ * A partir de 0003_supabase_auth.sql, este cliente é a fonte da verdade para
+ * identidade. A sessão fica persistida em `localStorage` na chave
+ * `firecheck-auth` (renomeada para não colidir com a antiga `firecheck-auth-session`).
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
@@ -19,16 +22,18 @@ const isPlaceholder =
 
 export const isSupabaseConfigured = !isPlaceholder;
 
+export const SUPABASE_AUTH_STORAGE_KEY = 'firecheck-auth';
+
 function buildClient(): SupabaseClient | null {
   if (isPlaceholder) return null;
   try {
     return createClient(url!, anonKey!, {
       auth: {
-        // We keep the mock login but still configure persistence so that
-        // service-worker or future real-auth flows work seamlessly.
-        persistSession: false,
-        autoRefreshToken: false,
-        detectSessionInUrl: false,
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storageKey: SUPABASE_AUTH_STORAGE_KEY,
+        storage: typeof window !== 'undefined' ? window.localStorage : undefined,
       },
       global: {
         headers: { 'x-application-name': 'firecheck-pwa' },
