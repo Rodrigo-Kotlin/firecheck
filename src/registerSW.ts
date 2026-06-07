@@ -31,8 +31,9 @@ export function register(onUpdateAvailable?: UpdateHandler): void {
   };
 
   window.addEventListener('load', () => {
+    const swUrl = `${import.meta.env.BASE_URL}sw.js`;
     navigator.serviceWorker
-      .register('/sw.js')
+      .register(swUrl)
       .then((reg) => {
         if (reg.waiting) {
           fireUpdate(reg.waiting);

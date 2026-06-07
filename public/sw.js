@@ -1,19 +1,16 @@
 const CACHE_NAME = 'firecheck-v2';
 const ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/favicon.ico',
-  '/favicon-16.png',
-  '/favicon-32.png',
-  '/favicon-48.png',
-  '/apple-touch-icon.png',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/icon-maskable-512.png',
-  '/src/main.tsx',
-  '/src/App.tsx',
-  '/src/index.css'
+  './',
+  './index.html',
+  './manifest.json',
+  './favicon.ico',
+  './favicon-16.png',
+  './favicon-32.png',
+  './favicon-48.png',
+  './apple-touch-icon.png',
+  './icon-192.png',
+  './icon-512.png',
+  './icon-maskable-512.png',
 ];
 
 self.addEventListener('install', (e) => {
