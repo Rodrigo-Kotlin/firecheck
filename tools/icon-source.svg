@@ -1,13 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="FireCheck">
-  <!-- Solid red rounded square (matches Login.tsx: bg-primary + rounded-2xl) -->
-  <rect width="512" height="512" rx="96" fill="#DC2626"/>
+  <!-- White background (so ICO conversion without alpha works) -->
+  <rect width="512" height="512" rx="96" fill="white"/>
 
-  <!-- White Flame outline (lucide-react Flame, scaled 16x and centered) -->
+  <!-- Solid red rounded square -->
+  <rect width="500" height="500" x="6" y="6" rx="90" fill="#DC2626"/>
+
+  <!-- White Flame (filled + outline for small-size visibility) -->
   <g transform="translate(72 64) scale(16)"
-     fill="none"
+     fill="white"
      stroke="white"
-     stroke-width="1"
+     stroke-width="1.5"
      stroke-linecap="round"
      stroke-linejoin="round">
     <path d="M12 3 q1 4 4 6.5 t3 5.5 a1 1 0 0 1 -14 0 a5 5 0 0 1 1-3 a1 1 0 0 0 5 0 c0-2 -1.5-3 -1.5-5 q0-2 2.5-4"/>

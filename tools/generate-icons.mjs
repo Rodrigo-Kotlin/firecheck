@@ -35,11 +35,17 @@ for (const t of targets) {
   console.log(`✓ ${t.name.padEnd(24)} ${t.size}x${t.size} (${buf.length} bytes)`);
 }
 
-const icoInputs = [
-  pngBuffers['favicon-16.png'],
-  pngBuffers['favicon-32.png'],
-  pngBuffers['favicon-48.png'],
-];
+// Flatten PNGs against white before ICO conversion — `to-ico` quantizes
+// to 8bpp internally and produces wrong colors when source PNGs contain
+// semi-transparent pixels (renders lemon-yellow instead of red).
+const icoInputs = await Promise.all(
+  ['favicon-16.png', 'favicon-32.png', 'favicon-48.png'].map(async (name) => {
+    return sharp(pngBuffers[name])
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .png()
+      .toBuffer();
+  })
+);
 const icoBuffer = await toIco(icoInputs);
 await writeFile(join(PUBLIC, 'favicon.ico'), icoBuffer);
 console.log(`✓ favicon.ico               multi-size 16+32+48 (${icoBuffer.length} bytes)`);
