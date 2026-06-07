@@ -558,14 +558,206 @@ usePwaUpdate();   // detecta nova versão → toast "Atualizar" → reload
 
 ---
 
-## 13. PWA
+## 13. PWA (Progressive Web App)
 
-- **Manifest**: `public/manifest.json` (icons 16/32/48/180/192/512 + maskable 512, theme `#E11D48`, background `#FFFFFF`).
-- **Service Worker**: `public/sw.js` (estratégia simples de cache, chave `firecheck-v2`).
-- **Update flow**: `registerSW.ts` → `usePwaUpdate` → toast "Nova versão disponível" → `SKIP_WAITING` → reload automático.
-- **Install**: botão "Adicionar à tela inicial" no Chrome (manifest válido + SW registrado).
-- **Modo offline**: tudo funciona localmente. Toasts mostram estado online/offline no `AppLayout` (badge superior direito).
-- **Ícones**: SVG mestre em `tools/icon-source.svg`; regerar PNGs/ICO com `node tools/generate-icons.mjs` (requer `sharp` e `to-ico` instalados). O design atual é escudo branco + chama vermelha em espaço negativo + check verde sobre fundo com gradiente vermelho `#E11D48` → `#B80035`.
+### Visão geral
+
+O FireCheck é uma PWA completa: instalável, offline-first, com detecção de conectividade, sincronização oportunística e fluxo de atualização automática. A experiência é pensada para uso em campo, sem depender de rede.
+
+### Manifest (`public/manifest.json`)
+
+```json
+{
+  "short_name": "FireCheck",
+  "name": "FireCheck - Inspeção de Equipamentos",
+  "description": "Sistema móvel para inspeção de equipamentos de combate a incêndio.",
+  "lang": "pt-BR",
+  "start_url": "/firecheck/",
+  "scope": "/firecheck/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFFFFF",
+  "theme_color": "#DC2626",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    { "src": "favicon-16.png",  "sizes": "16x16",  "type": "image/png", "purpose": "any" },
+    { "src": "favicon-32.png",  "sizes": "32x32",  "type": "image/png", "purpose": "any" },
+    { "src": "favicon-48.png",  "sizes": "48x48",  "type": "image/png", "purpose": "any" },
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
+    { "src": "icon-192.png",   "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png",   "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "prefer_related_applications": false
+}
+```
+
+### Service Worker (`public/sw.js`)
+
+Estratégia **cache-first com atualização em background** (stale-while-revalidate):
+
+1. `install`: pré-carrega assets estáticos no cache `firecheck-v2` e chama `skipWaiting()`.
+2. `activate`: limpa caches antigos e chama `clients.claim()`.
+3. `fetch`: serve do cache se disponível; inicia fetch em background para atualizar o cache. Se não está em cache, faz fetch da rede normalmente.
+4. `message`: escuta `SKIP_WAITING` para forçar o worker à espera a assumir o controle.
+
+```js
+// Assets pré-cacheados no install
+const ASSETS = [
+  '/', '/index.html', '/manifest.json',
+  '/favicon.ico', '/favicon-16.png', '/favicon-32.png', '/favicon-48.png',
+  '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png',
+  '/src/main.tsx', '/src/App.tsx', '/src/index.css'
+];
+```
+
+### Registro (`src/registerSW.ts`)
+
+Registra o service worker **apenas em produção** (`import.meta.env.PROD`). Aceita um callback `onUpdateAvailable` que recebe uma função `reload` para disparar a atualização:
+
+```ts
+register((reload) => {
+  showToast({
+    kind: 'info',
+    title: 'Nova versão disponível',
+    description: 'Atualize agora para obter as últimas melhorias.',
+    action: { label: 'Atualizar', onClick: reload },
+    duration: 0,
+  });
+});
+```
+
+Fluxo de atualização:
+1. `register()` detecta `reg.waiting` (worker já baixado) ou escuta `updatefound` + `statechange` → `installed`.
+2. Invoca `onUpdateAvailable` com callback que posta `SKIP_WAITING`.
+3. `controllerchange` escuta a ativação do novo worker e recarrega a página.
+4. O toast usa `duration: 0` (não auto-dispensa) para garantir que o usuário veja.
+
+Registro também acontece em `src/main.tsx` (chamada `serviceWorker.register()` no load), sem callback — isso garante que o SW seja registrado mesmo sem o hook, mas sem oferecer update notification se o componente `<App />` não montar o hook.
+
+### Hook `usePwaUpdate` (`src/hooks/usePwaUpdate.ts`)
+
+Usado em `App.tsx`. Faz duas coisas:
+
+1. **Registra o SW com callback de atualização** — quando uma nova versão é detectada, exibe toast com ação "Atualizar".
+2. **Escuta `appinstalled`** — quando o usuário instala o PWA, exibe toast de sucesso ("App instalado com sucesso").
+
+```ts
+export function usePwaUpdate(): void {
+  useEffect(() => {
+    register((reload) => {
+      showToast({ kind: 'info', title: 'Nova versão disponível', action: { label: 'Atualizar', onClick: reload }, duration: 0 });
+    });
+  }, []);
+
+  useEffect(() => {
+    const onInstalled = () => {
+      showToast({ kind: 'success', title: 'App instalado com sucesso', description: 'Abra o FireCheck direto da sua tela inicial.', duration: 6000 });
+    };
+    window.addEventListener('appinstalled', onInstalled);
+    return () => window.removeEventListener('appinstalled', onInstalled);
+  }, []);
+}
+```
+
+### Hook `usePwaInstall` (`src/hooks/usePwaInstall.ts`)
+
+Máquina de estados da instalação:
+
+```
+'unavailable' → 'available' → 'installed'
+     ↑              |
+     └──────────────┘ (se usuário dispensa)
+```
+
+- **`unavailable`**: navegador não tem superfície de instalação. Mostra fallback (instruções manuais no iOS).
+- **`available`**: `beforeinstallprompt` foi disparado e está na fila. Botão "Instalar" visível no top bar.
+- **`installed`**: app já está rodando como standalone (`display-mode: standalone` ou `navigator.standalone` no iOS).
+
+Detecção iOS:
+- Usa `userAgent` + `maxTouchPoints` para identificar iPads (iOS 13+).
+- iOS nunca dispara `beforeinstallprompt`; exibe instruções "Share → Adicionar à tela inicial".
+- Detecta `navigator.standalone` para saber se já está instalado no iOS.
+
+API pública:
+
+```ts
+const install = usePwaInstall();
+// install.state: 'unavailable' | 'available' | 'installed'
+// install.isIos: boolean
+// install.promptInstall(): Promise<'accepted' | 'dismissed' | 'unavailable' | 'error'>
+```
+
+### Botão de instalação na interface
+
+`AppLayout.tsx` renderiza botão "Instalar" no top bar quando `install.state === 'available'`:
+
+```tsx
+{install.state === 'available' && (
+  <button onClick={handleInstallClick} disabled={installing}
+    className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-primary text-white hover:bg-primary-dark">
+    <Download className="w-3.5 h-3.5" />
+    <span className="hidden sm:inline">Instalar</span>
+  </button>
+)}
+```
+
+Se o usuário está no iOS e `state === 'unavailable'` (mas não está instalado), o AppLayout mostra um botão alternativo que abre um popup com instruções de instalação manual.
+
+### Detecção de conectividade
+
+`AppLayout.tsx` escuta eventos `online`/`offline` do navegador com deduplicação via ref. Exibe:
+
+1. **OfflineBanner** — faixa âmbar fixa no topo (mobile/desktop) com contagem de pendências.
+2. **SyncStatusBadge** — pill no top bar (desktop) com estado: `Sincronizado` (verde), `N pendentes` (âmbar), `Sincronizando...` (azul), `Offline` (vermelho).
+3. **SyncNowButton** — botão na sidebar com mesma semântica de cores.
+4. **Toasts** — "Conexão restabelecida" / "Você está offline" ao alternar.
+
+### Indicadores de sincronização
+
+| Componente | Onde | Função |
+|---|---|---|
+| `OfflineBanner` | Topo (mobile + desktop) | Faixa âmbar informando modo offline |
+| `SyncStatusBadge` | Top bar (≥768px) | Pill compacto com estado do sync |
+| `SyncNowButton` | Sidebar | Botão "Sincronizar agora" com contagem |
+| Badge Supabase | Sidebar | Status da conexão com nuvem |
+
+### Ícones e geração
+
+- **SVG mestre**: `tools/icon-source.svg` — retângulo arredondado vermelho (`#DC2626`) com contorno de chama em branco (ícone Flame do Lucide).
+- **Geração**: `node tools/generate-icons.mjs` (requer `sharp` e `to-ico`).
+  - Gera PNGs: 16, 32, 48, 180, 192, 512, maskable-512.
+  - Gera `favicon.ico` multi-tamanho (16+32+48).
+- **Saída**: todos em `public/`.
+
+### Modo offline
+
+Tudo funciona localmente:
+- IndexedDB (Dexie) é a fonte primária de dados.
+- Escritas vão para Dexie com flag `sincronizado: false`.
+- Sync bidirecional com Supabase quando online.
+- Toasts e banners informam estado de conectividade.
+
+### Fluxo de atualização completo
+
+```
+1. Nova build → sw.js muda (cache key firecheck-v2 → v3 etc.)
+2. Browser baixa novo SW em background (updatefound)
+3. Novo SW entra em estado 'waiting' (ainda não ativo)
+4. usePwaUpdate detecta 'installed' com controller existente
+5. Toast "Nova versão disponível" com botão "Atualizar"
+6. Usuário clica → registerSW posta SKIP_WAITING
+7. Novo SW ativa → controllerchange → window.location.reload()
+8. Página recarrega com nova versão
+```
+
+### iOS (Safari)
+
+- `beforeinstallprompt` **não existe**. Botão "Instalar" só aparece se o evento foi disparado (Chrome/Android).
+- Detectamos iOS via UA + `maxTouchPoints` para iPads.
+- Exibimos instruções manuais: "Compartilhar → Adicionar à Tela de Início".
+- `navigator.standalone` detecta se já está instalado.
+- Safe areas: `env(safe-area-inset-bottom)` no CSS do bottom nav e toaster.
 
 ---
 

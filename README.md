@@ -19,10 +19,12 @@ automática para a nuvem via Supabase.
 ## ✨ Features
 
 - 📱 **PWA instalável** — funciona no celular como app nativo (Android/iOS).
-- 🔐 **Autenticação local-first** com PBKDF2-SHA-256 (Web Crypto, zero deps);
-  o primeiro usuário do dispositivo vira admin automaticamente.
+  Botão "Instalar" no top bar com detecção de iOS (instruções manuais).
+- 🔐 **Autenticação com Supabase Auth** (senha + recovery OTP por e-mail);
+  primeiro usuário vira admin, demais são inspector.
 - 👥 **RBAC** (admin/inspector) com permissões baseadas em ownership:
   inspetores só editam os próprios cadastros; admin edita tudo.
+  RLS restritivo no Supabase.
 - 📷 **Scanner de QR Code** com `html5-qrcode`.
 - 📋 **Checklists dinâmicos** por tipo de equipamento.
 - 📑 **Relatórios em PDF** com `jsPDF` + `html2canvas`.
@@ -42,11 +44,11 @@ automática para a nuvem via Supabase.
 | Build | Vite 8 |
 | Estado | Zustand (com `persist` no localStorage) |
 | Banco local | Dexie 4 (IndexedDB) |
-| Backend | Supabase (Postgres + Storage) |
+| Backend | Supabase (Postgres + Auth + Storage) |
 | Estilo | TailwindCSS 4 |
 | QR | html5-qrcode |
 | PDF | jsPDF + html2canvas |
-| PWA | Service Worker manual (`public/sw.js`) |
+| PWA | Service Worker manual (`public/sw.js`) + hooks (`usePwaUpdate`, `usePwaInstall`) |
 
 ## 🚀 Quick start
 
@@ -66,11 +68,12 @@ npm run dev
 npm run build
 ```
 
-**Login (local):** cadastre-se com nome, e-mail, cargo e senha (≥ 8 caracteres,
-1 maiúscula, 1 dígito). A **primeira conta** do dispositivo vira **admin**
-automaticamente; contas subsequentes são **inspector** e podem ser promovidas
-na tela `Configurações → Gerenciar Usuários`. A senha é protegida com
-**PBKDF2-SHA-256** (100k iterações, salt 16 bytes) e nunca sai do dispositivo.
+**Login (requer rede):** cadastre-se com nome, e-mail, cargo e senha (≥ 8 caracteres,
+1 maiúscula, 1 dígito). A **primeira conta** do projeto Supabase vira **admin**
+automaticamente (trigger `handle_new_user`); contas subsequentes são **inspector**
+e podem ser promovidas na tela `Configurações → Gerenciar Usuários`.
+A senha é gerenciada pelo Supabase Auth (bcrypt, JWT, refresh tokens) e
+nunca é armazenada no dispositivo.
 
 ## ☁️ Setup do Supabase
 
@@ -78,12 +81,15 @@ na tela `Configurações → Gerenciar Usuários`. A senha é protegida com
 2. No **SQL Editor**, rode em ordem:
    - `supabase/migrations/0001_init_schema.sql` (tabelas + RLS + bucket)
    - `supabase/migrations/0002_seed_data.sql` (dados de exemplo)
-3. Preencha o `.env` com `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`.
-4. Reinicie o dev server. A telemetria no sidebar deve mostrar
+   - `supabase/migrations/0003_supabase_auth.sql` (profiles + RLS auth + RPC)
+3. Configure Authentication > Settings > SMTP para o e-mail de recovery OTP.
+4. Preencha o `.env` com `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`.
+5. Reinicie o dev server. A telemetria no sidebar deve mostrar
    **"Em dia"** após o primeiro `hydrate()`.
 
-> ⚠️ As policies de RLS atuais são permissivas (`using (true)`) — adequado
-> para o demo, mas **não para produção**. Veja "Roadmap" abaixo.
+> ⚠️ É obrigatório configurar um SMTP próprio no Supabase para o fluxo de
+> recuperação de senha (OTP por e-mail). O SMTP de teste tem rate limit de
+> 2 e-mails/hora.
 
 ## 📁 Estrutura
 
@@ -94,28 +100,34 @@ firecheck/
 │   └── workflows/
 │       ├── ci.yml          # lint + build em PRs
 │       └── deploy.yml      # build + deploy para GitHub Pages
-├── supabase/
-│   ├── config.toml         # gerado por `supabase init`
-│   └── migrations/
-│       ├── 0001_init_schema.sql
-│       └── 0002_seed_data.sql
 ├── public/
-│   ├── manifest.json       # PWA manifest (theme_color #E11D48)
-│   ├── sw.js               # service worker (cache firecheck-v2)
+│   ├── manifest.json       # PWA manifest (theme_color #DC2626)
+│   ├── sw.js               # service worker (cache-first + background refresh)
 │   ├── favicon.ico         # multi-size (16+32+48)
 │   ├── favicon-{16,32,48}.png
 │   ├── apple-touch-icon.png
 │   └── icon-{192,512,maskable-512}.png
+├── tools/
+│   ├── icon-source.svg     # SVG mestre do ícone
+│   └── generate-icons.mjs  # Node script para gerar PNGs/ICO
+├── supabase/
+│   ├── config.toml         # project_id = "firecheck"
+│   └── migrations/
+│       ├── 0001_init_schema.sql
+│       ├── 0002_seed_data.sql
+│       └── 0003_supabase_auth.sql
 └── src/
     ├── App.tsx             # rotas + Toaster + usePwaUpdate
-    ├── main.tsx            # entrypoint
-    ├── registerSW.ts       # PWA service worker
-    ├── index.css           # design system (classes utilitárias + tokens)
+    ├── main.tsx            # entrypoint + registerSW
+    ├── registerSW.ts       # PWA service worker registration
+    ├── index.css           # design system + PWA styles (toaster, offline-banner, sync-now, etc.)
     ├── components/         # Toaster, ToggleSwitch, QrCodePrintCard, etc.
-    │   └── layout/         # AppLayout (sidebar + bottom nav)
-    ├── data/mock.ts        # seed inicial
-    ├── db/index.ts         # Dexie schema v3
-    ├── hooks/              # useToasts, usePwaUpdate
+    │   └── layout/         # AppLayout (sidebar + bottom nav + PWA install + sync indicators)
+    ├── hooks/
+    │   ├── useToasts.ts    # sistema de toasts
+    │   ├── usePwaUpdate.ts # update notification flow
+    │   └── usePwaInstall.ts# deferred install prompt + iOS detection
+    ├── db/index.ts         # Dexie schema v4
     ├── lib/supabase.ts     # client singleton
     ├── pages/              # login, dashboard, equipamentos, etc.
     ├── services/           # auth, permissions, sync, mappers, CRUD
@@ -134,9 +146,10 @@ firecheck/
 
 ## 🗺 Roadmap
 
-- [x] Autenticação local-first com PBKDF2 (Web Crypto)
-- [x] RBAC admin/inspector com permissões por ownership
-- [ ] RLS restritivo no Supabase (atualmente permissivo para o demo)
+- [x] Autenticação com Supabase Auth (senha + recovery OTP por e-mail)
+- [x] RBAC admin/inspector com permissões por ownership + RLS restritivo
+- [x] PWA instalável com botão "Instalar", iOS detection e update notification
+- [x] Indicadores visuais de conectividade e sincronização (banners, pills, toasts)
 - [ ] Conflict resolution (last-write-wins com campo `version`)
 - [ ] Sincronização periódica em background (Service Worker)
 - [ ] Supabase CLI para versionar migrations (`supabase db push`)
