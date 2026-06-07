@@ -1,7 +1,7 @@
 # FireCheck — Contexto do Projeto para IAs
 
 > Documento de referência. Leia antes de sugerir mudanças.
-> Última atualização: 2026-06-06 · commit `51209ec`.
+> Última atualização: 2026-06-07 · auth migrado para Supabase Auth + recovery OTP.
 
 ---
 
@@ -54,7 +54,8 @@ firecheck/
 │   ├── config.toml                      # project_id = "firecheck"
 │   └── migrations/
 │       ├── 0001_init_schema.sql         # tabelas + RLS permissivo + triggers
-│       └── 0002_seed_data.sql           # inspetores seed
+│       ├── 0002_seed_data.sql           # inspetores seed
+│       └── 0003_supabase_auth.sql       # profiles + is_admin() + RPC admin + RLS auth
 ├── src/
 │   ├── main.tsx                         # entrypoint (router + Toaster)
 │   ├── App.tsx                          # <Routes> + usePwaUpdate
@@ -67,7 +68,7 @@ firecheck/
 │   ├── lib/
 │   │   └── supabase.ts                  # singleton + isSupabaseConfigured
 │   ├── services/
-│   │   ├── authService.ts               # PBKDF2 + Web Crypto
+│   │   ├── authService.ts               # Supabase Auth (signInWithPassword / signUp / OTP)
 │   │   ├── permissions.ts               # isAdmin, canEdit*, canManageUsers
 │   │   ├── equipmentService.ts          # CRUD cloud equipamentos
 │   │   ├── inspectionService.ts         # CRUD cloud inspeções
@@ -90,6 +91,9 @@ firecheck/
 │   │       └── AppLayout.tsx            # sidebar + topbar + bottom nav
 │   └── pages/
 │       ├── login/Login.tsx
+│       ├── login/Cadastro.tsx
+│       ├── login/RecuperarSenha.tsx
+│       ├── login/RedefinirSenha.tsx
 │       ├── dashboard/Dashboard.tsx
 │       ├── equipamentos/
 │       │   ├── Equipamentos.tsx         # grid + busca + chips
@@ -171,19 +175,18 @@ interface Inspector {
   role?: UserRole;             // <-- RBAC
 }
 
-interface UserAccount {
-  id: string;
+interface UserProfile {
+  id: string;                  // UUID do auth.users (1:1)
+  email: string;               // único no Supabase
   nome: string;
-  email: string;
   cargo: string;
   role: UserRole;              // 'admin' | 'inspector'
-  passwordHash: string;        // base64
-  salt: string;                // base64
-  createdAt: number;           // Date.now()
+  createdAt: string;           // ISO timestamptz do Supabase
+  updatedAt: string;
 }
 
-// Tipo público (sem senha) usado na lista de usuários
-type PublicUser = Omit<UserAccount, 'passwordHash' | 'salt'>;
+// Tipo público usado na lista de usuários (igual a UserProfile hoje)
+type PublicUser = UserProfile;
 
 interface AppConfig {
   empresa: { nome: string; cnpj?: string; endereco?: string };
@@ -194,54 +197,98 @@ interface AppConfig {
 
 ---
 
-## 5. Autenticação local-first (`src/services/authService.ts`)
+## 5. Autenticação Supabase Auth (`src/services/authService.ts`)
 
-**Decisão arquitetural**: optamos por NÃO usar Supabase Auth. A PWA precisa funcionar 100% offline e queremos zero dependências externas para identidade. Tudo vive no IndexedDB (Dexie) com **PBKDF2-SHA-256 (100.000 iterações, salt 16 bytes)** calculado via Web Crypto API.
+**Decisão arquitetural**: identidade é gerenciada pelo Supabase Auth (senhas com hash bcrypt no servidor, sessões JWT, refresh tokens). A PWA continua offline-first **para dados** (Dexie + Supabase sync), mas **login/registro/recuperação exigem rede**.
+
+A senha nunca passa do input para nenhum storage local — o Supabase faz hash + storage no servidor.
+
+### Fluxo de identidade
+
+```
+[auth.users]            ← gerenciado pelo Supabase Auth (bcrypt, JWT, refresh)
+   │ 1:1
+   ▼
+[public.profiles]       ← trigger `handle_new_user` cria a linha no signup
+   ├─ id, email, nome, cargo, role, created_at
+   └─ RLS: select autenticado / update self (sem mexer no role) /
+           update admin / delete admin (exceto self)
+
+[auth.uid()] ── policies usam nas tabelas de domínio (0003)
+```
 
 ### Regras
 
-1. **Primeiro usuário do dispositivo vira admin automaticamente** (`db.users.count() === 0`).
-2. **Demais usuários são `inspector`** e precisam ser promovidos por um admin.
-3. **E-mail é case-insensitive** e único por dispositivo.
-4. **Sessão** fica em `localStorage['firecheck-auth-session']` = `{ userId, loginAt }`. Não persiste senha.
-5. **Senha é digitada em clear-text** apenas no momento do login/register. Depois só `passwordHash` e `salt` ficam no IndexedDB.
-6. **`persist` do Zustand** guarda APENAS `actionPlans`, `config`, `users: PublicUser[]` (sem `passwordHash`/`salt`). Migration v2 remove o antigo campo `user` da store persistida.
+1. **Primeiro usuário a se cadastrar no projeto vira admin** (regra do trigger `handle_new_user` em 0003). Demais são `inspector`.
+2. **E-mail é case-insensitive** (normalizado no client antes de cada chamada) e único globalmente (constraint `profiles.email UNIQUE` + `auth.users.email UNIQUE` do Supabase).
+3. **Sessão** é gerenciada pelo client Supabase e persistida em `localStorage['firecheck-auth']` (chave controlada por `SUPABASE_AUTH_STORAGE_KEY`). Refresh automático a cada ~50min.
+4. **`persist` do Zustand** guarda APENAS `actionPlans`, `config`, `users: PublicUser[]` (cache de perfis do Supabase para render instantâneo do admin).
+5. **Reage a `onAuthStateChange`** (`store/index.ts`): `SIGNED_IN` / `TOKEN_REFRESHED` / `USER_UPDATED` / `SIGNED_OUT` / `PASSWORD_RECOVERY` — sempre re-resolve o `user: Inspector` a partir do perfil.
 
-### Política de senha
+### Política de senha (client-side; Supabase reforça no servidor)
 
 | Regra | Implementação |
 |---|---|
 | ≥ 8 caracteres | `checkPasswordPolicy` |
-| Pelo menos 1 maiúscula | regex |
+| Pelo menos 1 letra | regex |
 | Pelo menos 1 dígito | regex |
 | Score 0–4 | `getPasswordStrength` (entropia simples) |
 | Barra visual | `<PasswordStrengthMeter score={...} />` |
 
-### API pública
+> Em produção, recomende endurecer `password_requirements` em `supabase/config.toml` (`lower_upper_letters_digits_symbols`) ou via painel.
 
-```ts
-registerUser({ nome, email, cargo, password }): Promise<PublicUser>
-loginUser({ email, password }): Promise<PublicUser>
-logoutUser(): void                                       // limpa sessão
-resolveSession(): Promise<PublicUser | null>             // chamado no boot
-listUsers(): Promise<PublicUser[]>
-getPublicUser(id: string): Promise<PublicUser | null>
-setUserRole(id: string, role: UserRole): Promise<void>
-deleteUser(id: string): Promise<void>
-isFirstUserAdmin(): Promise<boolean>
-getPasswordStrength(pwd: string): 0|1|2|3|4
-isValidEmail / isValidNome / isValidCargo(email: string): boolean
-checkPasswordPolicy(pwd: string): { ok: boolean; reasons: string[] }
+### Recuperação de senha (OTP por e-mail)
+
+Fluxo em 3 etapas, 2 páginas:
+
+```
+/recuperar-senha                            /redefinir-senha
+┌──────────────────┐    ┌────────────────────────────────────────┐
+│ Digita e-mail    │ →  │ Etapa 1: input OTP (6 dígitos)         │
+│ signInWithOtp    │    │   verifyOtp({ email, token, 'email' }) │
+│ (shouldCreate... │    │   → sessão temporária                  │
+│  false)          │    │ Etapa 2: digita nova senha 2x          │
+└──────────────────┘    │   updateUser({ password })             │
+                       │   → toast + navega para /login         │
+                       └────────────────────────────────────────┘
 ```
 
-Erros: `authError(code, message)` é uma factory (porque `erasableSyntaxOnly: true` proíbe `class`). Use o type guard `isAuthError(x)` antes de narrowing.
+Por que OTP em vez de magic link com `resetPasswordForEmail`? O usuário pediu **código de 6 dígitos por e-mail** (decisão do projeto). O fluxo OTP é totalmente self-contained: o usuário digita o código no app, sem precisar abrir o e-mail em outro dispositivo e voltar.
+
+### API pública (`src/services/authService.ts`)
+
+```ts
+registerUser({ email, password, nome, cargo }): Promise<Inspector>
+loginUser({ email, password }): Promise<Inspector>
+logoutUser(): Promise<void>
+resolveSession(): Promise<Inspector | null>             // chamado no boot
+requestPasswordRecovery(email): Promise<void>           // envia OTP
+verifyRecoveryOtp(email, token): Promise<{ email }>     // valida OTP
+updateOwnPassword(newPassword): Promise<void>           // redefine
+listUsers(): Promise<PublicUser[]>
+setUserRole(id: string, role: 'admin' | 'inspector'): Promise<void>
+deleteUser(id: string): Promise<void>                   // via RPC admin_delete_user
+isSupabaseReady(): Promise<boolean>
+
+// Validação client-side
+normalizeEmail / isValidEmail / checkPasswordPolicy / getPasswordStrength
+isValidNome / isValidCargo
+```
+
+Erros: `authError(code, message)` é uma factory (`erasableSyntaxOnly: true` proíbe `class`). Use `isAuthError(x)` antes de narrowing. `mapSupabaseError` converte erros do client Supabase em `AuthError`.
+
+### Migração do modelo antigo (PBKDF2 local)
+
+A tabela `users` do Dexie (v3) foi **removida** (Dexie v4). O upgrade faz `users.clear()` e apaga `localStorage['firecheck-auth-session']`. Contas existentes precisam ser recadastradas — não há migração automática de hashes (impossível: PBKDF2 não pode ser revertido para texto).
 
 ---
 
 ## 6. RBAC (`src/services/permissions.ts`)
 
+O RBAC client-side espelha as policies RLS do Supabase. Em produção, **a verdade mora no servidor** — o client apenas esconde controles que o servidor já bloquearia.
+
 ```ts
-isAdmin(user: PublicUser | null): boolean
+isAdmin(user: Inspector | null): boolean
 canManageUsers(user): boolean
 canEditEquipment(user, eq: Equipment): boolean
 canDeleteEquipment(user, eq): boolean
@@ -259,9 +306,17 @@ canDeleteActionPlan(user, plan): boolean
 | `canEdit/Delete Inspection` | ✅ sempre | ✅ se `ins.userId === user.id` | ❌ | ❌ |
 | `canEdit/Delete ActionPlan` | ✅ sempre | ✅ se `plan.userId === user.id` | ❌ | ❌ |
 | `canManageUsers` | ✅ | ❌ | ❌ | ❌ |
+| `deleteUser` (Supabase) | ✅ via RPC | ❌ | ❌ | ❌ |
 | Ver qualquer página | ✅ | ✅ | ✅ (read-only nos não-próprios) | ❌ → `/login` |
 
-> **Dados legados sem ownership** (mocks antigos sem `createdBy`/`userId`) são editáveis APENAS por admin.
+### RLS server-side (Supabase)
+
+Todas as policies de `0003_supabase_auth.sql` exigem `auth.role() = 'authenticated'`. Policies de `profiles`:
+- `select` autenticado.
+- `update` self (mas não pode mexer no próprio `role`).
+- `update` admin (qualquer perfil).
+- `delete` admin (exceto self).
+- Delete de `auth.users` exposto via RPC `admin_delete_user(uuid)` (SECURITY DEFINER) com checagem de `is_admin()`.
 
 ### UI consistente de read-only
 
@@ -281,23 +336,23 @@ Zustand com `persist` (localStorage) em **versão 2** (a primeira v1 carregava `
 {
   actionPlans: ActionPlan[],
   config: AppConfig,
-  users: PublicUser[]    // <-- cache para acesso síncrono
+  users: PublicUser[]    // <-- cache de perfis do Supabase para render instantâneo
 }
 ```
 
-> **A identidade do usuário atual NÃO é persistida pela store.** Ela vive em `firecheck-auth-session` (localStorage) e é re-resolvida via `db.users.get(userId)` no boot (`resolveSession()`).
+> **A identidade do usuário atual NÃO é persistida pela store.** Ela vive em `localStorage['firecheck-auth']` (gerenciado pelo client Supabase) e é re-resolvida via `supabase.auth.getSession()` + `select * from profiles where id = auth.uid()` no boot (`resolveSession()`).
 
 ### Ações relevantes
 
 | Ação | Comportamento |
 |---|---|
-| `init()` | Carrega users do Dexie → store. Resolve sessão. |
-| `login(email, pwd)` | Async. Chama `authService.loginUser`. |
-| `register({...})` | Async. Primeiro user vira admin. |
-| `logout()` | Limpa sessão. Não limpa dados. |
-| `loadUsers()` | Recarrega `users: PublicUser[]` do Dexie. |
-| `setUserRole(id, role)` | Persiste + reload. Impede self-demote. |
-| `deleteUserAccount(id)` | Impede self-delete. Recarrega lista. |
+| `init()` | Carrega equipamentos/inspeções do Dexie + perfis do Supabase → store. Resolve sessão. |
+| `login(email, pwd)` | Async. Chama `authService.loginUser` (Supabase signInWithPassword). |
+| `register({...})` | Async. Trigger no Supabase cria o profile. Primeiro vira admin. |
+| `logout()` | `supabase.auth.signOut()`. Não limpa dados. |
+| `loadUsers()` | Recarrega `users: PublicUser[]` do Supabase. |
+| `setUserRole(id, role)` | Persiste + reload. Impede self-demote (checado no `AdminUsuarios.tsx`). |
+| `deleteUserAccount(id)` | Chama RPC `admin_delete_user`. Impede self-delete. Recarrega lista. |
 | `addEquipment(eq)` | Estampa `createdBy: get().user.id`. |
 | `addInspection(ins)` | Estampa `userId`. |
 | `addActionPlan(p)` | Estampa `userId`. |
@@ -305,6 +360,14 @@ Zustand com `persist` (localStorage) em **versão 2** (a primeira v1 carregava `
 | `setModoOffline / setNotificacoes` | Atualiza `config.preferencias` + `online`. |
 | `saveEmpresaConfig / setConfig` | Persistência de empresa. |
 | `showToast / dismissToast / clearToasts` | Wrappers do hook. |
+
+### Subscrição ao Supabase Auth
+
+`store/index.ts` registra `supabase.auth.onAuthStateChange(...)` que reage a:
+- `SIGNED_IN` / `TOKEN_REFRESHED` / `USER_UPDATED` → re-resolve o perfil e atualiza `user: Inspector`.
+- `SIGNED_OUT` → zera `user` e marca `authReady: true`.
+- `PASSWORD_RECOVERY` → mantém `authReady: true` (o componente que chamou `verifyOtp` cuida da próxima etapa).
+- `INITIAL_SESSION` → ignorado (já tratado por `hydrate()` no boot).
 
 ### Recalcular stats
 
@@ -314,19 +377,26 @@ Sempre que `equipments` ou `inspections` mudam, a action chama `recomputeStatsFr
 
 ## 8. Camada local: Dexie (`src/db/index.ts`)
 
-Schema **v3** (use `db.version(3).stores(...)`):
+Schema **v4** (use `db.version(4).stores(...)`):
 
 ```ts
-db.version(3).stores({
-  equipamentos:   '&id, tipo, status, setor, [setor+tipo], sincronizado',
-  inspecoes:      '&id, equipmentId, data, [equipmentId+data], sincronizado, userId',
-  fotos:          '&id, inspectionId',
-  acoes_pendentes:'++id, tipo, createdAt',
-  users:          '&id, &email, createdAt',
-});
+db.version(4)
+  .stores({
+    equipamentos:   'id, tipo, status, setor, [setor+tipo], sincronizado',
+    inspecoes:      'id, equipmentId, data, [equipmentId+data], sincronizado, userId',
+    fotos:          'id, inspectionId',
+    acoes_pendentes:'++id, tipo, createdAt',
+    // tabela `users` removida (auth migrou para Supabase)
+  })
+  .upgrade(async (tx) => {
+    await tx.table('users').clear().catch(() => undefined);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('firecheck-auth-session'); // sessão legada PBKDF2
+    }
+  });
 ```
 
-> O `&` em `&id`/`&email` indica chave única. Tabelas mutáveis carregam `sincronizado: boolean`. Itens marcados `pendingDelete: true` são removidos do Dexie após DELETE no Supabase.
+> Tabelas mutáveis carregam `sincronizado: boolean`. Itens marcados `pendingDelete: true` são removidos do Dexie após DELETE no Supabase.
 
 ### Seed
 
@@ -379,24 +449,31 @@ Sidebar (`AppLayout.tsx`) tem botão "Sincronizar agora" que chama `syncNow()`. 
 
 ```tsx
 <Routes>
-  <Route element={<ProtectedShell />}>          {/* exige login */}
-    <Route path="/" element={<Dashboard />} />
-    <Route path="/equipamentos" element={<Equipamentos />} />
-    <Route path="/equipamentos/novo" element={<NovoEquipamento />} />
-    <Route path="/equipamentos/:id" element={<DetalhesEquipamento />} />
-    <Route path="/inspecionar/:id" element={<Inspecionar />} />
-    <Route path="/scan" element={<ScanQr />} />
-    <Route path="/relatorios" element={<Relatorios />} />
-    <Route path="/plano-acao" element={<PlanoDeAcao />} />
-    <Route path="/configuracoes" element={<Configuracoes />} />
-    <Route path="/admin/usuarios" element={<AdminUsuarios />} />  {/* admin only */}
-  </Route>
+  {/* Públicas */}
   <Route path="/login" element={<Login />} />
+  <Route path="/cadastro" element={<Cadastro />} />
+  <Route path="/recuperar-senha" element={<RecuperarSenha />} />
+  <Route path="/redefinir-senha" element={<RedefinirSenha />} />
+
+  {/* Protegidas — guard em AppLayout */}
+  <Route path="/" element={<AppLayout />}>
+    <Route index element={<Dashboard />} />
+    <Route path="equipamentos" element={<Equipamentos />} />
+    <Route path="equipamentos/novo" element={<NovoEquipamento />} />
+    <Route path="equipamentos/:id" element={<DetalhesEquipamento />} />
+    <Route path="inspecionar/:id" element={<Inspecionar />} />
+    <Route path="scan" element={<ScanQr />} />
+    <Route path="relatorios" element={<Relatorios />} />
+    <Route path="planodeacao" element={<PlanoDeAcao />} />
+    <Route path="configuracoes" element={<Configuracoes />} />
+    <Route path="admin/usuarios" element={<AdminUsuarios />} />  {/* admin only */}
+  </Route>
+
   <Route path="*" element={<NotFound />} />
 </Routes>
 ```
 
-`ProtectedShell` redireciona para `/login` se `!user`. A página `/admin/usuarios` redireciona para `/` se `!isAdmin(user)`.
+`AppLayout` redireciona para `/login` se `!user` (após `authReady`). A página `/admin/usuarios` redireciona para `/` se `!isAdmin(user)`.
 
 ---
 
@@ -664,29 +741,33 @@ Escopos comuns: `auth`, `ui`, `pwa`, `equipamentos`, `inspecoes`, `plano-acao`, 
 
 ## 20. Limitações conhecidas
 
-- **Mock login + RLS permissivo** no Supabase. Em produção, trocar para Supabase Auth real e apertar RLS (`auth.role() = 'authenticated'` + policies por org).
+- **Login exige rede.** Como a identidade está no Supabase, login/registro/recovery precisam de conexão. Os dados continuam offline-first — uma vez logado, a PWA funciona offline (sync oportunístico).
+- **SMTP do Supabase precisa estar configurado** para o OTP de recuperação funcionar. Em projetos novos, o Supabase usa um SMTP de teste com rate limit baixo (2 e-mails/hora). Para produção, configurar SMTP próprio.
 - **Sync não é tempo real**: dependemos de `navigator.onLine` + clique manual. Para tempo real, adicionar Supabase Realtime channels.
-- **Sem multi-tenancy**: tudo é por dispositivo. Se dois técnicos compartilham login no mesmo tablet, não há segregação por `orgId` (não existe `orgId` ainda).
+- **Sem multi-tenancy**: tudo é por projeto Supabase. Se dois clientes precisam de FireCheck isolados, criar projetos Supabase separados. Não existe `orgId` ainda.
 - **Storage de fotos** fica no IndexedDB em base64 (offline-first). Upload só acontece em sync. Fotos grandes (>5 MB) podem estourar quota do browser.
 - **PDF do relatório** usa html2canvas + jsPDF, pesado e gera o warning de chunk > 700kB. Considerar lazy-load da rota `/relatorios`.
 - **PR #1 do Cloudflare Workers bot** existe na branch `cloudflare/workers-autoconfig` (base `8c0ccb8`). Não relacionada ao deploy real — pode ser fechada sem merge.
-- **Dexie v3 → v4**: se adicionar campo indexado, lembrar de incrementar a versão e prover migração.
+- **Dexie v4 → v5**: se adicionar campo indexado, lembrar de incrementar a versão e prover migração.
 
 ---
 
 ## 21. Verificação manual antes de PR
 
-Para mudanças de auth/RBAC:
-- [ ] Cadastrar primeira conta → confere badge "Admin" + link "Usuários" no sidebar.
+Para mudanças de auth/RBAC (Supabase Auth):
+- [ ] Cadastrar primeira conta no projeto Supabase → vira `admin` (trigger 0003) → badge "Admin" + link "Usuários" no sidebar.
 - [ ] Cadastrar segunda conta → segunda é `inspector`, sem badge.
-- [ ] Tentar acessar `/admin/usuarios` como inspector → redireciona.
-- [ ] Promover inspector a admin na tela → badge aparece.
+- [ ] Tentar acessar `/admin/usuarios` como inspector → redireciona para `/`.
+- [ ] Promover inspector a admin na tela → badge aparece no próximo load.
 - [ ] Rebaixar admin para inspector → badge some, link "Usuários" some.
-- [ ] Tentar rebaixar/excluir a si mesmo → bloqueado.
-- [ ] Excluir outro usuário → some da lista, ações dele continuam (não cascateia).
-- [ ] Logout → sessão limpa, redirect `/login`.
-- [ ] Reload página logada → sessão restaurada.
-- [ ] Sessão inválida (userId apagado do Dexie) → cai pra `/login` sem loop.
+- [ ] Tentar rebaixar/excluir a si mesmo → bloqueado (UI + RPC `is_admin()` + policy).
+- [ ] Excluir outro usuário → some da lista (deleção cascateia de `profiles` e `auth.users` via RPC).
+- [ ] Logout → `signOut()` limpa sessão Supabase + redirect `/login`.
+- [ ] Reload página logada → sessão restaurada via `supabase.auth.getSession()`.
+- [ ] Token expirado → `autoRefreshToken` renova sem o usuário perceber.
+- [ ] **Recovery OTP**: `/login` → "Esqueci minha senha" → digitar e-mail → recebe código de 6 dígitos → `/redefinir-senha` → digita OTP → digita nova senha → entra.
+- [ ] **Recovery OTP inválido** (código errado) → erro `OTP_INVALID` sem avançar.
+- [ ] **Recovery OTP expirado** (1h) → botão "Reenviar código" reenvia.
 
 Para mudanças de sync:
 - [ ] Com `.env` preenchido + rede → cadastrar equipamento → `sincronizado: true` no IndexedDB e linha aparece no Supabase.
@@ -717,4 +798,4 @@ Em vez de inventar, **pergunte** se:
 
 ## 23. Resumo de uma linha
 
-> **FireCheck** = React 19 + Dexie + Zustand PWA offline-first para inspeção de extintores/hidrantes/alarmes, com PBKDF2 auth local, RBAC admin/inspector (ownership-based), sync bidirecional opcional com Supabase, UI em PT-BR, design system próprio em `index.css`, e deploy em GitHub Pages.
+> **FireCheck** = React 19 + Dexie + Zustand PWA offline-first para inspeção de extintores/hidrantes/alarmes, com Supabase Auth (senha + recovery OTP por e-mail), RBAC admin/inspector (ownership-based), perfis em `public.profiles` com RLS, sync bidirecional opcional com Supabase, UI em PT-BR, design system próprio em `index.css`, e deploy em GitHub Pages.
