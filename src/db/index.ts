@@ -1,11 +1,15 @@
 import Dexie, { type Table } from 'dexie';
-import type { Equipment, Inspection, ActionPlan, UserAccount } from '../types';
+import type { Equipment, Inspection, ActionPlan } from '../types';
 
 // ---------------------------------------------------------------------------
 // Local storage layer. Mirrors the Supabase schema but is the source of truth
 // for offline writes. Every mutable row carries `sincronizado` and
 // `pendingDelete` flags so the sync orchestrator can push/purge deltas
 // without scanning the entire DB.
+//
+// v4 — remove a tabela `users` (auth migrou para Supabase Auth, ver
+// 0003_supabase_auth.sql). A `upgrade` apaga qualquer vestígio de sessão
+// local legada e força novo login.
 // ---------------------------------------------------------------------------
 
 export type PendingActionData = Record<string, unknown>;
@@ -41,12 +45,13 @@ export type LocalInspection = Inspection & {
   pendingDelete?: boolean;
 };
 
+const LEGACY_SESSION_KEY = 'firecheck-auth-session';
+
 export class FireCheckDatabase extends Dexie {
   equipamentos!: Table<LocalEquipment, string>;
   inspecoes!: Table<LocalInspection, string>;
   fotos!: Table<PhotoData, string>;
   acoes_pendentes!: Table<PendingAction, number>;
-  users!: Table<UserAccount, string>;
 
   constructor() {
     super('FireCheckDatabase');
@@ -70,9 +75,7 @@ export class FireCheckDatabase extends Dexie {
     });
 
     // v3 — local auth. `users` holds registered accounts with a PBKDF2
-    // hash + salt. Email is the natural unique key (case-insensitive at
-    // the service layer; Dexie unique index is case-sensitive so we
-    // normalize on write).
+    // hash + salt.
     this.version(3).stores({
       equipamentos: 'id, tipo, status, sincronizado',
       inspecoes: 'id, equipmentId, sincronizado',
@@ -80,6 +83,22 @@ export class FireCheckDatabase extends Dexie {
       acoes_pendentes: '++id, type, timestamp',
       users: 'id, &email, createdAt',
     });
+
+    // v4 — auth migrou para Supabase Auth (0003_supabase_auth.sql).
+    // Removemos a tabela `users` e limpamos a sessão legada do localStorage.
+    this.version(4)
+      .stores({
+        equipamentos: 'id, tipo, status, sincronizado',
+        inspecoes: 'id, equipmentId, sincronizado',
+        fotos: 'id, inspectionId',
+        acoes_pendentes: '++id, type, timestamp',
+      })
+      .upgrade(async (tx) => {
+        await tx.table('users').clear().catch(() => undefined);
+        if (typeof localStorage !== 'undefined') {
+          localStorage.removeItem(LEGACY_SESSION_KEY);
+        }
+      });
   }
 }
 
