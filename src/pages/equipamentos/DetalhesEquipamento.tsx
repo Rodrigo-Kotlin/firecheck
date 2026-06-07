@@ -1,24 +1,84 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { ChevronLeft, Play, User, Eye, CheckCircle2, AlertTriangle, XCircle, Info, MapPin, Calendar, Tag, Hash, Wrench, Trash2, Lock } from 'lucide-react';
+import {
+  ChevronLeft,
+  Play,
+  User,
+  Eye,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  Info,
+  MapPin,
+  Calendar,
+  Tag,
+  Wrench,
+  Trash2,
+  Lock,
+  FileText,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 
 type FieldProps = {
   label: string;
-  value: React.ReactNode;
+  value: ReactNode;
   icon?: LucideIcon;
+  mono?: boolean;
 };
 
-function Field({ label, value, icon: Icon }: FieldProps) {
+function Field({ label, value, icon: Icon, mono = false }: FieldProps) {
+  const isEmpty =
+    value === null ||
+    value === undefined ||
+    value === '' ||
+    (typeof value === 'string' && (value === 'N/A' || value.trim() === ''));
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5 min-w-0">
       <div className="flex items-center gap-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
         {Icon && <Icon className="w-3.5 h-3.5" />}
         <span>{label}</span>
       </div>
-      <div className="text-sm font-bold text-gray-800 break-words">{value || 'Não cadastrado'}</div>
+      <div
+        className={`text-sm break-words ${
+          isEmpty
+            ? 'text-gray-400 italic font-medium'
+            : mono
+              ? 'font-mono font-bold text-gray-800'
+              : 'font-bold text-gray-800'
+        }`}
+      >
+        {isEmpty ? 'Não cadastrado' : value}
+      </div>
+    </div>
+  );
+}
+
+type DetailSectionProps = {
+  title: string;
+  icon: LucideIcon;
+  cols?: 1 | 2 | 3 | 4;
+  children: ReactNode;
+};
+
+function DetailSection({ title, icon: Icon, cols = 3, children }: DetailSectionProps) {
+  const colsClass = {
+    1: 'grid-cols-1',
+    2: 'grid-cols-1 sm:grid-cols-2',
+    3: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3',
+    4: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4',
+  }[cols];
+  return (
+    <div className="card-subtle bg-white">
+      <div className="flex items-center gap-2.5 border-b border-gray-50 pb-3 mb-5">
+        <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
+          <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+        </span>
+        <h2 className="label-uppercase">{title}</h2>
+      </div>
+      <div className={`grid ${colsClass} gap-4 sm:gap-5`}>{children}</div>
     </div>
   );
 }
@@ -46,9 +106,9 @@ export default function DetalhesEquipamento() {
 
   const eqInspections = inspections.filter((i) => i.equipmentId === eq.id);
 
-  const getExpirationStatus = () => {
+  const getExpirationStatus = (): { subLabel: string; subColor: string } => {
     if (!eq.dataProximaInspecao) {
-      return { label: 'Sem data de inspeção cadastrada', color: 'text-gray-500 bg-gray-50 border-gray-200' };
+      return { subLabel: 'Sem data', subColor: 'text-gray-400' };
     }
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -59,39 +119,46 @@ export default function DetalhesEquipamento() {
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
     if (diffDays < 0) {
-      return { label: `VENCIDO HÁ ${Math.abs(diffDays)} DIAS`, color: 'text-critical bg-red-50 border-red-100' };
-    } else if (diffDays === 0) {
-      return { label: 'VENCE HOJE', color: 'text-pending bg-amber-50 border-amber-100' };
-    } else {
-      return { label: `Próxima inspeção em ${diffDays} dias`, color: 'text-success bg-green-50 border-green-100' };
+      const days = Math.abs(diffDays);
+      return {
+        subLabel: `Vencido há ${days} ${days === 1 ? 'dia' : 'dias'}`,
+        subColor: 'text-critical',
+      };
     }
+    if (diffDays === 0) {
+      return { subLabel: 'Vence hoje', subColor: 'text-pending' };
+    }
+    return {
+      subLabel: `Em ${diffDays} ${diffDays === 1 ? 'dia' : 'dias'}`,
+      subColor: 'text-gray-500',
+    };
   };
 
   const expStatus = getExpirationStatus();
 
   const statusConfigs = {
     regular: {
-      label: 'REGULAR / EM DIA',
-      colorClass: 'text-success bg-green-50/50 border-success/20',
-      badgeClass: 'bg-green-500 text-white',
+      label: 'EM DIA',
+      pillClass: 'bg-green-100 text-success',
+      borderClass: 'border-l-success',
       icon: CheckCircle2,
     },
     pendente: {
-      label: 'MANUTENÇÃO PENDENTE',
-      colorClass: 'text-pending bg-amber-50/50 border-pending/20',
-      badgeClass: 'bg-amber-500 text-white',
+      label: 'PENDENTE',
+      pillClass: 'bg-amber-100 text-pending',
+      borderClass: 'border-l-pending',
       icon: AlertTriangle,
     },
     vencido: {
-      label: 'LAUDO VENCIDO / CRÍTICO',
-      colorClass: 'text-critical bg-red-50/50 border-critical/20',
-      badgeClass: 'bg-red-600 text-white',
+      label: 'VENCIDO',
+      pillClass: 'bg-red-100 text-critical',
+      borderClass: 'border-l-critical',
       icon: XCircle,
     },
     observacao: {
-      label: 'EM OBSERVAÇÃO',
-      colorClass: 'text-blue-500 bg-blue-50/50 border-blue-200',
-      badgeClass: 'bg-blue-500 text-white',
+      label: 'OBSERVAÇÃO',
+      pillClass: 'bg-gray-100 text-gray-500',
+      borderClass: 'border-l-gray-300',
       icon: Info,
     },
   };
@@ -120,22 +187,19 @@ export default function DetalhesEquipamento() {
 
   return (
     <div className="space-y-4 sm:space-y-6 pb-24">
-      {/* Header */}
+      {/* Page header */}
       <header className="page-header">
         <button
           onClick={() => navigate('/equipamentos')}
           className="flex items-center justify-center text-gray-600 hover:text-gray-900 bg-gray-50 rounded-lg p-2 min-h-0 min-w-0"
           type="button"
-          aria-label="Voltar"
+          aria-label="Voltar para lista"
         >
           <ChevronLeft className="w-5 h-5" />
         </button>
         <div className="flex-1 min-w-0">
           <div className="text-[10px] sm:text-xs font-bold text-gray-400 uppercase tracking-widest">Equipamento</div>
-          <h1 className="text-base sm:text-lg lg:text-xl font-black text-gray-900 uppercase tracking-wide truncate">
-            {eq.id} · {eq.tipo}
-          </h1>
-          {eq.subtipo && <p className="text-[11px] sm:text-xs text-gray-500 truncate">{eq.subtipo}</p>}
+          <h1 className="text-sm sm:text-base font-bold text-gray-700 truncate">Ficha Técnica</h1>
         </div>
         {deletable && (
           <button
@@ -150,102 +214,153 @@ export default function DetalhesEquipamento() {
         )}
       </header>
 
-      {!editable && (
-        <div className="flex items-center gap-2 bg-amber-50 border border-amber-100 text-amber-800 text-xs font-bold uppercase tracking-wider px-3 py-2 rounded-lg">
-          <Lock className="w-4 h-4 flex-shrink-0" />
-          <span>
-            Somente leitura{owner ? ` · cadastrado por ${owner.nome}` : ''}
+      {/* Hero card — code + type + status + location */}
+      <div className={`card-subtle border-l-[4px] ${config.borderClass} p-4 sm:p-5 lg:p-6 space-y-3`}>
+        <div className="flex items-start justify-between gap-3">
+          <span className="font-mono text-xs sm:text-sm font-extrabold text-gray-700 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded tracking-tight">
+            {eq.id}
+          </span>
+          <span className={`pill ${config.pillClass} flex-shrink-0`}>
+            <StatusIcon className="w-3 h-3" />
+            {config.label}
           </span>
         </div>
-      )}
-
-      {/* Top: status + expiration side-by-side on desktop */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
-        <div className={`card-subtle border flex flex-col items-center justify-center text-center p-5 sm:p-6 gap-2 ${config.colorClass}`}>
-          <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center ${config.badgeClass} shadow-md`}>
-            <StatusIcon className="w-7 h-7 sm:w-8 sm:h-8" />
-          </div>
-          <div>
-            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider block text-gray-500">Status Geral</span>
-            <span className="text-sm sm:text-base font-black tracking-wide block mt-0.5">{config.label}</span>
-          </div>
+        <div>
+          <h2 className="text-lg sm:text-xl lg:text-2xl font-black text-gray-900 leading-tight">
+            {eq.tipo}
+          </h2>
+          {eq.subtipo && (
+            <p className="text-sm text-gray-500 mt-0.5">{eq.subtipo}</p>
+          )}
         </div>
-
-        <div className={`border p-4 sm:p-5 rounded-xl flex flex-col items-center justify-center text-center text-xs sm:text-sm font-bold uppercase tracking-wider ${expStatus.color}`}>
-          <Calendar className="w-6 h-6 mb-1.5 opacity-60" />
-          <span className="leading-tight">{expStatus.label}</span>
+        <div className="flex items-center gap-1.5 text-xs sm:text-sm text-gray-600 pt-3 border-t border-gray-50">
+          <MapPin className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400 flex-shrink-0" />
+          <span className="truncate">
+            {eq.local}
+            <span className="text-gray-300 mx-1">·</span>
+            {eq.setor}
+            {eq.pavimento && (
+              <>
+                <span className="text-gray-300 mx-1">·</span>
+                {eq.pavimento}
+              </>
+            )}
+          </span>
         </div>
       </div>
 
-      {/* Action Button */}
+      {/* Read-only banner */}
+      {!editable && (
+        <div className="flex items-center gap-3 bg-gray-50 border border-gray-200 px-3 py-2.5 rounded-lg">
+          <div className="w-9 h-9 bg-white border border-gray-200 rounded-lg flex items-center justify-center flex-shrink-0">
+            <Lock className="w-4 h-4 text-gray-500" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+              Modo Somente Leitura
+            </div>
+            {owner ? (
+              <div className="text-xs text-gray-600 truncate">
+                Cadastrado por <span className="font-bold text-gray-800">{owner.nome}</span>
+              </div>
+            ) : (
+              <div className="text-xs text-gray-500">
+                Você não tem permissão para editar este equipamento.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Primary action */}
       <button
         onClick={handleStartInspection}
-        className="btn-primary h-12"
+        className="btn-primary"
       >
         <Play className="w-4 h-4 fill-white" />
         Iniciar Inspeção
       </button>
 
-      {/* Information grid: 2-col on mobile, 3-col on lg */}
-      <div className="card-subtle bg-white space-y-4">
-        <span className="label-uppercase block border-b border-gray-50 pb-1">Informações Técnicas</span>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-          <Field label="Tipo" value={eq.tipo} icon={Tag} />
-          <Field label="Modelo / Subtipo" value={eq.subtipo || 'N/A'} icon={Wrench} />
-          <Field label="Nº de Série" value={eq.numSerie || 'N/A'} icon={Hash} />
-          <Field
-            label="Carga / Capacidade"
-            value={
-              (eq.tipoCarga && eq.tipoCarga !== 'N/A') || eq.capacidade ? (
-                <>
-                  {eq.tipoCarga && eq.tipoCarga !== 'N/A' && `${eq.tipoCarga}`}
-                  {eq.capacidade && ` · ${eq.capacidade}`}
-                </>
-              ) : 'N/A'
-            }
-            icon={Wrench}
-          />
-        </div>
-      </div>
+      {/* Identificação */}
+      <DetailSection title="Identificação" icon={Tag} cols={3}>
+        <Field label="Modelo / Subtipo" value={eq.subtipo} />
+        <Field label="Fabricante" value={eq.fabricante} />
+        <Field label="Nº de Série" value={eq.numSerie} mono />
+      </DetailSection>
 
-      <div className="card-subtle bg-white space-y-4">
-        <span className="label-uppercase block border-b border-gray-50 pb-1">Localização</span>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-          <Field label="Localização" value={eq.local} icon={MapPin} />
-          <Field label="Setor" value={eq.setor} />
-          <Field label="Pavimento" value={eq.pavimento || '—'} />
-        </div>
-      </div>
+      {/* Localização */}
+      <DetailSection title="Localização" icon={MapPin} cols={3}>
+        <Field label="Local" value={eq.local} icon={MapPin} />
+        <Field label="Setor" value={eq.setor} />
+        <Field label="Pavimento" value={eq.pavimento} />
+      </DetailSection>
 
-      <div className="card-subtle bg-white space-y-4">
-        <span className="label-uppercase block border-b border-gray-50 pb-1">Cronograma de Datas</span>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-          <Field label="Fabricação" value={eq.dataFabricacao || 'Não cadastrada'} icon={Calendar} />
-          <Field label="Última Manutenção" value={eq.dataUltimaManutencao || 'Não cadastrada'} />
-          <Field label="Próxima Manutenção" value={eq.dataProximaManutencao || 'Não cadastrada'} />
-          <Field label="Próxima Inspeção" value={eq.dataProximaInspecao || 'Não cadastrada'} />
-        </div>
-      </div>
+      {/* Dados Técnicos */}
+      <DetailSection title="Dados Técnicos" icon={Wrench} cols={3}>
+        <Field label="Tipo de Carga" value={eq.tipoCarga} />
+        <Field label="Capacidade" value={eq.capacidade} />
+        <Field label="QR Code" value={eq.qrcode} mono />
+      </DetailSection>
 
-      {/* Inspections History */}
+      {/* Cronograma */}
+      <DetailSection title="Cronograma" icon={Calendar} cols={4}>
+        <Field label="Fabricação" value={eq.dataFabricacao} icon={Calendar} />
+        <Field label="Última Manutenção" value={eq.dataUltimaManutencao} />
+        <Field label="Próxima Manutenção" value={eq.dataProximaManutencao} />
+        <Field
+          label="Próxima Inspeção"
+          icon={Calendar}
+          value={
+            eq.dataProximaInspecao ? (
+              <div className="space-y-0.5">
+                <div className="text-sm font-bold text-gray-800">{eq.dataProximaInspecao}</div>
+                <div className={`text-[10px] font-bold uppercase tracking-wider ${expStatus.subColor}`}>
+                  {expStatus.subLabel}
+                </div>
+              </div>
+            ) : undefined
+          }
+        />
+      </DetailSection>
+
+      {/* Observações (only if exists) */}
+      {eq.observacoes && (
+        <DetailSection title="Observações" icon={FileText} cols={1}>
+          <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+            {eq.observacoes}
+          </div>
+        </DetailSection>
+      )}
+
+      {/* Histórico de Inspeções */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <span className="label-uppercase">Histórico de Inspeções</span>
-          <span className="pill bg-gray-100 text-gray-500">{eqInspections.length} {eqInspections.length === 1 ? 'registro' : 'registros'}</span>
+          <span className="pill bg-gray-100 text-gray-500">
+            {eqInspections.length} {eqInspections.length === 1 ? 'registro' : 'registros'}
+          </span>
         </div>
         {eqInspections.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {eqInspections.map((insp) => (
-              <div key={insp.id} className="card-subtle bg-white flex items-start justify-between gap-3">
+              <div
+                key={insp.id}
+                className="card-subtle bg-white flex items-start justify-between gap-3"
+              >
                 <div className="space-y-1.5 min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-black text-gray-800">{insp.data}</span>
-                    <span className={`pill ${
-                      insp.status === 'regular' ? 'bg-green-100 text-success' :
-                      insp.status === 'pendente' ? 'bg-amber-100 text-pending' :
-                      insp.status === 'vencido' ? 'bg-red-100 text-critical' :
-                      'bg-blue-100 text-blue-600'
-                    }`}>
+                    <span
+                      className={`pill ${
+                        insp.status === 'regular'
+                          ? 'bg-green-100 text-success'
+                          : insp.status === 'pendente'
+                            ? 'bg-amber-100 text-pending'
+                            : insp.status === 'vencido'
+                              ? 'bg-red-100 text-critical'
+                              : 'bg-blue-100 text-blue-600'
+                      }`}
+                    >
                       {insp.status}
                     </span>
                   </div>
@@ -255,15 +370,17 @@ export default function DetalhesEquipamento() {
                   </div>
                   {insp.observacoes && (
                     <p className="text-xs text-gray-600 italic mt-1.5 font-medium line-clamp-2">
-                      "{insp.observacoes}"
+                      &ldquo;{insp.observacoes}&rdquo;
                     </p>
                   )}
                 </div>
                 <button
                   type="button"
-                  onClick={() => alert(
-                    `Inspeção ${insp.id}\nData: ${insp.data}\nInspetor: ${insp.inspetor}\nStatus: ${insp.status}\nLaudo: ${insp.observacoes || 'Nenhum'}`
-                  )}
+                  onClick={() =>
+                    alert(
+                      `Inspeção ${insp.id}\nData: ${insp.data}\nInspetor: ${insp.inspetor}\nStatus: ${insp.status}\nLaudo: ${insp.observacoes || 'Nenhum'}`,
+                    )
+                  }
                   className="flex-shrink-0 w-9 h-9 flex items-center justify-center border border-gray-100 bg-gray-50 hover:bg-gray-100 rounded-lg min-h-0 min-w-0"
                   aria-label="Ver detalhes da inspeção"
                 >

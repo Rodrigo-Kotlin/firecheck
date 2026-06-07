@@ -73,7 +73,7 @@ export default function QrCodePrintCard({ equipment, onClose }: QrCodePrintCardP
         <button
           type="button"
           onClick={onClose}
-          className="flex-1 h-12 px-6 bg-white border border-gray-200 text-gray-700 font-bold uppercase tracking-wider text-xs rounded-lg hover:bg-gray-50 transition-all flex items-center justify-center gap-2 min-h-0"
+          className="btn-ghost btn-auto flex-1"
         >
           <X className="w-4 h-4" />
           Concluir

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock } from 'lucide-react';
+import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight } from 'lucide-react';
 import { canEditEquipment } from '../../services/permissions';
 
 const CATEGORIES = [
@@ -39,18 +39,18 @@ export default function Equipamentos() {
     return matchesSearch && matchesCategory;
   });
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'regular':
-        return <span className="pill bg-green-100 text-success">Regular</span>;
-      case 'pendente':
-        return <span className="pill bg-amber-100 text-pending">Pendente</span>;
-      case 'vencido':
-        return <span className="pill bg-red-100 text-critical">Vencido</span>;
-      case 'observacao':
-      default:
-        return <span className="pill bg-gray-100 text-gray-500">Observação</span>;
-    }
+  const STATUS_STYLES: Record<string, { border: string; pill: string; label: string }> = {
+    regular:    { border: 'border-l-success',  pill: 'bg-green-100 text-success',  label: 'Regular' },
+    pendente:   { border: 'border-l-pending',  pill: 'bg-amber-100 text-pending',  label: 'Pendente' },
+    vencido:    { border: 'border-l-critical', pill: 'bg-red-100 text-critical',   label: 'Vencido' },
+    observacao: { border: 'border-l-gray-300', pill: 'bg-gray-100 text-gray-500',  label: 'Observação' },
+  };
+  const getStatusStyle = (status: string) => STATUS_STYLES[status] ?? STATUS_STYLES.observacao;
+
+  const hasActiveFilters = search.length > 0 || activeChip !== 'Tudo';
+  const clearFilters = () => {
+    setSearch('');
+    setActiveChip('Tudo');
   };
 
   return (
@@ -75,21 +75,25 @@ export default function Equipamentos() {
       </header>
 
       {/* Search Field */}
-      <div className="flex items-center gap-3 h-14 px-4 bg-white border-[1.5px] border-rose-200 rounded-xl focus-within:border-rose-600 focus-within:ring-4 focus-within:ring-rose-600/10 transition-all">
-        <Search className="w-5 h-5 text-slate-500 shrink-0" aria-hidden="true" />
+      <div className="flex items-center gap-3 h-14 px-4 bg-white border border-gray-200 rounded-xl focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 transition-all shadow-sm" role="search">
+        <label htmlFor="equipment-search" className="sr-only">
+          Buscar equipamentos
+        </label>
+        <Search className="w-5 h-5 text-gray-400 shrink-0" aria-hidden="true" />
         <input
+          id="equipment-search"
           type="text"
           placeholder="Buscar por código, tipo, setor ou local..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 min-w-0 h-full bg-transparent outline-none border-0 text-base font-medium text-slate-900 placeholder:text-slate-500 placeholder:font-medium"
+          className="flex-1 min-w-0 h-full bg-transparent outline-none border-0 text-base font-medium text-gray-900 placeholder:text-gray-400 placeholder:font-medium"
         />
         {search && (
           <button
             type="button"
             onClick={() => setSearch('')}
             aria-label="Limpar busca"
-            className="w-10 h-10 -mr-1 flex items-center justify-center text-slate-400 hover:text-slate-700 active:scale-95 transition-all rounded-full shrink-0"
+            className="w-10 h-10 -mr-1 flex items-center justify-center text-gray-400 hover:text-gray-700 active:scale-95 transition-all rounded-full shrink-0"
           >
             <span className="text-xl leading-none">×</span>
           </button>
@@ -122,50 +126,67 @@ export default function Equipamentos() {
           const lastInsp = inspections.find(i => i.equipmentId === eq.id);
           const isExpiring = eq.status === 'vencido' || eq.status === 'pendente';
           const editable = canEditEquipment(user, eq);
+          const status = getStatusStyle(eq.status);
 
           return (
             <div
               key={eq.id}
               onClick={() => navigate(`/equipamentos/${eq.id}`)}
-              className="card-subtle bg-white flex flex-col gap-3 cursor-pointer hover:border-gray-300 hover:shadow-md transition-all active:scale-[0.99]"
+              className={`card-subtle bg-white border-l-[3px] ${status.border} p-4 sm:p-5 flex flex-col gap-3 cursor-pointer active:scale-[0.99]`}
             >
+              {/* Top: code (mono) + status pill + leitura + chevron */}
               <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-extrabold text-gray-900">{eq.id}</span>
-                    {getStatusBadge(eq.status)}
-                  </div>
-                </div>
-                {!editable && (
-                  <span
-                    title="Somente leitura — você não é o responsável"
-                    className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded flex-shrink-0"
-                  >
-                    <Lock className="w-3 h-3" />
-                    Leitura
+                <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
+                  <span className="font-mono text-sm sm:text-base font-extrabold text-gray-900 bg-gray-50 px-1.5 py-0.5 rounded tracking-tight">
+                    {eq.id}
                   </span>
-                )}
+                  <span className={`pill ${status.pill}`}>{status.label}</span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {!editable && (
+                    <span
+                      title="Somente leitura — você não é o responsável"
+                      className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded"
+                    >
+                      <Lock className="w-3 h-3" />
+                      Leitura
+                    </span>
+                  )}
+                  <ChevronRight className="w-4 h-4 text-gray-300" aria-hidden="true" />
+                </div>
               </div>
 
-              <div>
-                <div className="text-sm font-bold text-gray-700 line-clamp-1">
-                  {eq.tipo} {eq.subtipo && `· ${eq.subtipo}`}
+              {/* Tipo + Local/Setor */}
+              <div className="space-y-1.5">
+                <div className="text-sm font-bold text-gray-800 line-clamp-1">
+                  {eq.tipo}
+                  {eq.subtipo && (
+                    <>
+                      <span className="text-gray-300 mx-1.5 font-normal">·</span>
+                      {eq.subtipo}
+                    </>
+                  )}
                 </div>
-                <div className="flex items-center gap-1 text-xs text-gray-500 mt-1">
-                  <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="truncate">{eq.local} ({eq.setor})</span>
+                <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <MapPin className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                  <span className="truncate">
+                    {eq.local}
+                    <span className="text-gray-300 mx-1">·</span>
+                    {eq.setor}
+                  </span>
                 </div>
               </div>
 
-              <div className="space-y-1 pt-2 border-t border-gray-50">
+              {/* Bottom: inspection info */}
+              <div className="pt-2.5 border-t border-gray-50 space-y-1.5">
                 <div className="flex items-center gap-1.5 text-[11px] text-gray-500 font-medium">
-                  <Calendar className="w-3.5 h-3.5" />
-                  <span>Última Insp: {lastInsp ? lastInsp.data : 'Nenhuma'}</span>
+                  <Calendar className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="truncate">Última: {lastInsp ? lastInsp.data : 'Nenhuma'}</span>
                 </div>
                 {isExpiring && eq.dataProximaInspecao && (
-                  <div className="flex items-center gap-1.5 text-[11px] text-critical font-bold uppercase">
+                  <div className="flex items-center gap-1.5 text-[11px] text-critical font-bold uppercase tracking-wider">
                     <AlertCircle className="w-3.5 h-3.5" />
-                    <span>Prox. Insp: {eq.dataProximaInspecao}</span>
+                    <span>Próx: {eq.dataProximaInspecao}</span>
                   </div>
                 )}
               </div>
@@ -174,14 +195,22 @@ export default function Equipamentos() {
         })}
 
         {filtered.length === 0 && (
-          <div className="col-span-full card-subtle bg-white text-center py-12 space-y-2">
-            <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto">
+          <div className="col-span-full card-subtle bg-white text-center py-14 px-6 space-y-3">
+            <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mx-auto">
               <Search className="w-6 h-6 text-gray-400" />
             </div>
-            <p className="text-sm font-bold text-gray-500 uppercase tracking-wider">
-              Nenhum equipamento encontrado
-            </p>
-            <p className="text-xs text-gray-400">Ajuste os filtros ou cadastre um novo equipamento.</p>
+            <div>
+              <p className="text-sm font-bold text-gray-700">Nenhum equipamento encontrado</p>
+              <p className="text-xs text-gray-400 mt-1">Ajuste os filtros ou cadastre um novo equipamento.</p>
+            </div>
+            {hasActiveFilters && (
+              <button
+                onClick={clearFilters}
+                className="btn-ghost btn-sm btn-auto mt-1"
+              >
+                Limpar filtros
+              </button>
+            )}
           </div>
         )}
       </div>

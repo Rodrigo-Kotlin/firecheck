@@ -1,15 +1,170 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { LayoutDashboard, Shield, QrCode, FileBarChart, WifiOff, X, ClipboardList, Settings, LogOut, Menu, User, RefreshCw, Cloud, CloudOff, Users } from 'lucide-react';
+import {
+  LayoutDashboard, Shield, QrCode, FileBarChart,
+  WifiOff, Wifi, X, ClipboardList, Settings, LogOut, Menu, User,
+  RefreshCw, Cloud, CloudOff, Users, Download, type LucideIcon,
+} from 'lucide-react';
 import { isAdmin } from '../../services/permissions';
+import { usePwaInstall } from '../../hooks/usePwaInstall';
+import { showToast } from '../../hooks/useToasts';
+
+// ---------------------------------------------------------------------------
+// OfflineBanner — sticky amber strip shown when the browser is offline.
+// Two visual variants: compact (mobile) and full (desktop).
+// ---------------------------------------------------------------------------
+type OfflineBannerProps = {
+  pending: number;
+  variant: 'mobile' | 'desktop';
+};
+
+function OfflineBanner({ pending, variant }: OfflineBannerProps) {
+  const classes = variant === 'mobile'
+    ? 'lg:hidden offline-banner'
+    : 'hidden lg:flex offline-banner';
+
+  return (
+    <div className={classes} role="status" aria-live="polite">
+      <WifiOff className="offline-banner__icon" />
+      <div className="offline-banner__body">
+        <div className="offline-banner__title">Modo Offline</div>
+        {variant === 'desktop' && (
+          <div className="offline-banner__sub">
+            Suas alterações estão sendo salvas localmente. Sincronizamos automaticamente ao reconectar.
+          </div>
+        )}
+      </div>
+      {pending > 0 && (
+        <span className="offline-banner__pill" title="Alterações aguardando envio">
+          {pending} pendente{pending === 1 ? '' : 's'}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SyncStatusBadge — compact pill for the top bar. Renders one of four states:
+// syncing (blue, spinning dot) / online-synced (green, static) /
+// online-pending (amber, pulsing) / offline (red, pulsing).
+// ---------------------------------------------------------------------------
+type SyncStatusBadgeProps = {
+  isOnline: boolean;
+  syncing: boolean;
+  pending: number;
+  onClick: () => void;
+};
+
+function SyncStatusBadge({ isOnline, syncing, pending, onClick }: SyncStatusBadgeProps) {
+  let label: string;
+  let variant: string;
+  let dotClass: string;
+  let Icon: LucideIcon | null = null;
+
+  if (syncing) {
+    label = 'Sincronizando...';
+    variant = 'syncing';
+    dotClass = 'status-dot status-dot--spin';
+  } else if (!isOnline) {
+    label = 'Offline';
+    variant = 'offline';
+    dotClass = 'status-dot status-dot--pulse';
+  } else if (pending > 0) {
+    label = `${pending} pendente${pending === 1 ? '' : 's'}`;
+    variant = 'pending';
+    dotClass = 'status-dot status-dot--pulse';
+  } else {
+    label = 'Sincronizado';
+    variant = 'online';
+    dotClass = 'status-dot';
+  }
+
+  // In syncing state we show a RefreshCw icon instead of the dot, to reinforce
+  // the action; in all other states the dot is enough.
+  if (syncing) Icon = RefreshCw;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={syncing}
+      className={`status-pill status-pill--clickable status-pill--${variant}`}
+      title={isOnline ? 'Sincronizar com a nuvem' : 'Aguardando conexão'}
+      aria-label={label}
+    >
+      {Icon ? (
+        <Icon className="w-3.5 h-3.5 animate-spin" />
+      ) : (
+        <span className={dotClass} />
+      )}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SyncNowButton — larger sidebar CTA. State-aware colours and inline pending
+// count make it crystal-clear what the button will do.
+// ---------------------------------------------------------------------------
+type SyncNowButtonProps = {
+  isOnline: boolean;
+  syncing: boolean;
+  pending: number;
+  onClick: () => void;
+};
+
+function SyncNowButton({ isOnline, syncing, pending, onClick }: SyncNowButtonProps) {
+  let label: string;
+  let variant: string;
+  let Icon: LucideIcon;
+
+  if (syncing) {
+    label = 'Sincronizando...';
+    variant = 'syncing';
+    Icon = RefreshCw;
+  } else if (!isOnline) {
+    label = 'Sem conexão';
+    variant = 'offline';
+    Icon = WifiOff;
+  } else if (pending > 0) {
+    label = 'Sincronizar agora';
+    variant = 'pending';
+    Icon = RefreshCw;
+  } else {
+    label = 'Sincronizado';
+    variant = 'idle';
+    Icon = Cloud;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!isOnline || syncing}
+      className={`sync-now ${variant !== 'idle' ? `sync-now--${variant}` : ''}`}
+      title={!isOnline ? 'Aguardando conexão para sincronizar' : 'Enviar alterações para a nuvem'}
+    >
+      <Icon className={`sync-now__icon ${syncing ? 'animate-spin' : ''}`} />
+      <span className="flex-1 text-left">{label}</span>
+      {pending > 0 && !syncing && (
+        <span className="sync-now__count">{pending}</span>
+      )}
+    </button>
+  );
+}
 
 export default function AppLayout() {
-  const { user, authReady, currentTab, setCurrentTab, logout, pending, syncing, lastSyncAt, syncEnabled, triggerSync } = useAppStore();
+  const { user, authReady, currentTab, setCurrentTab, logout, pending, syncing, syncEnabled, triggerSync } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [sideMenuOpen, setSideMenuOpen] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const install = usePwaInstall();
+  // Mirror of the current online status, used to dedupe browser connectivity
+  // events that can fire repeatedly for momentary flickers.
+  const lastConnectivityRef = useRef(isOnline);
 
   // Route auth guard — wait for the initial session check (which may clear
   // an orphan legacy user) before deciding to bounce to /login.
@@ -33,10 +188,40 @@ export default function AppLayout() {
     }
   }, [location, setCurrentTab]);
 
-  // Track online status
+  // Keep the ref in sync with the latest state.
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
+    lastConnectivityRef.current = isOnline;
+  }, [isOnline]);
+
+  // Track online status — emits a toast whenever the connection toggles so
+  // the user gets instant feedback (e.g. "Conexão restabelecida"). Browsers
+  // can fire the same event repeatedly for momentary flickers, so we keep a
+  // ref of the last known status and dedupe accordingly.
+  useEffect(() => {
+    const handleOnline = () => {
+      if (lastConnectivityRef.current) return;
+      lastConnectivityRef.current = true;
+      setIsOnline(true);
+      showToast({
+        kind: 'success',
+        title: 'Conexão restabelecida',
+        description: 'Pronto para enviar suas alterações para a nuvem.',
+        icon: Wifi,
+        duration: 4000,
+      });
+    };
+    const handleOffline = () => {
+      if (!lastConnectivityRef.current) return;
+      lastConnectivityRef.current = false;
+      setIsOnline(false);
+      showToast({
+        kind: 'warning',
+        title: 'Você está offline',
+        description: 'Suas alterações continuam sendo salvas localmente e serão sincronizadas ao reconectar.',
+        icon: WifiOff,
+        duration: 6000,
+      });
+    };
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     return () => {
@@ -44,6 +229,31 @@ export default function AppLayout() {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Trigger the deferred PWA install prompt and report the outcome.
+  const handleInstallClick = async () => {
+    if (installing) return;
+    setInstalling(true);
+    const outcome = await install.promptInstall();
+    setInstalling(false);
+    if (outcome === 'accepted') {
+      // `appinstalled` will fire and usePwaUpdate will show the success toast.
+    } else if (outcome === 'dismissed') {
+      showToast({
+        kind: 'info',
+        title: 'Instalação cancelada',
+        description: 'Você pode tentar novamente quando quiser.',
+        duration: 3000,
+      });
+    } else if (outcome === 'error') {
+      showToast({
+        kind: 'error',
+        title: 'Não foi possível instalar',
+        description: 'Tente novamente em alguns instantes.',
+        duration: 4000,
+      });
+    }
+  };
 
   // Close the mobile side menu on route change
   const [prevPath, setPrevPath] = useState(location.pathname);
@@ -62,6 +272,32 @@ export default function AppLayout() {
   const handleLogout = () => {
     void logout();
     navigate('/login');
+  };
+
+  // User-initiated sync. We show a transient info toast so the click feels
+  // acknowledged; the badge and "Sincronizar agora" button will reflect the
+  // ongoing state and the result via `syncing`/`pending` from the store.
+  const handleTriggerSync = () => {
+    if (!syncEnabled) {
+      showToast({
+        kind: 'info',
+        title: 'Sincronização indisponível',
+        description: 'A nuvem não está configurada neste ambiente.',
+        duration: 3500,
+      });
+      return;
+    }
+    if (!isOnline) {
+      showToast({
+        kind: 'warning',
+        title: 'Sem conexão',
+        description: 'A sincronização será retomada quando você voltar a ficar online.',
+        duration: 4000,
+      });
+      return;
+    }
+    if (syncing) return;
+    void triggerSync();
   };
 
   const handleNavigate = (path: string) => {
@@ -183,14 +419,12 @@ export default function AppLayout() {
                   </span>
                 )}
               </div>
-              <button
-                onClick={() => { void triggerSync(); }}
-                disabled={!isOnline || syncing}
-                className="w-full flex items-center justify-center gap-1.5 h-8 px-3 rounded-md bg-white border border-gray-200 text-[11px] font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
-                {syncing ? 'Sincronizando…' : 'Sincronizar agora'}
-              </button>
+              <SyncNowButton
+                isOnline={isOnline}
+                syncing={syncing}
+                pending={pending}
+                onClick={handleTriggerSync}
+              />
             </div>
           ) : (
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider px-3 py-2 rounded-lg bg-gray-50 text-gray-400">
@@ -211,12 +445,7 @@ export default function AppLayout() {
       {/* Main content area */}
       <div className="app-content flex flex-col min-h-screen">
         {/* Offline banner — only on mobile/tablet top */}
-        {!isOnline && (
-          <div className="lg:hidden bg-amber-500 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 py-2 px-4">
-            <WifiOff className="w-4 h-4" />
-            Modo offline — dados serão sincronizados quando houver conexão
-          </div>
-        )}
+        {!isOnline && <OfflineBanner pending={pending} variant="mobile" />}
 
         {/* Top bar (mobile header + desktop top bar) */}
         <header className="bg-white border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center justify-between gap-3 sticky top-0 z-20">
@@ -234,27 +463,37 @@ export default function AppLayout() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {/* Sync indicator on desktop top bar */}
-            {syncEnabled && (
+            {/* PWA install chip — only visible when the browser is offering
+                the deferred install prompt. Clicking it triggers it. */}
+            {install.state === 'available' && (
               <button
-                onClick={() => { void triggerSync(); }}
-                disabled={!isOnline || syncing}
-                className={`hidden md:flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-lg transition-colors ${
-                  pending > 0 ? 'bg-amber-50 text-pending hover:bg-amber-100' : 'bg-green-50 text-success hover:bg-green-100'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
-                title={lastSyncAt ? `Última sync: ${new Date(lastSyncAt).toLocaleTimeString('pt-BR')}` : 'Sincronizar com Supabase'}
+                onClick={() => { void handleInstallClick(); }}
+                disabled={installing}
+                className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-primary text-white hover:bg-primary-dark transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                aria-label="Adicionar à tela inicial"
+                title="Adicionar à tela inicial"
               >
-                {syncing ? (
+                {installing ? (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : isOnline ? (
-                  <Cloud className="w-3.5 h-3.5" />
                 ) : (
-                  <CloudOff className="w-3.5 h-3.5" />
+                  <Download className="w-3.5 h-3.5" />
                 )}
-                <span>
-                  {syncing ? 'Sync…' : pending > 0 ? `${pending} pendente${pending === 1 ? '' : 's'}` : 'Sincronizado'}
+                <span className="hidden sm:inline">
+                  {installing ? 'Instalando…' : 'Instalar'}
                 </span>
               </button>
+            )}
+            {/* Sync indicator on desktop top bar — pill with state-aware
+                colors. Visible on md+; mobile users rely on the bottom nav. */}
+            {syncEnabled && (
+              <div className="hidden md:block">
+                <SyncStatusBadge
+                  isOnline={isOnline}
+                  syncing={syncing}
+                  pending={pending}
+                  onClick={handleTriggerSync}
+                />
+              </div>
             )}
             <button
               onClick={() => navigate('/configuracoes')}
@@ -267,12 +506,7 @@ export default function AppLayout() {
         </header>
 
         {/* Offline banner — desktop-only top placement */}
-        {!isOnline && (
-          <div className="hidden lg:flex bg-amber-500 text-white text-xs font-bold uppercase tracking-wider items-center justify-center gap-2 py-2 px-4">
-            <WifiOff className="w-4 h-4" />
-            Modo offline — dados serão sincronizados quando houver conexão
-          </div>
-        )}
+        {!isOnline && <OfflineBanner pending={pending} variant="desktop" />}
 
         {/* Page content */}
         <main className="app-main">

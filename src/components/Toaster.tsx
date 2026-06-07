@@ -11,7 +11,7 @@ const kindConfig: Record<ToastKind, { icon: LucideIcon; className: string }> = {
 
 function ToastItem({ toast }: { toast: Toast }) {
   const cfg = kindConfig[toast.kind];
-  const Icon = cfg.icon;
+  const Icon = toast.icon ?? cfg.icon;
 
   const handleAction = () => {
     if (toast.action) {

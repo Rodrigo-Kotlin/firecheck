@@ -91,11 +91,15 @@ export default function AdminUsuarios() {
         </div>
       </header>
 
-      <div className="relative">
-        <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
+      <div className="relative" role="search">
+        <label htmlFor="users-search" className="sr-only">
+          Buscar usuários
+        </label>
+        <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400" aria-hidden="true">
           <Search className="w-4 h-4" />
         </span>
         <input
+          id="users-search"
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -165,10 +169,10 @@ export default function AdminUsuarios() {
                   <button
                     type="button"
                     onClick={() => void handleToggleRole(u.id, u.role)}
-                    className={`flex-1 min-w-[140px] h-10 rounded-lg text-xs font-black uppercase tracking-wider border transition-all ${
+                    className={`btn-ghost btn-sm btn-auto flex-1 min-w-[140px] ${
                       u.role === 'admin'
-                        ? 'bg-primary/5 text-primary border-primary/30 hover:bg-primary/10'
-                        : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                        ? 'text-primary border-primary/30 hover:bg-primary/5 hover:border-primary/40 hover:text-primary'
+                        : ''
                     }`}
                   >
                     {u.role === 'admin' ? 'Rebaixar para Inspetor' : 'Promover a Admin'}
@@ -177,10 +181,10 @@ export default function AdminUsuarios() {
                     <button
                       type="button"
                       onClick={() => setConfirmDelete(isConfirming ? null : u.id)}
-                      className={`h-10 px-3 rounded-lg text-xs font-black uppercase tracking-wider border flex items-center gap-1.5 transition-all ${
+                      className={`btn-sm btn-auto inline-flex items-center gap-1.5 ${
                         isConfirming
-                          ? 'bg-critical text-white border-critical'
-                          : 'border-gray-200 text-gray-400 hover:text-critical hover:border-critical/40 hover:bg-red-50'
+                          ? 'bg-critical text-white border border-critical hover:bg-critical'
+                          : 'btn-ghost text-gray-400 hover:!text-critical hover:!border-critical/40 hover:!bg-red-50'
                       }`}
                     >
                       <Trash2 className="w-4 h-4" />

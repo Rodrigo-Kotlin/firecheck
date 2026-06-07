@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Equipment, Inspection, Inspector, Stats, ActionPlan, AppConfig } from '../types';
+import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig } from '../types';
 import { equipamentos, inspecoes, estatisticas } from '../data/mock';
 import { db, type LocalActionPlan, type LocalEquipment, type LocalInspection } from '../db';
 import { syncAll, pendingSyncCount, seedFromMock, type SyncReport } from '../services/sync';
@@ -104,7 +104,7 @@ interface AppState {
   setCurrentTab: (tab: Tab) => void;
   addInspection: (inspection: Omit<Inspection, 'id'>) => void;
   addEquipment: (eq: Equipment) => void;
-  addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'>) => void;
+  addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'> & { status?: ActionPlanStatus }) => void;
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
   deleteActionPlan: (id: string) => void;
   updateEquipment: (id: string, updates: Partial<Equipment>) => void;
@@ -382,7 +382,7 @@ export const useAppStore = create<AppState>()(
           const newPlan: LocalActionPlan = {
             ...plan,
             id: `PAC-${Date.now()}`,
-            status: 'Aberta',
+            status: plan.status ?? 'Aberta',
             createdAt: new Date().toISOString().split('T')[0],
             userId: plan.userId ?? get().user?.id,
             sincronizado: false,

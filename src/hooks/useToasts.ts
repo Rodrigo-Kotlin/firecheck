@@ -1,6 +1,9 @@
+import type { ComponentType, SVGProps } from 'react';
 import { useSyncExternalStore } from 'react';
 
 export type ToastKind = 'info' | 'success' | 'warning' | 'error';
+
+export type ToastIcon = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
 export interface ToastAction {
   label: string;
@@ -15,6 +18,9 @@ export interface Toast {
   action?: ToastAction;
   /** Auto-dismiss after this many ms. 0 = sticky. Default: 5000. */
   duration?: number;
+  /** Optional override for the icon shown in the toast. Falls back to the
+   *  kind default in the Toaster component. */
+  icon?: ToastIcon;
 }
 
 type Listener = () => void;
@@ -39,6 +45,7 @@ export interface ShowToastInput {
   description?: string;
   action?: ToastAction;
   duration?: number;
+  icon?: ToastIcon;
 }
 
 export function showToast(input: ShowToastInput): string {

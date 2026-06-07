@@ -21,17 +21,49 @@
 
 html, body, #root {
   min-height: 100%;
+  /* Prevent accidental horizontal overflow on small viewports (320px) */
+  overflow-x: hidden;
 }
 
 body {
   background-color: var(--color-neutralBg);
   color: #1F2937;
   font-family: var(--font-sans);
-  -webkit-tap-highlight-color: transparent;
+  -webkit-tap-highlight-color: rgba(220, 38, 38, 0.12);
   user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* Respect the user's motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Global keyboard-focus ring for any interactive element that doesn't
+   declare its own `:focus-visible` style. Pairs with the per-component
+   outlines in the button system (`.btn-primary`, `.btn-ghost`, etc.). */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+/* Avoid a stray outline ring on elements that already provide their own
+   focus treatment. */
+.btn-primary:focus-visible,
+.btn-ghost:focus-visible,
+.btn-danger:focus-visible,
+.toggle-switch:focus-visible,
+.field-input:focus-visible,
+.field-textarea:focus-visible {
+  outline: none;
 }
 
 /* Re-enable text selection for content where it matters */
@@ -84,35 +116,117 @@ input[type="checkbox"], input[type="radio"] {
 
 /* ===== Reusable component classes ===== */
 
-.btn-primary {
-  width: 100%;
-  height: 3rem;
-  padding-left: 1.5rem;
-  padding-right: 1.5rem;
-  background-color: var(--color-primary);
-  color: white;
-  font-weight: 700;
-  border-radius: 0.5rem;
-  transition: background-color 0.15s ease-in-out, transform 0.1s ease-in-out;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 0.875rem;
-  border: none;
-  cursor: pointer;
-}
-.btn-primary:hover {
-  background-color: var(--color-primary-dark);
-}
-.btn-primary:active {
-  transform: scale(0.98);
-}
-.btn-primary:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+/* ----- Button system -----
+   Three variants (primary, ghost, danger) share the same dimensions,
+   alignment and transitions. Use `.btn-sm` for compact in-card actions
+   and `.btn-auto` when the button should not stretch to 100% width. */
+@layer components {
+  .btn-primary,
+  .btn-ghost,
+  .btn-danger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-height: 2.75rem;
+    padding: 0 1.25rem;
+    font-family: inherit;
+    font-weight: 700;
+    font-size: 0.8125rem;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease,
+      transform 0.1s ease,
+      box-shadow 0.15s ease;
+  }
+
+  /* Primary — solid red CTA */
+  .btn-primary {
+    background-color: var(--color-primary);
+    color: white;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--color-primary-dark);
+  }
+  .btn-primary:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .btn-primary:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.25);
+  }
+  .btn-primary:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  /* Ghost — secondary outline (paired with .btn-danger for destructive) */
+  .btn-ghost {
+    background-color: white;
+    color: #4B5563;
+    border-color: #E5E7EB;
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background-color: #F9FAFB;
+    border-color: #D1D5DB;
+    color: #111827;
+  }
+  .btn-ghost:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .btn-ghost:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(107, 114, 128, 0.18);
+  }
+  .btn-ghost:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  /* Danger — destructive outline */
+  .btn-danger {
+    background-color: white;
+    color: var(--color-critical);
+    border-color: #FCA5A5;
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-color: #FEF2F2;
+    border-color: var(--color-critical);
+  }
+  .btn-danger:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .btn-danger:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.22);
+  }
+  .btn-danger:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  /* Compact size — for buttons inside cards (36px / 40px) */
+  .btn-sm {
+    min-height: 2.25rem;
+    padding: 0 0.75rem;
+    font-size: 0.6875rem;
+    border-radius: 0.5rem;
+    gap: 0.375rem;
+  }
+
+  /* Inline width — don't fill the parent */
+  .btn-auto {
+    width: auto;
+  }
 }
 
 .label-uppercase {
@@ -129,6 +243,75 @@ input[type="checkbox"], input[type="radio"] {
   border-radius: 0.75rem;
   padding: 1rem;
   box-shadow: var(--shadow-subtle);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+/* Refined hover for interactive cards (signaled by Tailwind's cursor-pointer).
+   Subtle lift + softer border, preserving the calm visual hierarchy. */
+.card-subtle.cursor-pointer:hover {
+  border-color: #E5E7EB;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04), 0 10px 24px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+}
+
+/* ----- KPI card -----
+   Refined metric card for SaaS-style dashboards.
+   Composed of: header (label + icon) → large value → sub-stat. */
+@layer components {
+  .kpi-card {
+    background-color: white;
+    border: 1px solid var(--color-border-soft);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    box-shadow: var(--shadow-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  }
+
+  .kpi-card__icon {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .kpi-card__value {
+    font-size: 1.875rem;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.025em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .kpi-card__sub {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: #6B7280;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  @media (min-width: 1024px) {
+    .kpi-card {
+      padding: 1.25rem;
+      gap: 0.75rem;
+    }
+    .kpi-card__icon {
+      width: 2.25rem;
+      height: 2.25rem;
+    }
+    .kpi-card__value {
+      font-size: 2.25rem;
+    }
+    .kpi-card__sub {
+      font-size: 0.75rem;
+    }
+  }
 }
 
 /* Responsive card padding */
@@ -140,9 +323,18 @@ input[type="checkbox"], input[type="radio"] {
   .label-uppercase {
     font-size: 0.8125rem;
   }
-  .btn-primary {
-    height: 3.25rem;
-    font-size: 0.9375rem;
+  .btn-primary,
+  .btn-ghost,
+  .btn-danger {
+    min-height: 3rem;
+    padding: 0 1.5rem;
+    font-size: 0.875rem;
+    border-radius: 0.625rem;
+  }
+  .btn-sm {
+    min-height: 2.5rem;
+    padding: 0 0.875rem;
+    font-size: 0.75rem;
   }
 }
 
@@ -150,7 +342,7 @@ input[type="checkbox"], input[type="radio"] {
   .card-subtle {
     padding: 1.5rem;
     border-radius: 1rem;
-    box-shadow: var(--shadow-card);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 18px rgba(0, 0, 0, 0.05);
   }
   .label-uppercase {
     font-size: 0.875rem;
@@ -172,7 +364,8 @@ input[type="checkbox"], input[type="radio"] {
   margin-left: auto;
   margin-right: auto;
   padding: 1rem;
-  padding-bottom: 6rem; /* space for bottom nav on mobile */
+  /* space for bottom nav (4rem) on mobile + iOS safe-area-inset */
+  padding-bottom: calc(6rem + env(safe-area-inset-bottom, 0px));
 }
 @media (min-width: 640px) {
   .app-main {
@@ -350,6 +543,10 @@ input[type="checkbox"], input[type="radio"] {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
 }
+.field-input:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
+}
 .field-input::placeholder {
   color: #9CA3AF;
   font-weight: 500;
@@ -379,6 +576,10 @@ input[type="checkbox"], input[type="radio"] {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
 }
+.field-textarea:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
+}
 @media (min-width: 768px) {
   .field-textarea {
     font-size: 1rem;
@@ -391,6 +592,15 @@ input[type="checkbox"], input[type="radio"] {
   font-size: 0.75rem;
   color: var(--color-critical);
   font-weight: 700;
+}
+
+.field-hint {
+  display: block;
+  margin-top: 0.375rem;
+  font-size: 0.6875rem;
+  color: #9CA3AF;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 /* Pill / chip */
@@ -596,10 +806,10 @@ input[type="checkbox"], input[type="radio"] {
   flex-direction: column-reverse;
   gap: 0.5rem;
   pointer-events: none;
-  /* Mobile: bottom-center, above the bottom nav (4rem) */
+  /* Mobile: bottom-center, above the bottom nav (4rem) + iOS safe area */
   left: 50%;
   right: auto;
-  bottom: 5.25rem;
+  bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   width: calc(100vw - 1.5rem);
   max-width: 28rem;
@@ -714,6 +924,226 @@ input[type="checkbox"], input[type="radio"] {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
+}
+
+/* ===== Connectivity status pill (top bar / sidebar) ===== */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 1.75rem;
+  padding: 0 0.625rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  background: #F9FAFB;
+  color: #4B5563;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.status-pill--clickable {
+  cursor: pointer;
+}
+.status-pill--clickable:hover {
+  background: #F3F4F6;
+}
+.status-pill--clickable:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Colour variants */
+.status-pill--online    { background: #F0FDF4; color: #166534; border-color: #BBF7D0; }
+.status-pill--online:hover    { background: #DCFCE7; }
+.status-pill--pending  { background: #FFFBEB; color: #92400E; border-color: #FDE68A; }
+.status-pill--pending:hover  { background: #FEF3C7; }
+.status-pill--syncing  { background: #EFF6FF; color: #1D4ED8; border-color: #BFDBFE; }
+.status-pill--offline  { background: #FEF2F2; color: #991B1B; border-color: #FECACA; }
+.status-pill--offline:hover  { background: #FEE2E2; }
+
+/* Status dot (pulsing / static) */
+.status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: currentColor;
+  position: relative;
+}
+.status-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0;
+}
+.status-dot--pulse::after {
+  animation: status-pulse 1.6s ease-out infinite;
+}
+.status-dot--spin {
+  border-radius: 0;
+  background: transparent;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: status-spin 0.8s linear infinite;
+}
+.status-dot--spin::after { content: none; }
+
+@keyframes status-pulse {
+  0%   { transform: scale(0.6); opacity: 0.55; }
+  80%  { transform: scale(2.2); opacity: 0;    }
+  100% { transform: scale(2.2); opacity: 0;    }
+}
+@keyframes status-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ===== Offline banner (mobile top + desktop top placements) ===== */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  padding: 0.625rem 1rem;
+  background: linear-gradient(90deg, #F59E0B 0%, #D97706 100%);
+  color: #FFFBEB;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.05);
+}
+.offline-banner__icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+  animation: offline-blink 1.8s ease-in-out infinite;
+}
+.offline-banner__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.offline-banner__title {
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+.offline-banner__sub {
+  font-size: 0.625rem;
+  font-weight: 600;
+  opacity: 0.9;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  margin-top: 0.125rem;
+}
+.offline-banner__pill {
+  display: inline-flex;
+  align-items: center;
+  height: 1.375rem;
+  padding: 0 0.5rem;
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+@keyframes offline-blink {
+  0%, 100% { opacity: 1;   }
+  50%      { opacity: 0.45; }
+}
+
+/* ===== Sync-now button (sidebar) ===== */
+.sync-now {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: #FFFFFF;
+  color: #374151;
+  border: 1px solid #E5E7EB;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.sync-now:hover:not(:disabled) {
+  background: #F9FAFB;
+  border-color: #D1D5DB;
+}
+.sync-now:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.sync-now__icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+.sync-now__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.125rem;
+  height: 1.125rem;
+  padding: 0 0.375rem;
+  background: #F59E0B;
+  color: #FFFBEB;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.sync-now--syncing {
+  background: #EFF6FF;
+  color: #1D4ED8;
+  border-color: #BFDBFE;
+  cursor: progress;
+}
+.sync-now--pending {
+  background: #FFFBEB;
+  color: #92400E;
+  border-color: #FDE68A;
+}
+.sync-now--pending:hover:not(:disabled) {
+  background: #FEF3C7;
+  border-color: #FCD34D;
+}
+.sync-now--offline {
+  background: #FEF2F2;
+  color: #991B1B;
+  border-color: #FECACA;
+}
+.sync-now--offline:hover:not(:disabled) {
+  background: #FEE2E2;
+  border-color: #FCA5A5;
+}
+.sync-now--offline:disabled {
+  background: #F3F4F6;
+  color: #6B7280;
+  border-color: #E5E7EB;
+}
+.sync-now__sub {
+  display: block;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.75;
+  margin-top: 0.125rem;
 }
 
 /* ===== Premium ON/OFF toggle switch (compact) ===== */
