@@ -1,16 +1,22 @@
-const CACHE_NAME = 'firecheck-v2';
+const CACHE_NAME = 'firecheck-v3';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
   './favicon.ico',
-  './favicon-16.png',
-  './favicon-32.png',
-  './favicon-48.png',
+  './favicon.svg',
+  './favicon-16x16.png',
+  './favicon-32x32.png',
+  './favicon-48x48.png',
+  './favicon-64x64.png',
+  './favicon-72x72.png',
+  './favicon-96x96.png',
+  './favicon-128x128.png',
+  './favicon-144x144.png',
   './apple-touch-icon.png',
   './icon-192.png',
+  './icon-384.png',
   './icon-512.png',
-  './icon-maskable-512.png',
 ];
 
 self.addEventListener('install', (e) => {
@@ -42,21 +48,31 @@ self.addEventListener('message', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Try network first or cache-first. The user requested: "Criar service worker básico com estratégia cache-first para assets."
-  e.respondWith(
-    caches.match(e.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Fetch in background to update cache if possible
-        fetch(e.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(e.request, networkResponse);
-            });
+  if (e.request.mode === 'navigation') {
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          if (res.status === 200) {
+            caches.open(CACHE_NAME).then((cache) => cache.put(e.request, res.clone()));
           }
-        }).catch(() => {/* Ignore network errors offline */});
-        return cachedResponse;
+          return res;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  e.respondWith(
+    caches.match(e.request).then((cached) => {
+      if (cached) {
+        fetch(e.request).then((res) => {
+          if (res && res.status === 200) {
+            caches.open(CACHE_NAME).then((cache) => cache.put(e.request, res));
+          }
+        }).catch(() => {});
+        return cached;
       }
-      return fetch(e.request);
+      return fetch(e.request).catch(() => caches.match('./index.html'));
     })
   );
 });
