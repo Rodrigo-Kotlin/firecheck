@@ -310,6 +310,8 @@ export default function AppLayout() {
 
   const currentTitle = location.pathname === '/planodeacao'
     ? 'Plano de Ação'
+    : location.pathname === '/admin/usuarios'
+    ? 'Usuários'
     : (tabs.find(t => t.id === currentTab)?.label ?? 'FireCheck');
 
   if (!authReady) {

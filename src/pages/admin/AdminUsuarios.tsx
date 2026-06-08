@@ -91,11 +91,11 @@ export default function AdminUsuarios() {
         </div>
       </header>
 
-      <div className="relative" role="search">
+      <div className="flex items-center gap-0 bg-white border border-gray-200 rounded-lg overflow-hidden has-[input:focus]:border-primary has-[input:focus]:shadow-[0_0_0_3px_rgba(220,38,38,0.12)] transition-all" role="search">
         <label htmlFor="users-search" className="sr-only">
           Buscar usuários
         </label>
-        <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400" aria-hidden="true">
+        <span className="flex items-center pl-3.5 text-gray-400 flex-shrink-0" aria-hidden="true">
           <Search className="w-4 h-4" />
         </span>
         <input
@@ -104,13 +104,13 @@ export default function AdminUsuarios() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Buscar por nome, e-mail ou cargo..."
-          className="field-input pl-11"
+          className="flex-1 h-11 sm:h-12 px-3 text-[0.9375rem] sm:text-base font-semibold text-gray-900 placeholder:text-gray-400 placeholder:font-medium bg-transparent outline-none border-none"
         />
         {search && (
           <button
             type="button"
             onClick={() => setSearch('')}
-            className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
+            className="flex items-center pr-3 pl-1 text-gray-400 hover:text-gray-600 flex-shrink-0 min-h-0 min-w-0"
             aria-label="Limpar busca"
           >
             <span className="text-lg leading-none">×</span>
