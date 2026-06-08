@@ -8,8 +8,10 @@ import {
   CameraOff,
   ScanLine,
   CheckCircle2,
+  ShieldAlert,
   XCircle,
   RotateCcw,
+  RefreshCw,
   Beaker,
 } from 'lucide-react';
 import type { Equipment } from '../../types';
@@ -24,6 +26,7 @@ export default function ScanQr() {
   const { equipments } = useAppStore();
   const [scanResult, setScanResult] = useState<ScanResult>(null);
   const [cameraPermission, setCameraPermission] = useState<boolean | null>(null);
+  const [permissionState, setPermissionState] = useState<PermissionState | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const scanResultRef = useRef<ScanResult>(null);
   const navigateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -78,9 +81,16 @@ export default function ScanQr() {
       }
     ).then(() => {
       setCameraPermission(true);
-    }).catch((err) => {
+    }).catch(async (err) => {
       console.warn('Erro ao acessar a câmera:', err);
       setCameraPermission(false);
+      try {
+        const result = await navigator.permissions.query({ name: 'camera' as PermissionName });
+        setPermissionState(result.state);
+        result.onchange = () => setPermissionState(result.state);
+      } catch {
+        setPermissionState('prompt');
+      }
     });
 
     return () => {
@@ -212,8 +222,52 @@ export default function ScanQr() {
               </div>
             )}
 
-            {/* Camera error overlay — friendly message + action */}
-            {cameraPermission === false && (
+            {/* Camera error overlay */}
+            {cameraPermission === false && permissionState === 'denied' ? (
+              <div className="absolute inset-0 bg-gray-900/95 flex flex-col items-center justify-center text-center p-6 gap-4 text-white z-20">
+                <div className="w-16 h-16 bg-white/10 rounded-full flex items-center justify-center">
+                  <ShieldAlert className="w-8 h-8 text-amber-400" />
+                </div>
+                <div>
+                  <h4 className="font-black text-base">Permissão Negada</h4>
+                  <p className="text-xs text-gray-400 max-w-xs mt-1.5 leading-relaxed">
+                    O acesso à câmera foi bloqueado pelo navegador. Siga os passos:
+                  </p>
+                </div>
+                <div className="text-left text-xs text-gray-300 max-w-xs space-y-2">
+                  <div className="flex items-start gap-2">
+                    <span className="font-black text-amber-400 min-w-5">1.</span>
+                    <span>Clique no ícone de cadeado ou câmera na barra de endereço</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="font-black text-amber-400 min-w-5">2.</span>
+                    <span>Altere a permissão para <strong className="text-white">&ldquo;Permitir&rdquo;</strong></span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="font-black text-amber-400 min-w-5">3.</span>
+                    <span>Recarregue a página e tente novamente</span>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 w-full max-w-xs">
+                  <button
+                    type="button"
+                    onClick={handleManualInput}
+                    className="flex items-center justify-center gap-1.5 px-4 h-10 bg-white text-gray-800 rounded-lg text-xs font-black uppercase tracking-wider hover:bg-gray-100 transition-all min-h-0"
+                  >
+                    <Keyboard className="w-4 h-4" />
+                    Digitar código
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="flex items-center justify-center gap-1.5 px-4 h-10 bg-white/10 border border-white/30 text-white rounded-lg text-xs font-black uppercase tracking-wider hover:bg-white/20 transition-all min-h-0"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Recarregar
+                  </button>
+                </div>
+              </div>
+            ) : cameraPermission === false && (
               <div className="absolute inset-0 bg-gray-900/95 flex flex-col items-center justify-center text-center p-6 gap-4 text-white z-20">
                 <div className="w-16 h-16 bg-white/10 rounded-full flex items-center justify-center">
                   <CameraOff className="w-8 h-8 text-gray-300" />
