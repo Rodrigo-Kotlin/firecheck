@@ -312,6 +312,8 @@ export default function AppLayout() {
     ? 'Plano de Ação'
     : location.pathname === '/admin/usuarios'
     ? 'Usuários'
+    : location.pathname === '/configuracoes'
+    ? 'Configurações'
     : (tabs.find(t => t.id === currentTab)?.label ?? 'FireCheck');
 
   if (!authReady) {
