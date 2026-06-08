@@ -1,9 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig } from '../types';
-import { equipamentos, inspecoes, estatisticas } from '../data/mock';
 import { db, type LocalActionPlan, type LocalEquipment, type LocalInspection } from '../db';
-import { syncAll, pendingSyncCount, seedFromMock, type SyncReport } from '../services/sync';
+import { syncAll, pendingSyncCount, type SyncReport } from '../services/sync';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   loginUser,
@@ -116,6 +115,7 @@ interface AppState {
   hydrate: () => Promise<void>;
   triggerSync: () => Promise<void>;
   refreshPendingCount: () => Promise<void>;
+  clearAllData: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -156,9 +156,9 @@ export const useAppStore = create<AppState>()(
         user: null,
         authReady: false,
         authLoading: false,
-        equipments: equipamentos,
-        inspections: inspecoes,
-        stats: estatisticas,
+        equipments: [],
+        inspections: [],
+        stats: { total: 0, emDia: 0, pendentes: 0, vencidos: 0, conformidade: 0 },
         actionPlans: [],
         config: {
           empresa: 'FireCheck Corp',
@@ -214,21 +214,47 @@ export const useAppStore = create<AppState>()(
         // resolve the current auth session (Supabase getSession + profile).
         // -----------------------------------------------------------------
         hydrate: async () => {
-          const eqCount = await db.equipamentos.count();
-          if (eqCount === 0) {
-            await seedFromMock(equipamentos, inspecoes);
-          }
           const [localEqs, localInsps, allUsers] = await Promise.all([
             db.equipamentos.toArray(),
             db.inspecoes.toArray(),
             listUsers(),
           ]);
-          const sessionUser = await resolveSession();
 
+          // Auto-clear old seed data on first load after cleanup
+          if (localEqs.some((e) => ['EXT-001', 'HID-042', 'EXT-109'].includes(e.id))) {
+            await Promise.all([
+              db.fotos.clear(),
+              db.inspecoes.clear(),
+              db.acoes_pendentes.clear(),
+              db.equipamentos.clear(),
+            ]);
+            if (typeof window !== 'undefined') {
+              localStorage.removeItem('firecheck-storage');
+            }
+            if (isSupabaseConfigured && supabase) {
+              try {
+                const { error } = await supabase.from('equipamentos').delete().neq('id', '_');
+                if (error) console.warn('[hydrate] erro ao limpar nuvem:', error);
+              } catch (err) {
+                console.warn('[hydrate] erro ao limpar nuvem:', err);
+              }
+            }
+            set({
+              equipments: [],
+              inspections: [],
+              stats: { total: 0, emDia: 0, pendentes: 0, vencidos: 0, conformidade: 0 },
+              actionPlans: [],
+            });
+          } else {
+            set({
+              equipments: localEqs.map(toEquipment),
+              inspections: localInsps.map(toInspection),
+              stats: recomputeStats(localEqs.map(toEquipment)),
+            });
+          }
+
+          const sessionUser = await resolveSession();
           set({
-            equipments: localEqs.map(toEquipment),
-            inspections: localInsps.map(toInspection),
-            stats: recomputeStats(localEqs.map(toEquipment)),
             user: sessionUser ?? get().user,
             users: allUsers,
             authReady: true,
@@ -251,6 +277,39 @@ export const useAppStore = create<AppState>()(
 
         triggerSync: async () => {
           await runSync();
+        },
+
+        clearAllData: async () => {
+          // 1) Clear Dexie tables
+          await Promise.all([
+            db.fotos.clear(),
+            db.inspecoes.clear(),
+            db.acoes_pendentes.clear(),
+            db.equipamentos.clear(),
+          ]);
+
+          // 2) Clear Zustand persisted state (actionPlans, config, users)
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('firecheck-storage');
+          }
+
+          // 3) Clear Supabase cloud data (cascades: equipamentos → inspecoes/planos_acao → fotos)
+          if (isSupabaseConfigured && supabase && get().user) {
+            try {
+              const { error } = await supabase.from('equipamentos').delete().neq('id', '_');
+              if (error) console.warn('[clearAllData] erro na nuvem:', error);
+            } catch (err) {
+              console.warn('[clearAllData] erro na nuvem:', err);
+            }
+          }
+
+          // 4) Reset store state
+          set({
+            equipments: [],
+            inspections: [],
+            stats: { total: 0, emDia: 0, pendentes: 0, vencidos: 0, conformidade: 0 },
+            actionPlans: [],
+          });
         },
 
         // -----------------------------------------------------------------
