@@ -45,22 +45,22 @@ type SectionProps = {
 function Section({ icon: Icon, index, title, description, action, children }: SectionProps) {
   return (
     <section className="card-subtle bg-white">
-      <header className="flex items-start justify-between gap-3 pb-3 mb-4 border-b border-gray-100">
-        <div className="flex items-start gap-3 min-w-0 flex-1">
-          <div className="w-10 h-10 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0">
-            <Icon className="w-5 h-5 text-primary" />
+      <header className="flex items-start justify-between gap-2 pb-3 mb-4 border-b border-gray-100">
+        <div className="flex items-start gap-2.5 min-w-0 flex-1">
+          <div className="w-9 h-9 sm:w-10 sm:h-10 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0">
+            <Icon className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-black text-primary uppercase tracking-widest">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[9px] sm:text-[10px] font-black text-primary uppercase tracking-widest">
                 {String(index).padStart(2, '0')}
               </span>
-              <h2 className="text-sm font-black text-gray-900 uppercase tracking-wider truncate">
+              <h2 className="text-xs sm:text-sm font-black text-gray-900 uppercase tracking-wider truncate">
                 {title}
               </h2>
             </div>
             {description && (
-              <p className="text-[11px] sm:text-xs text-gray-500 font-medium mt-0.5 leading-snug">
+              <p className="text-[10px] sm:text-xs text-gray-500 font-medium mt-0.5 leading-snug">
                 {description}
               </p>
             )}
@@ -68,7 +68,7 @@ function Section({ icon: Icon, index, title, description, action, children }: Se
         </div>
         {action && <div className="flex-shrink-0">{action}</div>}
       </header>
-      <div className="space-y-4">{children}</div>
+      <div className="space-y-3 sm:space-y-4">{children}</div>
     </section>
   );
 }
@@ -460,7 +460,7 @@ export default function Configuracoes() {
 
       {/* Profile card — full width, compact */}
       <div className="card-subtle bg-white">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 sm:gap-4">
           <div className="w-14 h-14 sm:w-16 sm:h-16 bg-primary rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-md flex-shrink-0">
             {initials}
           </div>

@@ -138,8 +138,8 @@ export default function AdminUsuarios() {
             const isConfirming = confirmDelete === u.id;
             return (
               <div key={u.id} className="card-subtle bg-white space-y-3">
-                <div className="flex items-start gap-3">
-                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white font-black text-sm shadow-sm flex-shrink-0 ${
+                <div className="flex items-start gap-2.5 sm:gap-3">
+                  <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center text-white font-black text-xs sm:text-sm shadow-sm flex-shrink-0 ${
                     u.role === 'admin' ? 'bg-primary' : 'bg-gray-400'
                   }`}>
                     {initials}
@@ -159,17 +159,17 @@ export default function AdminUsuarios() {
                       )}
                     </div>
                     <p className="text-xs text-gray-500 truncate">{u.email}</p>
-                    <p className="text-[11px] text-gray-400 font-bold uppercase tracking-wider mt-0.5">
+                    <p className="text-[10px] sm:text-[11px] text-gray-400 font-bold uppercase tracking-wider mt-0.5 truncate">
                       {u.cargo} · desde {new Date(u.createdAt).toLocaleDateString('pt-BR')}
                     </p>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-50">
+                <div className="flex flex-col sm:flex-row gap-1.5 sm:gap-2 pt-2.5 sm:pt-2 border-t border-gray-50">
                   <button
                     type="button"
                     onClick={() => void handleToggleRole(u.id, u.role)}
-                    className={`btn-ghost btn-sm btn-auto flex-1 min-w-[140px] ${
+                    className={`btn-ghost btn-sm btn-auto w-full sm:w-auto ${
                       u.role === 'admin'
                         ? 'text-primary border-primary/30 hover:bg-primary/5 hover:border-primary/40 hover:text-primary'
                         : ''
@@ -181,7 +181,7 @@ export default function AdminUsuarios() {
                     <button
                       type="button"
                       onClick={() => setConfirmDelete(isConfirming ? null : u.id)}
-                      className={`btn-sm btn-auto inline-flex items-center gap-1.5 ${
+                      className={`btn-sm btn-auto w-full sm:w-auto inline-flex items-center gap-1.5 ${
                         isConfirming
                           ? 'bg-critical text-white border border-critical hover:bg-critical'
                           : 'btn-ghost text-gray-400 hover:!text-critical hover:!border-critical/40 hover:!bg-red-50'
@@ -194,15 +194,17 @@ export default function AdminUsuarios() {
                 </div>
 
                 {isConfirming && (
-                  <div className="flex items-start gap-2 bg-red-50 border border-red-100 text-critical text-[11px] font-medium rounded-lg p-2.5">
-                    <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                    <div className="flex-1">
-                      Esta ação remove permanentemente o usuário e invalida sessões ativas. Registros já criados por ele permanecem no inventário.
+                  <div className="flex flex-col sm:flex-row items-start gap-2 bg-red-50 border border-red-100 text-critical text-[11px] font-medium rounded-lg p-2.5">
+                    <div className="flex items-start gap-2 flex-1">
+                      <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                      <span>
+                        Esta ação remove permanentemente o usuário e invalida sessões ativas. Registros já criados por ele permanecem no inventário.
+                      </span>
                     </div>
                     <button
                       type="button"
                       onClick={() => void handleDelete(u.id, u.nome)}
-                      className="h-8 px-3 bg-critical text-white rounded-md text-[10px] font-black uppercase tracking-wider hover:bg-red-700"
+                      className="self-end sm:self-auto h-8 px-3 bg-critical text-white rounded-md text-[10px] font-black uppercase tracking-wider hover:bg-red-700"
                     >
                       Excluir
                     </button>

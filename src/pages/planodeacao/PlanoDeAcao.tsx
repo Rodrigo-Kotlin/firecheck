@@ -20,6 +20,7 @@ import {
   MapPin,
   FileText,
   Calendar,
+  Tag,
   type LucideIcon,
 } from 'lucide-react';
 import { canEditActionPlan, canDeleteActionPlan } from '../../services/permissions';
@@ -101,6 +102,12 @@ function getPrazoWarning(prazo: string, status: ActionPlanStatus): PrazoWarning 
   return null;
 }
 
+function getEquipLabel(eqId: string, equipments: { id: string; tipo?: string; local?: string; setor?: string }[]) {
+  const eq = equipments.find(e => e.id === eqId);
+  if (!eq) return null;
+  return eq;
+}
+
 export default function PlanoDeAcao() {
   const { actionPlans, addActionPlan, updateActionPlan, deleteActionPlan, equipments, user, users } = useAppStore();
   const navigate = useNavigate();
@@ -109,7 +116,6 @@ export default function PlanoDeAcao() {
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
 
-  // Form state
   const [formEquipmentId, setFormEquipmentId] = useState('');
   const [formLocal, setFormLocal] = useState('');
   const [formDescricao, setFormDescricao] = useState('');
@@ -185,7 +191,7 @@ export default function PlanoDeAcao() {
       <header className="page-header">
         <button
           onClick={() => navigate(-1)}
-          className="flex items-center justify-center text-gray-600 hover:text-gray-900 bg-gray-50 rounded-lg p-2 min-h-0 min-w-0"
+          className="flex items-center justify-center text-gray-600 hover:text-gray-900 bg-gray-50 rounded-lg p-2 min-h-0 min-w-0 flex-shrink-0"
           type="button"
           aria-label="Voltar"
         >
@@ -197,21 +203,27 @@ export default function PlanoDeAcao() {
             Plano de Ação
           </h1>
         </div>
-        <span className="pill bg-red-100 text-critical flex-shrink-0">
+        <span className="pill bg-red-100 text-critical flex-shrink-0 hidden sm:inline-flex">
           <AlertCircle className="w-3 h-3" />
           {counts['Aberta']} abertas
         </span>
       </header>
 
-      {/* New Action Plan button */}
-      <button
-        onClick={() => setShowForm(true)}
-        className="btn-primary"
-        type="button"
-      >
-        <Plus className="w-5 h-5" />
-        Novo Plano de Ação
-      </button>
+      {/* New Action Plan button + mobile count */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => setShowForm(true)}
+          className="btn-primary flex-1"
+          type="button"
+        >
+          <Plus className="w-5 h-5" />
+          Novo Plano de Ação
+        </button>
+        <span className="sm:hidden pill bg-red-100 text-critical flex-shrink-0">
+          <AlertCircle className="w-3 h-3" />
+          {counts['Aberta']}
+        </span>
+      </div>
 
       {/* Search */}
       <div className="relative" role="search">
@@ -229,10 +241,20 @@ export default function PlanoDeAcao() {
           placeholder="Buscar por equipamento, local, responsável..."
           className="field-input pl-11"
         />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch('')}
+            className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 min-h-0 min-w-0"
+            aria-label="Limpar busca"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
-      {/* Status filter chips */}
-      <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 sm:mx-0 px-4 sm:px-0 scrollbar-none">
+      {/* Status filter chips — responsive with flex-wrap on small screens */}
+      <div className="flex flex-wrap gap-1.5">
         {(['Todos', ...STATUS_OPTIONS] as const).map(s => {
           const isActive = statusFilter === s;
           const count = s === 'Todos' ? actionPlans.length : counts[s];
@@ -241,19 +263,20 @@ export default function PlanoDeAcao() {
               key={s}
               type="button"
               onClick={() => setStatusFilter(s)}
-              className={`flex-none px-3 py-1.5 rounded-full text-[11px] sm:text-xs font-black uppercase whitespace-nowrap border transition-all ${
+              className={`flex-none px-2.5 py-1.5 rounded-full text-[10px] sm:text-xs font-black uppercase whitespace-nowrap border transition-all ${
                 isActive
                   ? 'bg-primary text-white border-primary'
                   : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
               }`}
             >
-              {s} ({count})
+              {s === 'Todos' ? 'Todos' : s}
+              <span className="ml-1 opacity-70">({count})</span>
             </button>
           );
         })}
       </div>
 
-      {/* Action Plan Cards — 1 col mobile, 2 col xl */}
+      {/* Action Plan Cards */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {filtered.map(plan => {
           const editable = canEditActionPlan(user, plan);
@@ -262,66 +285,71 @@ export default function PlanoDeAcao() {
           const CriticidadeIcon = CRITICIDADE_ICONS[plan.criticidade];
           const StatusIcon = STATUS_ICONS[plan.status];
           const prazoWarning = getPrazoWarning(plan.prazo, plan.status);
+          const eqInfo = getEquipLabel(plan.equipmentId, equipments);
 
           return (
             <div
               key={plan.id}
-              className={`card-subtle bg-white space-y-3 sm:space-y-4 border-l-[4px] ${CRITICIDADE_BORDER[plan.criticidade]} ${!editable ? 'opacity-95' : ''}`}
+              className={`card-subtle bg-white border-l-[4px] ${CRITICIDADE_BORDER[plan.criticidade]} ${!editable ? 'opacity-95' : ''}`}
             >
-              {/* Top row: criticidade icon + ID + criticidade pill | Leitura + status pill */}
-              <div className="flex items-start justify-between gap-2 flex-wrap">
-                <div className="flex items-start gap-2.5 flex-1 min-w-0">
-                  <div className={`p-2 rounded-lg flex-shrink-0 ${CRITICIDADE_ICON_BG[plan.criticidade]}`}>
-                    <CriticidadeIcon className="w-5 h-5" />
+              {/* Top row: criticidade icon + info + status */}
+              <div className="flex items-start gap-2.5 mb-3">
+                <div className={`p-2 rounded-lg flex-shrink-0 ${CRITICIDADE_ICON_BG[plan.criticidade]}`}>
+                  <CriticidadeIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm sm:text-base font-black text-gray-900">{plan.equipmentId}</span>
+                    <span className={`pill text-[10px] border ${CRITICIDADE_STYLES[plan.criticidade]}`}>
+                      {plan.criticidade}
+                    </span>
+                    <span className={`pill text-[10px] ${STATUS_STYLES[plan.status]}`}>
+                      <StatusIcon className="w-3 h-3" />
+                      {plan.status}
+                    </span>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-black text-gray-900">{plan.equipmentId}</span>
-                      <span className={`pill border ${CRITICIDADE_STYLES[plan.criticidade]}`}>
-                        {plan.criticidade}
+                  <div className="flex items-center gap-2 text-xs text-gray-500 font-semibold mt-1 flex-wrap">
+                    <span className="inline-flex items-center gap-1">
+                      <MapPin className="w-3 h-3 flex-shrink-0" />
+                      <span className="truncate max-w-[200px] sm:max-w-none">{plan.local}</span>
+                    </span>
+                    {eqInfo?.tipo && (
+                      <span className="inline-flex items-center gap-1 text-gray-400">
+                        <Tag className="w-3 h-3 flex-shrink-0" />
+                        <span>{eqInfo.tipo}</span>
                       </span>
-                    </div>
-                    <div className="text-xs text-gray-500 font-semibold mt-0.5 truncate">{plan.local}</div>
-                    {owner && (
-                      <div className="flex items-center gap-1 text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-1">
-                        <User className="w-3 h-3" />
-                        <span>por {owner.nome}</span>
-                      </div>
                     )}
                   </div>
-                </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
-                  {!editable && (
-                    <span
-                      title="Somente leitura — você não é o responsável"
-                      className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded"
-                    >
-                      <Lock className="w-3 h-3" />
-                      Leitura
-                    </span>
+                  {owner && (
+                    <div className="flex items-center gap-1 text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-1">
+                      <User className="w-3 h-3" />
+                      <span>por {owner.nome}</span>
+                      {!editable && (
+                        <span className="inline-flex items-center gap-0.5 ml-1 text-gray-300">
+                          <Lock className="w-2.5 h-2.5" />
+                          <span>leitura</span>
+                        </span>
+                      )}
+                    </div>
                   )}
-                  <span className={`pill ${STATUS_STYLES[plan.status]}`}>
-                    <StatusIcon className="w-3 h-3" />
-                    {plan.status}
-                  </span>
                 </div>
               </div>
 
               {/* Description */}
-              <p className="text-sm text-gray-700 font-medium bg-gray-50 p-3 rounded-lg border border-gray-100 leading-relaxed">
+              <p className="text-sm text-gray-700 font-medium bg-gray-50 p-3 rounded-lg border border-gray-100 leading-relaxed mb-3">
                 {plan.descricao}
               </p>
 
-              {/* Prazo warning — destaque quando vencido ou vence hoje */}
+              {/* Prazo warning */}
               {prazoWarning && (
-                <div className={`flex items-center gap-2 ${prazoWarning.color} text-xs font-bold uppercase tracking-wider px-3 py-2 rounded-lg border`}>
+                <div className={`flex items-center gap-2 ${prazoWarning.color} text-xs font-bold uppercase tracking-wider px-3 py-2 rounded-lg border mb-3`}>
                   <AlertTriangle className="w-4 h-4 flex-shrink-0" />
                   <span>{prazoWarning.label}</span>
                 </div>
               )}
 
               {/* Fields: Responsável + Prazo */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
                 <div>
                   <label htmlFor={`plan-${plan.id}-responsavel`} className="field-label">Responsável</label>
                   <input
@@ -332,7 +360,6 @@ export default function PlanoDeAcao() {
                     readOnly={!editable}
                     placeholder="Nome do responsável..."
                     className="field-input"
-                    style={{ height: '2.75rem' }}
                   />
                 </div>
                 <div>
@@ -344,13 +371,12 @@ export default function PlanoDeAcao() {
                     onChange={e => editable && updateActionPlan(plan.id, { prazo: e.target.value })}
                     readOnly={!editable}
                     className={`field-input ${prazoWarning?.isVencido ? 'border-critical focus:border-critical' : ''}`}
-                    style={{ height: '2.75rem' }}
                   />
                 </div>
               </div>
 
               {/* Status buttons */}
-              <div role="group" aria-labelledby={`plan-${plan.id}-status-label`}>
+              <div role="group" aria-labelledby={`plan-${plan.id}-status-label`} className="mb-3">
                 <span id={`plan-${plan.id}-status-label`} className="field-label">Status</span>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                   {STATUS_OPTIONS.map(s => {
@@ -362,29 +388,25 @@ export default function PlanoDeAcao() {
                         disabled={!editable}
                         aria-pressed={plan.status === s}
                         onClick={() => editable && updateActionPlan(plan.id, { status: s })}
-                        className={`h-10 rounded-lg text-[11px] font-black uppercase tracking-wider transition-all border flex items-center justify-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed ${
+                        className={`h-10 rounded-lg text-[10px] sm:text-[11px] font-black uppercase tracking-wider transition-all border flex items-center justify-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed ${
                           plan.status === s
                             ? STATUS_STYLES[s] + ' border-current'
                             : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
                         }`}
                       >
                         <BtnIcon className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>{s}</span>
+                        <span className="truncate">{s}</span>
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* Footer: metadata + delete — wraps gracefully on 320px */}
-              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-[10px] sm:text-[11px] text-gray-400 font-bold uppercase tracking-wider pt-3 border-t border-gray-50">
+              {/* Footer */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] sm:text-[11px] text-gray-400 font-bold uppercase tracking-wider pt-3 border-t border-gray-50">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 flex-1">
-                  <span className="truncate">
-                    <span className="hidden sm:inline">Criado: </span>
-                    {plan.createdAt}
-                  </span>
-                  <span className="font-mono truncate max-w-full" title={plan.id}>
-                    <span className="hidden sm:inline">ID: </span>
+                  <span className="truncate">{plan.createdAt}</span>
+                  <span className="font-mono truncate max-w-full text-gray-300" title={plan.id}>
                     {plan.id}
                   </span>
                 </div>
@@ -394,11 +416,10 @@ export default function PlanoDeAcao() {
                     onClick={() => {
                       if (confirm('Excluir este plano de ação?')) deleteActionPlan(plan.id);
                     }}
-                    className="flex items-center gap-1 text-gray-400 hover:text-critical transition-colors min-h-0 min-w-0 px-1.5 py-1 rounded flex-shrink-0"
+                    className="flex items-center justify-center w-8 h-8 text-gray-400 hover:text-critical hover:bg-red-50 rounded-lg transition-colors min-h-0 min-w-0 flex-shrink-0"
                     aria-label="Excluir plano de ação"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    <span>Excluir</span>
                   </button>
                 )}
               </div>

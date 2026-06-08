@@ -1,26 +1,29 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { FileText, ChevronDown, TrendingUp, ShieldCheck, AlertOctagon, ClipboardList } from 'lucide-react';
+import { FileText, ChevronDown, ShieldCheck, AlertOctagon, ClipboardList } from 'lucide-react';
 import jsPDF from 'jspdf';
+import type { Inspection, Equipment, Stats } from '../../types';
 
-// Extended mock history for reports
-const HISTORICO_MOCK = [
-  { id: 'H001', data: '15/10/2023', inspetor: 'Rodrigo Silva', equipId: 'EXT-402-B', status: 'APROVADO' as const },
-  { id: 'H002', data: '14/10/2023', inspetor: 'Ana Paula', equipId: 'HYD-991-A', status: 'OBSERVAÇÃO' as const },
-  { id: 'H003', data: '12/10/2023', inspetor: 'Marcos Rocha', equipId: 'EXT-105-C', status: 'REPROVADO' as const },
-  { id: 'H004', data: '11/10/2023', inspetor: 'Rodrigo Silva', equipId: 'EXT-001', status: 'APROVADO' as const },
-  { id: 'H005', data: '10/10/2023', inspetor: 'Ana Paula', equipId: 'HID-042', status: 'OBSERVAÇÃO' as const },
-  { id: 'H006', data: '08/10/2023', inspetor: 'Marcos Rocha', equipId: 'EXT-109', status: 'REPROVADO' as const },
-  { id: 'H007', data: '07/10/2023', inspetor: 'Rodrigo Silva', equipId: 'ALM-005', status: 'APROVADO' as const },
-  { id: 'H008', data: '05/10/2023', inspetor: 'Ana Paula', equipId: 'ILU-018', status: 'OBSERVAÇÃO' as const },
-];
+type HistoryEntry = {
+  id: string;
+  data: string;
+  dataISO: string;
+  inspetor: string;
+  equipId: string;
+  status: HistoryStatus;
+  observacoes?: string;
+};
 
-type HistoricoStatus = 'APROVADO' | 'OBSERVAÇÃO' | 'REPROVADO';
+type HistoryStatus = 'APROVADO' | 'OBSERVAÇÃO' | 'REPROVADO' | 'PENDENTE';
 
-// ---------------------------------------------------------------------------
-// PDF design tokens — keep in sync with src/index.css @theme colors.
-// ---------------------------------------------------------------------------
+const STATUS_MAP: Record<string, HistoryStatus> = {
+  regular: 'APROVADO',
+  observacao: 'OBSERVAÇÃO',
+  vencido: 'REPROVADO',
+  pendente: 'PENDENTE',
+};
+
 const PDF_COLORS = {
   primary: [220, 38, 38] as [number, number, number],
   primaryDark: [185, 28, 28] as [number, number, number],
@@ -41,21 +44,26 @@ const PDF_COLORS = {
   white: [255, 255, 255] as [number, number, number],
 };
 
+const HISTORY_STATUS_COLORS: Record<HistoryStatus, [number, number, number]> = {
+  APROVADO: PDF_COLORS.success,
+  'OBSERVAÇÃO': PDF_COLORS.warning,
+  REPROVADO: PDF_COLORS.critical,
+  PENDENTE: PDF_COLORS.warning,
+};
+
+const HISTORY_STATUS_BADGE: Record<HistoryStatus, string> = {
+  APROVADO: 'bg-green-100 text-success',
+  'OBSERVAÇÃO': 'bg-amber-100 text-pending',
+  REPROVADO: 'bg-red-100 text-critical',
+  PENDENTE: 'bg-orange-100 text-orange-600',
+};
+
 const PDF_PAGE = { w: 210, h: 297 };
 const PDF_MARGIN = 15;
 const PDF_CONTENT_W = PDF_PAGE.w - PDF_MARGIN * 2;
 const PDF_HEADER_H = 18;
 const PDF_FOOTER_Y = PDF_PAGE.h - 12;
 
-const STATUS_COLORS: Record<HistoricoStatus, [number, number, number]> = {
-  APROVADO: PDF_COLORS.success,
-  'OBSERVAÇÃO': PDF_COLORS.warning,
-  REPROVADO: PDF_COLORS.critical,
-};
-
-// ---------------------------------------------------------------------------
-// Drawing context — tracks y, page, and shared metadata across helpers.
-// ---------------------------------------------------------------------------
 type DrawCtx = {
   doc: jsPDF;
   y: number;
@@ -84,28 +92,20 @@ function ensureSpace(ctx: DrawCtx, neededH: number) {
 }
 
 function drawPageHeader(ctx: DrawCtx) {
-  // Top accent bar
   ctx.doc.setFillColor(...PDF_COLORS.primary);
   ctx.doc.rect(0, 0, PDF_PAGE.w, 2, 'F');
-
-  // Brand
   ctx.doc.setTextColor(...PDF_COLORS.text);
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setFontSize(9);
   ctx.doc.text('FireCheck', PDF_MARGIN, 9);
-
   ctx.doc.setFont('helvetica', 'normal');
   ctx.doc.setTextColor(...PDF_COLORS.textMuted);
   ctx.doc.setFontSize(7);
   ctx.doc.text('Sistema de Inspeção de Equipamentos de Combate a Incêndio', PDF_MARGIN, 13);
-
-  // Report id (right)
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setTextColor(...PDF_COLORS.text);
   ctx.doc.setFontSize(7);
   ctx.doc.text(`Relatório: ${ctx.reportId}`, PDF_PAGE.w - PDF_MARGIN, 9, { align: 'right' });
-
-  // Divider
   ctx.doc.setDrawColor(...PDF_COLORS.border);
   ctx.doc.setLineWidth(0.2);
   ctx.doc.line(PDF_MARGIN, 16, PDF_PAGE.w - PDF_MARGIN, 16);
@@ -115,7 +115,6 @@ function drawFooter(ctx: DrawCtx) {
   ctx.doc.setDrawColor(...PDF_COLORS.border);
   ctx.doc.setLineWidth(0.2);
   ctx.doc.line(PDF_MARGIN, PDF_FOOTER_Y - 4, PDF_PAGE.w - PDF_MARGIN, PDF_FOOTER_Y - 4);
-
   ctx.doc.setFont('helvetica', 'normal');
   ctx.doc.setFontSize(7);
   ctx.doc.setTextColor(...PDF_COLORS.textSubtle);
@@ -124,17 +123,9 @@ function drawFooter(ctx: DrawCtx) {
     PDF_MARGIN,
     PDF_FOOTER_Y,
   );
-  ctx.doc.text(
-    `Página ${ctx.page}`,
-    PDF_PAGE.w - PDF_MARGIN,
-    PDF_FOOTER_Y,
-    { align: 'right' },
-  );
+  ctx.doc.text(`Página ${ctx.page}`, PDF_PAGE.w - PDF_MARGIN, PDF_FOOTER_Y, { align: 'right' });
 }
 
-// ---------------------------------------------------------------------------
-// Cover page
-// ---------------------------------------------------------------------------
 function drawCover(ctx: DrawCtx, opts: {
   reportType: string;
   reportNumber: string;
@@ -142,12 +133,8 @@ function drawCover(ctx: DrawCtx, opts: {
   period?: string;
 }) {
   const { doc } = ctx;
-
-  // Top brand band
   doc.setFillColor(...PDF_COLORS.primary);
   doc.rect(0, 0, PDF_PAGE.w, 38, 'F');
-
-  // Brand
   doc.setTextColor(...PDF_COLORS.white);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(26);
@@ -155,42 +142,31 @@ function drawCover(ctx: DrawCtx, opts: {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.text('SISTEMA DE INSPEÇÃO DE EQUIPAMENTOS DE COMBATE A INCÊNDIO', PDF_PAGE.w / 2, 30, { align: 'center' });
-
-  // Decorative dot row
   doc.setFillColor(...PDF_COLORS.white);
   for (let i = 0; i < 3; i++) {
     doc.circle(PDF_PAGE.w / 2 - 4 + i * 4, 36, 0.6, 'F');
   }
-
-  // Report type
   doc.setTextColor(...PDF_COLORS.text);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(20);
   doc.text(opts.reportType.toUpperCase(), PDF_PAGE.w / 2, 90, { align: 'center' });
-
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
   doc.setTextColor(...PDF_COLORS.textMuted);
   doc.text(opts.subtitle ?? 'Equipamento de Combate a Incêndio', PDF_PAGE.w / 2, 100, { align: 'center' });
-
   if (opts.period) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
     doc.setTextColor(...PDF_COLORS.text);
     doc.text(opts.period, PDF_PAGE.w / 2, 112, { align: 'center' });
   }
-
-  // Decorative line
   doc.setDrawColor(...PDF_COLORS.primary);
   doc.setLineWidth(0.5);
   doc.line(PDF_PAGE.w / 2 - 25, 124, PDF_PAGE.w / 2 + 25, 124);
-
-  // Company block
   doc.setTextColor(...PDF_COLORS.textMuted);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
   doc.text('EMITIDO PARA', PDF_PAGE.w / 2, 168, { align: 'center' });
-
   doc.setTextColor(...PDF_COLORS.text);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(15);
@@ -199,15 +175,12 @@ function drawCover(ctx: DrawCtx, opts: {
   doc.setFontSize(9);
   doc.setTextColor(...PDF_COLORS.textMuted);
   doc.text(ctx.unit, PDF_PAGE.w / 2, 188, { align: 'center' });
-
-  // Bottom info block
   const infoY = 222;
   const infoH = 36;
   doc.setFillColor(...PDF_COLORS.bgLight);
   doc.setDrawColor(...PDF_COLORS.border);
   doc.setLineWidth(0.3);
   doc.roundedRect(PDF_MARGIN, infoY, PDF_CONTENT_W, infoH, 2, 2, 'FD');
-
   const colW = PDF_CONTENT_W / 3;
   const infoCols = [
     ['Nº DO RELATÓRIO', opts.reportNumber],
@@ -225,8 +198,6 @@ function drawCover(ctx: DrawCtx, opts: {
     doc.setTextColor(...PDF_COLORS.text);
     doc.text(value, x, infoY + 22, { align: 'center' });
   });
-
-  // Bottom brand strip
   doc.setFillColor(...PDF_COLORS.primary);
   doc.rect(0, PDF_PAGE.h - 8, PDF_PAGE.w, 8, 'F');
   doc.setTextColor(...PDF_COLORS.white);
@@ -235,25 +206,19 @@ function drawCover(ctx: DrawCtx, opts: {
   doc.text('DOCUMENTO TÉCNICO — USO INTERNO', PDF_PAGE.w / 2, PDF_PAGE.h - 3, { align: 'center' });
 }
 
-// ---------------------------------------------------------------------------
-// Section header
-// ---------------------------------------------------------------------------
 function drawSectionHeader(ctx: DrawCtx, num: number, title: string) {
   ensureSpace(ctx, 18);
-  // Number badge
   ctx.doc.setFillColor(...PDF_COLORS.primary);
   ctx.doc.roundedRect(PDF_MARGIN, ctx.y, 8, 8, 1, 1, 'F');
   ctx.doc.setTextColor(...PDF_COLORS.white);
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setFontSize(9);
   ctx.doc.text(String(num), PDF_MARGIN + 4, ctx.y + 5.8, { align: 'center' });
-  // Title
   ctx.doc.setTextColor(...PDF_COLORS.text);
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setFontSize(12);
   ctx.doc.text(title.toUpperCase(), PDF_MARGIN + 12, ctx.y + 6);
   ctx.y += 12;
-  // Underline: short red + long gray
   ctx.doc.setDrawColor(...PDF_COLORS.primary);
   ctx.doc.setLineWidth(0.5);
   ctx.doc.line(PDF_MARGIN, ctx.y, PDF_MARGIN + 30, ctx.y);
@@ -263,9 +228,6 @@ function drawSectionHeader(ctx: DrawCtx, num: number, title: string) {
   ctx.y += 7;
 }
 
-// ---------------------------------------------------------------------------
-// Key/value grid (2 or 3 columns)
-// ---------------------------------------------------------------------------
 function drawKVGrid(ctx: DrawCtx, items: Array<[string, string]>, cols: 2 | 3 = 2) {
   const colW = PDF_CONTENT_W / cols;
   const rowH = 13;
@@ -276,17 +238,14 @@ function drawKVGrid(ctx: DrawCtx, items: Array<[string, string]>, cols: 2 | 3 = 
     const row = Math.floor(i / cols);
     const x = PDF_MARGIN + col * colW;
     const y = ctx.y + row * rowH;
-    // Label
     ctx.doc.setFont('helvetica', 'bold');
     ctx.doc.setFontSize(6.5);
     ctx.doc.setTextColor(...PDF_COLORS.textMuted);
     ctx.doc.text(label.toUpperCase(), x, y);
-    // Value
     ctx.doc.setFont('helvetica', 'normal');
     ctx.doc.setFontSize(9);
     ctx.doc.setTextColor(...PDF_COLORS.text);
     ctx.doc.text(value || '—', x, y + 5);
-    // Subtle divider
     if (col < cols - 1) {
       ctx.doc.setDrawColor(...PDF_COLORS.border);
       ctx.doc.setLineWidth(0.1);
@@ -296,9 +255,6 @@ function drawKVGrid(ctx: DrawCtx, items: Array<[string, string]>, cols: 2 | 3 = 
   ctx.y += rows * rowH + 2;
 }
 
-// ---------------------------------------------------------------------------
-// Stat cards row (3-4 cards)
-// ---------------------------------------------------------------------------
 function drawStatCards(ctx: DrawCtx, cards: Array<{ label: string; value: string; color: [number, number, number]; bg?: [number, number, number] }>) {
   const gap = 3;
   const cardW = (PDF_CONTENT_W - gap * (cards.length - 1)) / cards.length;
@@ -306,20 +262,16 @@ function drawStatCards(ctx: DrawCtx, cards: Array<{ label: string; value: string
   ensureSpace(ctx, cardH);
   cards.forEach((c, i) => {
     const x = PDF_MARGIN + i * (cardW + gap);
-    // Card body
     ctx.doc.setFillColor(...(c.bg ?? PDF_COLORS.white));
     ctx.doc.setDrawColor(...PDF_COLORS.border);
     ctx.doc.setLineWidth(0.3);
     ctx.doc.roundedRect(x, ctx.y, cardW, cardH, 1.5, 1.5, 'FD');
-    // Top color stripe
     ctx.doc.setFillColor(...c.color);
     ctx.doc.rect(x, ctx.y, cardW, 1.5, 'F');
-    // Label
     ctx.doc.setFont('helvetica', 'bold');
     ctx.doc.setFontSize(6.5);
     ctx.doc.setTextColor(...PDF_COLORS.textMuted);
     ctx.doc.text(c.label.toUpperCase(), x + 3, ctx.y + 7);
-    // Value
     ctx.doc.setFont('helvetica', 'bold');
     ctx.doc.setFontSize(14);
     ctx.doc.setTextColor(...c.color);
@@ -328,9 +280,6 @@ function drawStatCards(ctx: DrawCtx, cards: Array<{ label: string; value: string
   ctx.y += cardH + 4;
 }
 
-// ---------------------------------------------------------------------------
-// Table with red header + alternating rows
-// ---------------------------------------------------------------------------
 function drawTable(
   ctx: DrawCtx,
   headers: string[],
@@ -342,8 +291,6 @@ function drawTable(
   const headerH = 8;
   const rowH = 8;
   const totalW = colWidths.reduce((a, b) => a + b, 0);
-
-  // Header
   ensureSpace(ctx, headerH + rowH);
   ctx.doc.setFillColor(...PDF_COLORS.primary);
   ctx.doc.rect(PDF_MARGIN, ctx.y, totalW, headerH, 'F');
@@ -358,8 +305,6 @@ function drawTable(
     hx += colWidths[i];
   });
   ctx.y += headerH;
-
-  // Rows
   rows.forEach((row, ri) => {
     ensureSpace(ctx, rowH);
     if (ri % 2 === 1) {
@@ -373,7 +318,6 @@ function drawTable(
       const bold = typeof cell === 'object' && cell.bold;
       const a = aligns[ci];
       const padX = a === 'right' ? colWidths[ci] - 2 : a === 'center' ? colWidths[ci] / 2 : 2;
-      // truncate to fit
       let truncated = text;
       const maxW = colWidths[ci] - 4;
       while (ctx.doc.getTextWidth(truncated) > maxW && truncated.length > 0) {
@@ -388,17 +332,12 @@ function drawTable(
     });
     ctx.y += rowH;
   });
-
-  // Bottom border
   ctx.doc.setDrawColor(...PDF_COLORS.border);
   ctx.doc.setLineWidth(0.3);
   ctx.doc.line(PDF_MARGIN, ctx.y, PDF_MARGIN + totalW, ctx.y);
   ctx.y += 4;
 }
 
-// ---------------------------------------------------------------------------
-// Empty state box
-// ---------------------------------------------------------------------------
 function drawEmptyState(ctx: DrawCtx, message: string) {
   ensureSpace(ctx, 18);
   const boxH = 14;
@@ -415,17 +354,7 @@ function drawEmptyState(ctx: DrawCtx, message: string) {
   ctx.y += boxH + 4;
 }
 
-// ---------------------------------------------------------------------------
-// Status pill (small inline label)
-// ---------------------------------------------------------------------------
-function drawStatusPill(
-  ctx: DrawCtx,
-  x: number,
-  y: number,
-  label: string,
-  color: [number, number, number],
-  bg: [number, number, number],
-) {
+function drawStatusPill(ctx: DrawCtx, x: number, y: number, label: string, color: [number, number, number], bg: [number, number, number]) {
   ctx.doc.setFontSize(7);
   ctx.doc.setFont('helvetica', 'bold');
   const w = ctx.doc.getTextWidth(label) + 4;
@@ -437,43 +366,42 @@ function drawStatusPill(
   return w;
 }
 
-// ---------------------------------------------------------------------------
-// Individual report
-// ---------------------------------------------------------------------------
-function generateIndividualPDF(insp: typeof HISTORICO_MOCK[0], company: string, unit: string, equipment?: { id: string; tipo?: string; local?: string; setor?: string }) {
-  const doc = new jsPDF();
-  const ctx = makeCtx(doc, insp.id, company, unit);
+function isoToBr(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
 
-  // ---- 1. Cover ----
+function generateIndividualPDF(entry: HistoryEntry, company: string, unit: string, equipment?: Equipment) {
+  const doc = new jsPDF();
+  const ctx = makeCtx(doc, entry.id, company, unit);
+
   drawCover(ctx, {
     reportType: 'Relatório de Inspeção',
-    reportNumber: insp.id,
+    reportNumber: entry.id,
     subtitle: 'Equipamento de Combate a Incêndio',
   });
 
-  // ---- Start content on new page ----
   addPage(ctx);
 
-  // ---- 2. Dados da inspeção ----
   drawSectionHeader(ctx, 1, 'Dados da Inspeção');
   drawKVGrid(ctx, [
-    ['Código / Serial', insp.equipId],
-    ['Inspetor Responsável', insp.inspetor],
-    ['Data da Inspeção', insp.data],
-    ['Nº do Relatório', insp.id],
+    ['Código / Serial', entry.equipId],
+    ['Inspetor Responsável', entry.inspetor],
+    ['Data da Inspeção', entry.data],
+    ['Nº do Relatório', entry.id],
   ], 2);
 
-  // ---- 3. Resumo quantitativo ----
   const items = [
     ['Acesso livre e desobstruído', 'OK'],
     ['Fixado no suporte correto', 'OK'],
-    ['Sinalização visível', insp.status === 'REPROVADO' ? 'REPROVADO' : 'OK'],
+    ['Sinalização visível', entry.status === 'REPROVADO' ? 'REPROVADO' : 'OK'],
     ['Lacre íntegro', 'OK'],
     ['Pino de segurança presente', 'OK'],
-    ['Manômetro na faixa verde', insp.status === 'OBSERVAÇÃO' ? 'N.A.' : 'OK'],
+    ['Manômetro na faixa verde', entry.status === 'OBSERVAÇÃO' ? 'N.A.' : 'OK'],
     ['Mangueira sem danos', 'OK'],
     ['Rótulo legível', 'OK'],
-    ['Carga na validade', insp.status === 'REPROVADO' ? 'REPROVADO' : 'OK'],
+    ['Carga na validade', entry.status === 'REPROVADO' ? 'REPROVADO' : 'OK'],
     ['Cilindro sem corrosão', 'OK'],
   ];
   const totOK = items.filter(([, r]) => r === 'OK').length;
@@ -489,7 +417,6 @@ function generateIndividualPDF(insp: typeof HISTORICO_MOCK[0], company: string, 
     { label: 'Não Aplicáveis', value: String(totNA), color: PDF_COLORS.textMuted, bg: PDF_COLORS.bgAlt },
   ]);
 
-  // Conformity bar
   ensureSpace(ctx, 8);
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setFontSize(7);
@@ -500,34 +427,30 @@ function generateIndividualPDF(insp: typeof HISTORICO_MOCK[0], company: string, 
   ctx.doc.setTextColor(...PDF_COLORS.text);
   ctx.doc.text(`${conformity}%`, PDF_PAGE.w - PDF_MARGIN, ctx.y, { align: 'right' });
   ctx.y += 3;
-  // Bar background
   const barW = PDF_CONTENT_W;
   const barH = 3.5;
   ctx.doc.setFillColor(...PDF_COLORS.bgAlt);
   ctx.doc.roundedRect(PDF_MARGIN, ctx.y, barW, barH, 0.5, 0.5, 'F');
-  // Bar fill
   const barColor = conformity >= 80 ? PDF_COLORS.success : conformity >= 50 ? PDF_COLORS.warning : PDF_COLORS.critical;
   ctx.doc.setFillColor(...barColor);
   ctx.doc.roundedRect(PDF_MARGIN, ctx.y, (barW * conformity) / 100, barH, 0.5, 0.5, 'F');
   ctx.y += barH + 4;
 
-  // ---- 4. Equipamentos avaliados ----
   drawSectionHeader(ctx, 3, 'Equipamentos Avaliados');
   drawTable(
     ctx,
     ['Identificação', 'Tipo', 'Local', 'Setor', 'Status'],
     [[
-      insp.equipId,
+      entry.equipId,
       equipment?.tipo ?? '—',
       equipment?.local ?? '—',
       equipment?.setor ?? '—',
-      { text: insp.status, color: STATUS_COLORS[insp.status], bold: true },
+      { text: entry.status, color: HISTORY_STATUS_COLORS[entry.status], bold: true },
     ]],
     [30, 30, 50, 35, 35],
     { aligns: ['left', 'left', 'left', 'left', 'center'] },
   );
 
-  // ---- 5. Não conformidades ----
   const ncs = items.filter(([, r]) => r !== 'OK');
   drawSectionHeader(ctx, 4, 'Não Conformidades');
   if (ncs.length === 0) {
@@ -546,42 +469,34 @@ function generateIndividualPDF(insp: typeof HISTORICO_MOCK[0], company: string, 
     );
   }
 
-  // ---- 6. Plano de ação ----
   drawSectionHeader(ctx, 5, 'Plano de Ação');
   drawEmptyState(ctx, 'Sem plano de ação vinculado a esta inspeção no momento da emissão.');
 
-  // ---- 7. Evidências fotográficas ----
   drawSectionHeader(ctx, 6, 'Evidências Fotográficas');
   drawEmptyState(ctx, 'Nenhuma evidência fotográfica anexada a este relatório.');
 
-  // ---- 8. Conclusão ----
   drawSectionHeader(ctx, 7, 'Conclusão');
   ensureSpace(ctx, 30);
 
-  // Status callout
   const conclH = 24;
-  const calloutColor = STATUS_COLORS[insp.status];
-  const calloutBg = insp.status === 'APROVADO' ? PDF_COLORS.successLight
-    : insp.status === 'REPROVADO' ? PDF_COLORS.criticalLight
+  const calloutColor = HISTORY_STATUS_COLORS[entry.status];
+  const calloutBg = entry.status === 'APROVADO' ? PDF_COLORS.successLight
+    : entry.status === 'REPROVADO' ? PDF_COLORS.criticalLight
     : PDF_COLORS.warningLight;
   ctx.doc.setFillColor(...calloutBg);
   ctx.doc.setDrawColor(...calloutColor);
   ctx.doc.setLineWidth(0.4);
   ctx.doc.roundedRect(PDF_MARGIN, ctx.y, PDF_CONTENT_W, conclH, 2, 2, 'FD');
-  // Left accent bar
   ctx.doc.setFillColor(...calloutColor);
   ctx.doc.rect(PDF_MARGIN, ctx.y, 1.5, conclH, 'F');
-  // Label
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setFontSize(7);
   ctx.doc.setTextColor(...PDF_COLORS.textMuted);
   ctx.doc.text('PARECER TÉCNICO', PDF_MARGIN + 5, ctx.y + 6);
-  // Status pill
-  drawStatusPill(ctx, PDF_MARGIN + 5, ctx.y + 15, insp.status, calloutColor, PDF_COLORS.white);
-  // Verdict text
-  const verdict = insp.status === 'APROVADO'
+  drawStatusPill(ctx, PDF_MARGIN + 5, ctx.y + 15, entry.status, calloutColor, PDF_COLORS.white);
+  const verdict = entry.status === 'APROVADO'
     ? 'Equipamento em conformidade. Manter plano de manutenção preventiva.'
-    : insp.status === 'REPROVADO'
+    : entry.status === 'REPROVADO'
       ? 'Equipamento reprovado. Acionar equipe de manutenção e abrir plano de ação corretiva.'
       : 'Equipamento com observação. Reinspecionar no próximo ciclo programado.';
   ctx.doc.setFont('helvetica', 'normal');
@@ -591,7 +506,6 @@ function generateIndividualPDF(insp: typeof HISTORICO_MOCK[0], company: string, 
   ctx.doc.text(wrappedVerdict, PDF_MARGIN + 50, ctx.y + 13);
   ctx.y += conclH + 8;
 
-  // Signatures
   ensureSpace(ctx, 28);
   const sigY = ctx.y;
   const sigLineW = 75;
@@ -606,7 +520,7 @@ function generateIndividualPDF(insp: typeof HISTORICO_MOCK[0], company: string, 
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setTextColor(...PDF_COLORS.text);
   ctx.doc.setFontSize(8.5);
-  ctx.doc.text(insp.inspetor, PDF_MARGIN, sigY + 10);
+  ctx.doc.text(entry.inspetor, PDF_MARGIN, sigY + 10);
   ctx.doc.setFont('helvetica', 'normal');
   ctx.doc.setTextColor(...PDF_COLORS.textMuted);
   ctx.doc.setFontSize(7.5);
@@ -617,17 +531,14 @@ function generateIndividualPDF(insp: typeof HISTORICO_MOCK[0], company: string, 
   ctx.doc.text('_______________________', PDF_PAGE.w - PDF_MARGIN - sigLineW, sigY + 10);
   ctx.y = sigY + 16;
 
-  // Final footer (only on last page)
   drawFooter(ctx);
-  doc.save(`relatorio_${insp.equipId}_${insp.id}.pdf`);
+  doc.save(`relatorio_${entry.equipId}_${entry.id}.pdf`);
 }
 
-// ---------------------------------------------------------------------------
-// Monthly report
-// ---------------------------------------------------------------------------
 function generateMonthlyPDF(
-  stats: ReturnType<typeof useAppStore.getState>['stats'],
-  inspections: ReturnType<typeof useAppStore.getState>['inspections'],
+  stats: Stats,
+  inspections: Inspection[],
+  equipments: Equipment[],
   company: string,
   unit: string,
 ) {
@@ -636,7 +547,6 @@ function generateMonthlyPDF(
   const now = new Date();
   const mes = now.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 
-  // ---- 1. Cover ----
   drawCover(ctx, {
     reportType: 'Relatório Mensal de Conformidade',
     reportNumber: `MENSAL-${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`,
@@ -644,10 +554,8 @@ function generateMonthlyPDF(
     period: mes.charAt(0).toUpperCase() + mes.slice(1),
   });
 
-  // ---- Start content on new page ----
   addPage(ctx);
 
-  // ---- 2. Dados da inspeção (do relatório) ----
   drawSectionHeader(ctx, 1, 'Dados do Relatório');
   drawKVGrid(ctx, [
     ['Período de Referência', mes.charAt(0).toUpperCase() + mes.slice(1)],
@@ -656,7 +564,6 @@ function generateMonthlyPDF(
     ['Emitido por', 'FireCheck — Sistema de Inspeção'],
   ], 2);
 
-  // ---- 3. Resumo quantitativo ----
   drawSectionHeader(ctx, 2, 'Resumo Quantitativo');
   drawStatCards(ctx, [
     { label: 'Total de Equipamentos', value: String(stats.total), color: PDF_COLORS.text, bg: PDF_COLORS.bgLight },
@@ -665,7 +572,6 @@ function generateMonthlyPDF(
     { label: 'Vencidos', value: String(stats.vencidos), color: PDF_COLORS.critical, bg: PDF_COLORS.criticalLight },
   ]);
 
-  // Conformity bar
   ensureSpace(ctx, 8);
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setFontSize(7);
@@ -685,70 +591,49 @@ function generateMonthlyPDF(
   ctx.doc.roundedRect(PDF_MARGIN, ctx.y, (barW * stats.conformidade) / 100, barH, 0.5, 0.5, 'F');
   ctx.y += barH + 4;
 
-  // ---- 4. Equipamentos avaliados ----
   drawSectionHeader(ctx, 3, 'Equipamentos Avaliados');
   drawTable(
     ctx,
     ['Status', 'Quantidade', '% do Total', 'Tendência'],
     [
-      [
-        { text: 'Em Dia', color: PDF_COLORS.success, bold: true },
-        String(stats.emDia),
-        `${stats.total ? Math.round((stats.emDia / stats.total) * 100) : 0}%`,
-        { text: 'Estável', color: PDF_COLORS.textMuted },
-      ],
-      [
-        { text: 'Pendentes', color: PDF_COLORS.warning, bold: true },
-        String(stats.pendentes),
-        `${stats.total ? Math.round((stats.pendentes / stats.total) * 100) : 0}%`,
-        { text: 'Atenção', color: PDF_COLORS.warning },
-      ],
-      [
-        { text: 'Vencidos', color: PDF_COLORS.critical, bold: true },
-        String(stats.vencidos),
-        `${stats.total ? Math.round((stats.vencidos / stats.total) * 100) : 0}%`,
-        { text: 'Crítico', color: PDF_COLORS.critical },
-      ],
-      [
-        { text: 'TOTAL', color: PDF_COLORS.text, bold: true },
-        String(stats.total),
-        '100%',
-        '—',
-      ],
+      [{ text: 'Em Dia', color: PDF_COLORS.success, bold: true }, String(stats.emDia), `${stats.total ? Math.round((stats.emDia / stats.total) * 100) : 0}%`, { text: 'Estável', color: PDF_COLORS.textMuted }],
+      [{ text: 'Pendentes', color: PDF_COLORS.warning, bold: true }, String(stats.pendentes), `${stats.total ? Math.round((stats.pendentes / stats.total) * 100) : 0}%`, { text: 'Atenção', color: PDF_COLORS.warning }],
+      [{ text: 'Vencidos', color: PDF_COLORS.critical, bold: true }, String(stats.vencidos), `${stats.total ? Math.round((stats.vencidos / stats.total) * 100) : 0}%`, { text: 'Crítico', color: PDF_COLORS.critical }],
+      [{ text: 'TOTAL', color: PDF_COLORS.text, bold: true }, String(stats.total), '100%', '—'],
     ],
     [50, 40, 40, 50],
     { aligns: ['left', 'center', 'center', 'center'] },
   );
 
-  // ---- 5. Não conformidades ----
-  const setores = [
-    ['TI', 12, 2, 'CRÍTICO'],
-    ['Estacionamento', 8, 1, 'ATENÇÃO'],
-    ['Administrativo', 25, 0, 'OK'],
-    ['Comercial', 18, 1, 'ATENÇÃO'],
-    ['Circulação', 22, 2, 'CRÍTICO'],
-  ] as const;
+  const setorMap = new Map<string, { total: number; reprovados: number }>();
+  for (const eq of equipments) {
+    const s = eq.setor || 'Sem setor';
+    if (!setorMap.has(s)) setorMap.set(s, { total: 0, reprovados: 0 });
+    const entry = setorMap.get(s)!;
+    entry.total++;
+    if (eq.status === 'vencido' || eq.status === 'pendente') entry.reprovados++;
+  }
 
   drawSectionHeader(ctx, 4, 'Não Conformidades por Setor');
-  drawTable(
-    ctx,
-    ['Setor', 'Equipamentos', 'Reprovados', 'Índice', 'Status'],
-    setores.map(([setor, total, rep, status]) => {
-      const idx = total ? Math.round(((total - rep) / total) * 100) : 0;
-      const statusColor = status === 'CRÍTICO' ? PDF_COLORS.critical : status === 'ATENÇÃO' ? PDF_COLORS.warning : PDF_COLORS.success;
-      return [
-        setor,
-        String(total),
-        { text: String(rep), color: rep > 0 ? PDF_COLORS.critical : PDF_COLORS.text, bold: rep > 0 },
-        `${idx}%`,
-        { text: status, color: statusColor, bold: true },
-      ];
-    }),
-    [50, 35, 30, 25, 40],
-    { aligns: ['left', 'center', 'center', 'center', 'center'] },
-  );
+  if (setorMap.size === 0) {
+    drawEmptyState(ctx, 'Nenhum equipamento cadastrado para análise por setor.');
+  } else {
+    const setoresRows = Array.from(setorMap.entries()).map(([setor, { total, reprovados }]) => {
+      const idx = total ? Math.round(((total - reprovados) / total) * 100) : 0;
+      const pctRepro = total ? Math.round((reprovados / total) * 100) : 0;
+      const statusLabel = pctRepro >= 30 ? 'CRÍTICO' : pctRepro > 0 ? 'ATENÇÃO' : 'OK';
+      const statusColor = statusLabel === 'CRÍTICO' ? PDF_COLORS.critical : statusLabel === 'ATENÇÃO' ? PDF_COLORS.warning : PDF_COLORS.success;
+      return [setor, String(total), { text: String(reprovados), color: reprovados > 0 ? PDF_COLORS.critical : PDF_COLORS.text, bold: reprovados > 0 }, `${idx}%`, { text: statusLabel, color: statusColor, bold: true }];
+    });
+    drawTable(
+      ctx,
+      ['Setor', 'Equipamentos', 'Reprovados', 'Índice', 'Status'],
+      setoresRows,
+      [50, 35, 30, 25, 40],
+      { aligns: ['left', 'center', 'center', 'center', 'center'] },
+    );
+  }
 
-  // ---- 6. Plano de ação ----
   drawSectionHeader(ctx, 5, 'Plano de Ação');
   const pends = inspections.filter(i => i.status === 'vencido' || i.status === 'pendente');
   if (pends.length === 0) {
@@ -772,11 +657,9 @@ function generateMonthlyPDF(
     );
   }
 
-  // ---- 7. Evidências fotográficas ----
   drawSectionHeader(ctx, 6, 'Evidências Fotográficas');
   drawEmptyState(ctx, 'Nenhuma evidência fotográfica agregada no relatório mensal.');
 
-  // ---- 8. Conclusão ----
   drawSectionHeader(ctx, 7, 'Conclusão');
   ensureSpace(ctx, 36);
 
@@ -808,7 +691,6 @@ function generateMonthlyPDF(
   ctx.doc.text(wrapped, PDF_MARGIN + 55, ctx.y + 14);
   ctx.y += conclH + 6;
 
-  // Recommendations block
   ensureSpace(ctx, 24);
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setFontSize(8);
@@ -830,22 +712,8 @@ function generateMonthlyPDF(
     ctx.y += wrapped.length * 4 + 1;
   });
 
-  // Final footer
   drawFooter(ctx);
   doc.save(`relatorio_mensal_${now.getMonth() + 1}_${now.getFullYear()}.pdf`);
-}
-
-const STATUS_BADGE: Record<HistoricoStatus, string> = {
-  'APROVADO': 'bg-green-100 text-[#16A34A]',
-  'OBSERVAÇÃO': 'bg-amber-100 text-[#D97706]',
-  'REPROVADO': 'bg-red-100 text-[#DC2626]',
-};
-
-function isoToBr(iso: string): string {
-  // YYYY-MM-DD -> DD/MM/YYYY
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-  if (!m) return iso;
-  return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
 export default function Relatorios() {
@@ -854,23 +722,42 @@ export default function Relatorios() {
 
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'Todos' | HistoricoStatus>('Todos');
+  const [statusFilter, setStatusFilter] = useState<HistoryStatus | 'Todos'>('Todos');
   const [visibleCount, setVisibleCount] = useState(4);
 
+  const history = useMemo(() => {
+    return inspections.map(i => ({
+      id: i.id,
+      data: isoToBr(i.data),
+      dataISO: i.data,
+      inspetor: i.inspetor,
+      equipId: i.equipmentId,
+      status: STATUS_MAP[i.status] ?? 'PENDENTE' as HistoryStatus,
+      observacoes: i.observacoes,
+    }));
+  }, [inspections]);
+
   const filtered = useMemo(() => {
-    const dateBr = isoToBr(dateFilter);
-    return HISTORICO_MOCK.filter(h => {
+    return history.filter(h => {
       const term = search.toLowerCase();
       const matchSearch = !term ||
         h.inspetor.toLowerCase().includes(term) ||
-        h.equipId.toLowerCase().includes(term);
-      const matchDate = !dateFilter || h.data === dateBr;
+        h.equipId.toLowerCase().includes(term) ||
+        (h.observacoes && h.observacoes.toLowerCase().includes(term));
+      const matchDate = !dateFilter || h.dataISO === dateFilter;
       const matchStatus = statusFilter === 'Todos' || h.status === statusFilter;
       return matchSearch && matchDate && matchStatus;
     });
-  }, [search, dateFilter, statusFilter]);
+  }, [history, search, dateFilter, statusFilter]);
 
   const visible = filtered.slice(0, visibleCount);
+
+  const totalInspecoes = inspections.length;
+  const conformesCount = equipments.filter(e => e.status === 'regular' || e.status === 'observacao').length;
+  const pendentesCriticos = equipments.filter(e => e.status === 'vencido').length;
+  const conformidadePct = equipments.length > 0
+    ? Math.round((conformesCount / equipments.length) * 100)
+    : 0;
 
   const clearFilters = () => {
     setSearch('');
@@ -880,7 +767,7 @@ export default function Relatorios() {
 
   const hasActiveFilters = !!search || !!dateFilter || statusFilter !== 'Todos';
 
-  const handleIndividualPDF = (h: typeof HISTORICO_MOCK[0]) => {
+  const handleIndividualPDF = (h: HistoryEntry) => {
     const eq = equipments.find(e => e.id === h.equipId);
     generateIndividualPDF(h, config.empresa, config.unidade, eq);
   };
@@ -896,53 +783,58 @@ export default function Relatorios() {
           </h1>
         </div>
         <button
-          onClick={() => generateMonthlyPDF(stats, inspections, config.empresa, config.unidade)}
+          onClick={() => generateMonthlyPDF(stats, inspections, equipments, config.empresa, config.unidade)}
           className="btn-primary btn-sm btn-auto"
+          type="button"
         >
           <FileText className="w-4 h-4" />
           <span className="hidden sm:inline">Relatório</span> Mensal
         </button>
       </header>
 
-      {/* 3 Indicator Cards — 1 col mobile, 3 col on lg */}
+      {/* 3 Indicator Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-        <div className="card-subtle bg-white flex items-center gap-4">
-          <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center flex-shrink-0">
-            <ClipboardList className="w-6 h-6 text-blue-600" />
+        <div className="card-subtle bg-white flex items-center gap-3 sm:gap-4">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 bg-blue-50 rounded-xl flex items-center justify-center flex-shrink-0">
+            <ClipboardList className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold uppercase text-gray-400 tracking-wider">Inspeções Totais</div>
-            <div className="text-2xl font-black text-gray-900">128</div>
+            <div className="text-[10px] sm:text-xs font-bold uppercase text-gray-400 tracking-wider">Inspeções Totais</div>
+            <div className="text-xl sm:text-2xl font-black text-gray-900">{totalInspecoes}</div>
           </div>
-          <div className="flex items-center gap-1 text-[10px] font-black text-success bg-green-50 px-2 py-1 rounded-full uppercase flex-shrink-0">
-            <TrendingUp className="w-3 h-3" />
-            +12%
-          </div>
+          {totalInspecoes > 0 && (
+            <div className="text-[10px] font-black text-gray-500 bg-gray-100 px-2 py-1 rounded-full flex-shrink-0">
+              {totalInspecoes}
+            </div>
+          )}
         </div>
 
-        <div className="card-subtle bg-white flex items-center gap-4">
-          <div className="w-12 h-12 bg-green-50 rounded-xl flex items-center justify-center flex-shrink-0">
-            <ShieldCheck className="w-6 h-6 text-success" />
+        <div className="card-subtle bg-white flex items-center gap-3 sm:gap-4">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 bg-green-50 rounded-xl flex items-center justify-center flex-shrink-0">
+            <ShieldCheck className="w-5 h-5 sm:w-6 sm:h-6 text-success" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold uppercase text-gray-400 tracking-wider">Equipamentos Conformes</div>
-            <div className="text-2xl font-black text-success">114</div>
+            <div className="text-[10px] sm:text-xs font-bold uppercase text-gray-400 tracking-wider">Equipamentos Conformes</div>
+            <div className="text-xl sm:text-2xl font-black text-success">{conformesCount}</div>
           </div>
-          <div className="text-[10px] font-black text-gray-500 bg-gray-100 px-2 py-1 rounded-full flex-shrink-0">89%</div>
+          <div className="text-[10px] font-black text-gray-500 bg-gray-100 px-2 py-1 rounded-full flex-shrink-0">{conformidadePct}%</div>
         </div>
 
-        <div className="card-subtle bg-white flex items-center gap-4 sm:col-span-2 lg:col-span-1">
-          <div className="w-12 h-12 bg-red-50 rounded-xl flex items-center justify-center flex-shrink-0">
-            <AlertOctagon className="w-6 h-6 text-critical" />
+        <div className="card-subtle bg-white flex items-center gap-3 sm:gap-4 sm:col-span-2 lg:col-span-1">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 bg-red-50 rounded-xl flex items-center justify-center flex-shrink-0">
+            <AlertOctagon className="w-5 h-5 sm:w-6 sm:h-6 text-critical" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold uppercase text-gray-400 tracking-wider">Pendências Críticas</div>
-            <div className="text-2xl font-black text-critical">06</div>
-            <div className="text-[10px] text-critical font-bold uppercase">Requer ação imediata</div>
+            <div className="text-[10px] sm:text-xs font-bold uppercase text-gray-400 tracking-wider">Pendências Críticas</div>
+            <div className="text-xl sm:text-2xl font-black text-critical">{pendentesCriticos}</div>
+            {pendentesCriticos > 0 && (
+              <div className="text-[9px] sm:text-[10px] text-critical font-bold uppercase">Requer ação imediata</div>
+            )}
           </div>
           <button
             onClick={() => navigate('/planodeacao')}
             className="text-[10px] font-black text-critical border border-red-200 px-2 py-1.5 rounded-lg hover:bg-red-50 uppercase tracking-wider min-h-0 min-w-0 flex-shrink-0"
+            type="button"
           >
             Ver Plano
           </button>
@@ -958,7 +850,7 @@ export default function Relatorios() {
               <button
                 type="button"
                 onClick={clearFilters}
-                className="text-[11px] font-bold uppercase tracking-wider text-critical hover:underline"
+                className="text-[11px] font-bold uppercase tracking-wider text-critical hover:underline min-h-0 min-w-0"
               >
                 Limpar
               </button>
@@ -969,7 +861,7 @@ export default function Relatorios() {
             <input
               id="report-search"
               type="text"
-              placeholder="Serial ou inspetor..."
+              placeholder="Serial, inspetor ou observação..."
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="field-input"
@@ -988,7 +880,7 @@ export default function Relatorios() {
           <div>
             <label className="field-label">Status</label>
             <div className="flex gap-1.5 flex-wrap">
-              {(['Todos', 'APROVADO', 'OBSERVAÇÃO', 'REPROVADO'] as const).map(s => {
+              {(['Todos', 'APROVADO', 'OBSERVAÇÃO', 'REPROVADO', 'PENDENTE'] as const).map(s => {
                 const isActive = statusFilter === s;
                 return (
                   <button
@@ -1021,7 +913,7 @@ export default function Relatorios() {
               <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto">
                 <ClipboardList className="w-6 h-6 text-gray-400" />
               </div>
-              <p className="text-sm font-bold text-gray-500">Nenhum registro encontrado</p>
+              <p className="text-sm font-bold text-gray-500 uppercase tracking-wider">Nenhum registro encontrado</p>
               <p className="text-xs text-gray-400">Ajuste os filtros para ver mais resultados.</p>
             </div>
           )}
@@ -1031,7 +923,7 @@ export default function Relatorios() {
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-black text-gray-900">{h.equipId}</span>
-                  <span className={`pill ${STATUS_BADGE[h.status]}`}>{h.status}</span>
+                  <span className={`pill ${HISTORY_STATUS_BADGE[h.status]}`}>{h.status}</span>
                 </div>
                 <div className="text-xs text-gray-500 font-semibold">{h.data} · {h.inspetor}</div>
               </div>
@@ -1040,6 +932,7 @@ export default function Relatorios() {
                 className="w-10 h-10 flex items-center justify-center bg-gray-50 border border-gray-100 hover:bg-red-50 hover:border-primary rounded-lg transition-all min-h-0 min-w-0"
                 title="Gerar PDF"
                 aria-label="Gerar PDF do relatório"
+                type="button"
               >
                 <FileText className="w-4 h-4 text-gray-500" />
               </button>
@@ -1049,7 +942,8 @@ export default function Relatorios() {
           {visible.length < filtered.length && (
             <button
               onClick={() => setVisibleCount(c => c + 4)}
-              className="w-full h-12 border-2 border-dashed border-gray-200 rounded-xl font-bold text-xs uppercase tracking-wider text-gray-400 hover:border-primary hover:text-primary transition-all flex items-center justify-center gap-2"
+              className="w-full h-12 border-2 border-dashed border-gray-200 rounded-xl font-bold text-xs uppercase tracking-wider text-gray-400 hover:border-primary hover:text-primary transition-all flex items-center justify-center gap-2 min-h-0"
+              type="button"
             >
               <ChevronDown className="w-4 h-4" />
               Carregar mais registros
