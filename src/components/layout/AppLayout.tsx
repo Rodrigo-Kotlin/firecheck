@@ -308,7 +308,9 @@ export default function AppLayout() {
     ? user.nome.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase()
     : 'FC';
 
-  const currentTitle = tabs.find(t => t.id === currentTab)?.label ?? 'FireCheck';
+  const currentTitle = location.pathname === '/planodeacao'
+    ? 'Plano de Ação'
+    : (tabs.find(t => t.id === currentTab)?.label ?? 'FireCheck');
 
   if (!authReady) {
     return (
