@@ -11,6 +11,7 @@ import NovoEquipamento from './pages/equipamentos/NovoEquipamento';
 import DetalhesEquipamento from './pages/equipamentos/DetalhesEquipamento';
 import Inspecionar from './pages/inspecionar/Inspecionar';
 import ScanQr from './pages/scan/ScanQr';
+import QrCodes from './pages/qrcodes/QrCodes';
 import PlanoDeAcao from './pages/planodeacao/PlanoDeAcao';
 import Configuracoes from './pages/configuracoes/Configuracoes';
 import AdminUsuarios from './pages/admin/AdminUsuarios';
@@ -77,6 +78,7 @@ export default function App() {
               </Suspense>
             }
           />
+          <Route path="qrcodes" element={<QrCodes />} />
           <Route path="planodeacao" element={<PlanoDeAcao />} />
           <Route path="configuracoes" element={<Configuracoes />} />
           <Route path="admin/usuarios" element={<AdminUsuarios />} />

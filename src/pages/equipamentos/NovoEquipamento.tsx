@@ -284,6 +284,8 @@ export default function NovoEquipamento() {
     }
     setDuplicateError('');
 
+    data.qrcode = data.qrcode || data.id;
+
     const newEquipment: Equipment = {
       id: data.id,
       tipo: data.tipo,

@@ -1,7 +1,7 @@
 # FireCheck — Contexto do Projeto para IAs
 
 > Documento de referência. Leia antes de sugerir mudanças.
-> Última atualização: 2026-06-07 · auth migrado para Supabase Auth + recovery OTP.
+> Última atualização: 2026-06-09 · QR Codes gerenciados, código morto removido.
 
 ---
 
@@ -74,7 +74,6 @@ firecheck/
 │   │   ├── inspectionService.ts         # CRUD cloud inspeções
 │   │   ├── actionPlanService.ts         # CRUD cloud planos de ação
 │   │   ├── photoService.ts              # upload fotos
-│   │   ├── inspectorService.ts          # CRUD cloud inspetores
 │   │   ├── mappers.ts                   # snake_case (db) ⇄ camelCase (app)
 │   │   └── sync.ts                      # orquestrador push/pull
 │   ├── store/
@@ -99,6 +98,7 @@ firecheck/
 │       │   ├── Equipamentos.tsx         # grid + busca + chips
 │       │   ├── NovoEquipamento.tsx      # form + RHF + zod
 │       │   └── DetalhesEquipamento.tsx
+│       ├── qrcodes/QrCodes.tsx          # busca, seleção, impressão lote A4
 │       ├── inspecionar/Inspecionar.tsx  # scanner + checklist + foto
 │       ├── scan/ScanQr.tsx              # html5-qrcode
 │       ├── relatorios/Relatorios.tsx    # PDF (jsPDF + html2canvas)
@@ -117,44 +117,9 @@ firecheck/
 ## 4. Modelo de domínio (`src/types/index.ts`)
 
 ```ts
-type EquipmentStatus = 'regular' | 'pendente' | 'vencido' | 'observacao';
+type EquipmentStatus = 'regular' | 'pendente' | 'vencido' | 'observacao' | 'em_manutencao' | 'inativo' | 'substituido' | 'extraviado';
 type ActionPlanStatus = 'Aberta' | 'Em andamento' | 'Concluída' | 'Vencida';
 type Criticidade = 'Crítico' | 'Alto' | 'Médio' | 'Baixo';
-type UserRole = 'admin' | 'inspector';
-
-interface Equipment {
-  id: string;                  // ex.: "EXT-001"
-  tipo: 'Extintor' | 'Hidrante' | 'Alarme' | 'Iluminação' | string;
-  subtipo?: string;
-  local: string;               // sala/corredor/etc
-  setor: string;               // bloco/pavimento
-  pavimento?: string;
-  fabricante?: string;
-  numSerie?: string;
-  capacidade?: string;
-  tipoCarga?: string;
-  dataFabricacao?: string;     // ISO date
-  dataUltimaManutencao?: string;
-  dataProximaManutencao?: string;
-  dataProximaInspecao?: string;
-  status: EquipmentStatus;
-  qrCode?: string;             // geralmente = id
-  fotoUrl?: string;            // storage path
-  observacoes?: string;
-  createdBy?: string;          // <-- userId (RBAC)
-}
-
-interface Inspection {
-  id: string;
-  equipmentId: string;
-  data: string;                // ISO date
-  inspetor: string;            // nome
-  status: EquipmentStatus;
-  observacoes?: string;
-  checklist?: Record<string, 'ok' | 'atencao' | 'falha' | 'na'>;
-  sincronizado?: boolean;      // flag sync
-  userId?: string;             // <-- userId (RBAC)
-}
 
 interface ActionPlan {
   id: string;
@@ -163,35 +128,174 @@ interface ActionPlan {
   descricao: string;
   criticidade: Criticidade;
   responsavel: string;
-  prazo?: string;
+  prazo: string;
   status: ActionPlanStatus;
-  userId?: string;             // <-- userId (RBAC)
+  createdAt: string;
+  userId?: string;
+}
+
+interface AppConfig {
+  empresa: string;
+  unidade: string;
+  offlineMode: boolean;
+  notificationsEnabled: boolean;
+}
+
+interface Equipment {
+  id: string;
+  tipo: string;
+  subtipo?: string;
+  local: string;
+  setor: string;
+  status: EquipmentStatus;
+  pavimento?: string;
+  fabricante?: string;
+  numSerie?: string;
+  capacidade?: string;
+  tipoCarga?: string;
+  modeloExtintor?: string;
+  classeFogo?: string;
+  seloLacre?: string;
+  manometro?: string;
+  suporte?: string;
+  sinalizacao?: string;
+  acessoDesobstruido?: string;
+  estadoGeral?: string;
+  tipoHidrante?: string;
+  tipoAbrigoVinculado?: string;
+  registro?: string;
+  valvula?: string;
+  adaptador?: string;
+  tampao?: string;
+  pressao?: string;
+  tipoMangueira?: string;
+  diametro?: string;
+  comprimento?: string;
+  tipoUniao?: string;
+  estadoMangueira?: string;
+  acondicionamento?: string;
+  possuiEtiquetaInspecao?: string;
+  tipoAbrigo?: string;
+  material?: string;
+  estadoPorta?: string;
+  estadoVisor?: string;
+  possuiMangueira?: string;
+  possuiEsguicho?: string;
+  possuiChaveStorz?: string;
+  possuiRegistro?: string;
+  tipoEsguicho?: string;
+  estadoRoscas?: string;
+  estadoVedacao?: string;
+  compatibilidadeMangueira?: string;
+  localAcondicionamento?: string;
+  tipoChaveStorz?: string;
+  diametroCompativel?: string;
+  estadoFisico?: string;
+  tipoAcionador?: string;
+  enderecoZona?: string;
+  estadoTampa?: string;
+  estadoBotao?: string;
+  alturaInstalacao?: string;
+  funcionamentoTestado?: string;
+  tipoAlarme?: string;
+  sireneAudiovisual?: string;
+  sireneSonora?: string;
+  sinalizadorVisual?: string;
+  zonaLaco?: string;
+  fonteAlimentacao?: string;
+  tipoCentral?: string;
+  quantidadeLacosZonas?: string;
+  bateriaBackup?: string;
+  comunicacaoDispositivos?: string;
+  statusPainel?: string;
+  localInstalacao?: string;
+  modeloIluminacao?: string;
+  funcaoIluminacao?: string;
+  autonomia?: string;
+  tipoInstalacao?: string;
+  potencia?: string;
+  tipoSinalizacao?: string;
+  codigoPlaca?: string;
+  fotoluminescente?: string;
+  visibilidade?: string;
+  estadoConservacao?: string;
+  fixacaoAdequada?: string;
+  tipoSprinkler?: string;
+  temperaturaAcionamento?: string;
+  posicaoInstalacao?: string;
+  estadoBulbo?: string;
+  obstrucao?: string;
+  corrosao?: string;
+  vazamento?: string;
+  areaProtegida?: string;
+  tipoBomba?: string;
+  vazao?: string;
+  alimentacaoEletrica?: string;
+  painelComando?: string;
+  bombaJockey?: string;
+  bombaPrincipal?: string;
+  bombaReserva?: string;
+  tipoPorta?: string;
+  tempoResistenciaFogo?: string;
+  barraAntipanico?: string;
+  dobradicas?: string;
+  molaAerea?: string;
+  fechamentoAutomatico?: string;
+  vedacao?: string;
+  tipoDetectorFumaca?: string;
+  tipoDetectorCalor?: string;
+  nomeModelo?: string;
+  descricaoTecnica?: string;
+  dataFabricacao?: string;
+  dataUltimaManutencao?: string;
+  dataProximaManutencao?: string;
+  dataUltimoTeste?: string;
+  dataProximoTeste?: string;
+  dataTesteHidrostatico?: string;
+  dataValidadeTeste?: string;
+  dataProximaInspecao?: string;
+  dataUltimaInspecao?: string;
+  qrcode?: string;
+  fotoUrl?: string;
+  observacoes?: string;
+  createdBy?: string;
+}
+
+interface Inspection {
+  id: string;
+  equipmentId: string;
+  data: string;
+  inspetor: string;
+  status: EquipmentStatus;
+  observacoes?: string;
+  userId?: string;
 }
 
 interface Inspector {
   id: string;
   nome: string;
   cargo: string;
-  role?: UserRole;             // <-- RBAC
+  role: 'admin' | 'inspector';
 }
 
 interface UserProfile {
-  id: string;                  // UUID do auth.users (1:1)
-  email: string;               // único no Supabase
+  id: string;
+  email: string;
   nome: string;
   cargo: string;
-  role: UserRole;              // 'admin' | 'inspector'
-  createdAt: string;           // ISO timestamptz do Supabase
+  role: 'admin' | 'inspector';
+  createdAt: string;
   updatedAt: string;
 }
 
-// Tipo público usado na lista de usuários (igual a UserProfile hoje)
 type PublicUser = UserProfile;
 
-interface AppConfig {
-  empresa: { nome: string; cnpj?: string; endereco?: string };
-  preferencias: { modoOffline: boolean; notificacoes: boolean };
-  online: boolean;
+interface Stats {
+  total: number;
+  emDia: number;
+  pendentes: number;
+  vencidos: number;
+  conformidade: number;
 }
 ```
 
@@ -346,20 +450,22 @@ Zustand com `persist` (localStorage) em **versão 2** (a primeira v1 carregava `
 
 | Ação | Comportamento |
 |---|---|
-| `init()` | Carrega equipamentos/inspeções do Dexie + perfis do Supabase → store. Resolve sessão. |
+| `hydrate()` | Carrega equipamentos/inspeções do Dexie + perfis do Supabase → store. Resolve sessão. Auto-limpa seed data legado. |
 | `login(email, pwd)` | Async. Chama `authService.loginUser` (Supabase signInWithPassword). |
 | `register({...})` | Async. Trigger no Supabase cria o profile. Primeiro vira admin. |
 | `logout()` | `supabase.auth.signOut()`. Não limpa dados. |
 | `loadUsers()` | Recarrega `users: PublicUser[]` do Supabase. |
 | `setUserRole(id, role)` | Persiste + reload. Impede self-demote (checado no `AdminUsuarios.tsx`). |
 | `deleteUserAccount(id)` | Chama RPC `admin_delete_user`. Impede self-delete. Recarrega lista. |
-| `addEquipment(eq)` | Estampa `createdBy: get().user.id`. |
-| `addInspection(ins)` | Estampa `userId`. |
-| `addActionPlan(p)` | Estampa `userId`. |
-| `syncNow()` | `void syncAll()` (fire-and-forget, nunca joga erro). |
-| `setModoOffline / setNotificacoes` | Atualiza `config.preferencias` + `online`. |
-| `saveEmpresaConfig / setConfig` | Persistência de empresa. |
-| `showToast / dismissToast / clearToasts` | Wrappers do hook. |
+| `addEquipment(eq)` | Estampa `createdBy: get().user.id`. Persiste no Dexie. Dispara sync. |
+| `deleteEquipment(id)` | Remove do estado + Dexie + cascata inspeções/fotos. Dispara sync. |
+| `addInspection(ins)` | Estampa `userId`. Gera ID incremental `INSP-NNN`. Atualiza status do equipamento. Cria PA automaticamente se `vencido`/`pendente`. Dispara sync. |
+| `addActionPlan(p)` | Gera `id: "PAC-{timestamp}"` + `createdAt` + `status: "Aberta"`. Dispara sync. |
+| `updateActionPlan(id, updates)` | Atualiza parcial + marca `sincronizado: false`. Dispara sync. |
+| `deleteActionPlan(id)` | Remove do estado + Dexie. Dispara sync. |
+| `triggerSync()` | `void syncAll()` (fire-and-forget, nunca joga erro). |
+| `refreshPendingCount()` | Soma pendências cloud + action plans não sincronizados. |
+| `updateConfig(updates)` | Merge parcial no `AppConfig`. |
 
 ### Subscrição ao Supabase Auth
 
@@ -398,12 +504,9 @@ db.version(4)
 
 > Tabelas mutáveis carregam `sincronizado: boolean`. Itens marcados `pendingDelete: true` são removidos do Dexie após DELETE no Supabase.
 
-### Seed
+### Seed removida
 
-`db.ts:118` faz `if (equipamentos.count() === 0) seedFromMock(...)` com:
-- 5 equipamentos: `EXT-001`, `HID-042`, `EXT-109`, `ALM-005`, `ILU-018`
-- 3 inspetores: `inspector` (Ana Souza, Bruno Lima, Carla Mendes)
-- Stats: 150 total, 132 em dia, 12 pendentes, 6 vencidos, 88% conformidade
+O seed automático com dados mock foi removido. Na primeira carga o `hydrate()` verifica se existem equipamentos com IDs do seed antigo (`EXT-001`, `HID-042`, etc.) e, em caso positivo, limpa todo o banco local + nuvem para evitar dados obsoletos. O app começa vazio.
 
 ---
 
@@ -463,13 +566,14 @@ Sidebar (`AppLayout.tsx`) tem botão "Sincronizar agora" que chama `syncNow()`. 
     <Route path="equipamentos/:id" element={<DetalhesEquipamento />} />
     <Route path="inspecionar/:id" element={<Inspecionar />} />
     <Route path="scan" element={<ScanQr />} />
+    <Route path="qrcodes" element={<QrCodes />} />
     <Route path="relatorios" element={<Relatorios />} />
     <Route path="planodeacao" element={<PlanoDeAcao />} />
     <Route path="configuracoes" element={<Configuracoes />} />
     <Route path="admin/usuarios" element={<AdminUsuarios />} />  {/* admin only */}
   </Route>
 
-  <Route path="*" element={<NotFound />} />
+  <Route path="*" element={<Navigate to="/" replace />} />
 </Routes>
 ```
 
@@ -911,8 +1015,7 @@ Escopos comuns: `auth`, `ui`, `pwa`, `equipamentos`, `inspecoes`, `plano-acao`, 
 3. Adicionar input em `src/pages/equipamentos/DetalhesEquipamento.tsx` (se editável inline).
 4. Adicionar coluna em `supabase/migrations/000X_add_*.sql` (criar nova migration, nunca editar 0001).
 5. Adicionar mapeamento em `src/services/mappers.ts::equipmentToDb / dbToEquipment`.
-6. Atualizar mock em `src/data/mock.ts` (se aplicável).
-7. Limpar cache do browser antes de testar (Dexie v3 → v4 bump se a coluna é indexada).
+6. Limpar cache do browser antes de testar (Dexie v3 → v4 bump se a coluna é indexada).
 
 ### Adicionar um novo papel (ex.: "supervisor")
 
@@ -990,4 +1093,4 @@ Em vez de inventar, **pergunte** se:
 
 ## 23. Resumo de uma linha
 
-> **FireCheck** = React 19 + Dexie + Zustand PWA offline-first para inspeção de extintores/hidrantes/alarmes, com Supabase Auth (senha + recovery OTP por e-mail), RBAC admin/inspector (ownership-based), perfis em `public.profiles` com RLS, sync bidirecional opcional com Supabase, UI em PT-BR, design system próprio em `index.css`, e deploy em GitHub Pages.
+> **FireCheck** = React 19 + Dexie + Zustand PWA offline-first para inspeção de extintores/hidrantes/alarmes, com Supabase Auth (senha + recovery OTP por e-mail), RBAC admin/inspector (ownership-based), perfis em `public.profiles` com RLS, sync bidirecional opcional com Supabase, gerenciamento de QR Codes com impressão em lote, UI em PT-BR, design system próprio em `index.css`, e deploy em GitHub Pages.

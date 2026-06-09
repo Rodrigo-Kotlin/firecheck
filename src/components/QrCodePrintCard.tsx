@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import { Printer, X, ShieldCheck } from 'lucide-react';
+import { Printer, X, ShieldCheck, Download } from 'lucide-react';
 import type { Equipment } from '../types';
 
 interface QrCodePrintCardProps {
@@ -44,6 +44,14 @@ export default function QrCodePrintCard({ equipment, onClose }: QrCodePrintCardP
     window.print();
   };
 
+  const handleDownload = () => {
+    if (!qrDataUrl) return;
+    const a = document.createElement('a');
+    a.href = qrDataUrl;
+    a.download = `QR-${equipment.id}.png`;
+    a.click();
+  };
+
   return (
     <div className="space-y-4 sm:space-y-6">
       {/* Confirmation banner — hidden on print */}
@@ -69,6 +77,15 @@ export default function QrCodePrintCard({ equipment, onClose }: QrCodePrintCardP
         >
           <Printer className="w-5 h-5" />
           Imprimir QR Code
+        </button>
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={!qrDataUrl}
+          className="btn-ghost btn-auto flex-1 disabled:opacity-50"
+        >
+          <Download className="w-4 h-4" />
+          Baixar
         </button>
         <button
           type="button"

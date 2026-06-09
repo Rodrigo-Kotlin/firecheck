@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig } from '../types';
 import { db, type LocalActionPlan, type LocalEquipment, type LocalInspection } from '../db';
-import { syncAll, pendingSyncCount, type SyncReport } from '../services/sync';
+import { syncAll, pendingSyncCount } from '../services/sync';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   loginUser,
@@ -16,7 +16,7 @@ import {
   type AuthError,
 } from '../services/authService';
 
-type Tab = 'dashboard' | 'equipamentos' | 'inspecionar' | 'relatorios';
+type Tab = 'dashboard' | 'equipamentos' | 'qrcodes' | 'inspecionar' | 'relatorios';
 
 function inferCriticidade(inspectionObs: string, eqTipo: string): import('../types').Criticidade {
   const obs = inspectionObs.toLowerCase();
@@ -91,7 +91,6 @@ interface AppState {
 
   /** Cloud sync telemetry. */
   syncing: boolean;
-  lastSync: SyncReport | null;
   pending: number;
   lastSyncAt: number | null;
   syncEnabled: boolean;
@@ -106,7 +105,6 @@ interface AppState {
   addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'> & { status?: ActionPlanStatus }) => void;
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
   deleteActionPlan: (id: string) => void;
-  updateEquipment: (id: string, updates: Partial<Equipment>) => void;
   deleteEquipment: (id: string) => void;
   updateConfig: (updates: Partial<AppConfig>) => void;
   loadUsers: () => Promise<void>;
@@ -115,7 +113,6 @@ interface AppState {
   hydrate: () => Promise<void>;
   triggerSync: () => Promise<void>;
   refreshPendingCount: () => Promise<void>;
-  clearAllData: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +140,8 @@ export const useAppStore = create<AppState>()(
             pendingDelete: (p as LocalActionPlan).pendingDelete ?? false,
           }));
           const report = await syncAll(localActionPlans);
-          set({ lastSync: report, lastSyncAt: Date.now() });
+          void report;
+          set({ lastSyncAt: Date.now() });
           await get().refreshPendingCount();
         } catch (err) {
           console.error('[store.sync]', err);
@@ -170,7 +168,6 @@ export const useAppStore = create<AppState>()(
         users: [],
         usersLoading: false,
         syncing: false,
-        lastSync: null,
         pending: 0,
         lastSyncAt: null,
         syncEnabled: isSupabaseConfigured,
@@ -279,39 +276,6 @@ export const useAppStore = create<AppState>()(
           await runSync();
         },
 
-        clearAllData: async () => {
-          // 1) Clear Dexie tables
-          await Promise.all([
-            db.fotos.clear(),
-            db.inspecoes.clear(),
-            db.acoes_pendentes.clear(),
-            db.equipamentos.clear(),
-          ]);
-
-          // 2) Clear Zustand persisted state (actionPlans, config, users)
-          if (typeof window !== 'undefined') {
-            localStorage.removeItem('firecheck-storage');
-          }
-
-          // 3) Clear Supabase cloud data (cascades: equipamentos → inspecoes/planos_acao → fotos)
-          if (isSupabaseConfigured && supabase && get().user) {
-            try {
-              const { error } = await supabase.from('equipamentos').delete().neq('id', '_');
-              if (error) console.warn('[clearAllData] erro na nuvem:', error);
-            } catch (err) {
-              console.warn('[clearAllData] erro na nuvem:', err);
-            }
-          }
-
-          // 4) Reset store state
-          set({
-            equipments: [],
-            inspections: [],
-            stats: { total: 0, emDia: 0, pendentes: 0, vencidos: 0, conformidade: 0 },
-            actionPlans: [],
-          });
-        },
-
         // -----------------------------------------------------------------
         // Mutations
         // -----------------------------------------------------------------
@@ -328,23 +292,6 @@ export const useAppStore = create<AppState>()(
             };
           });
           void db.equipamentos.put({ ...stamped, sincronizado: false } as LocalEquipment);
-          void runSync().then(() => get().refreshPendingCount());
-        },
-
-        updateEquipment: (id, updates) => {
-          set((state) => {
-            const updated = state.equipments.map((eq) =>
-              eq.id === id ? { ...eq, ...updates } : eq,
-            );
-            return {
-              equipments: updated,
-              stats: recomputeStats(updated),
-            };
-          });
-          const current = get().equipments.find((e) => e.id === id);
-          if (current) {
-            void db.equipamentos.put({ ...current, sincronizado: false } as LocalEquipment);
-          }
           void runSync().then(() => get().refreshPendingCount());
         },
 

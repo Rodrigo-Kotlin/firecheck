@@ -1,3 +1,4 @@
+import { useState, useEffect, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import {
@@ -17,9 +18,13 @@ import {
   Lock,
   FileText,
   SearchX,
+  QrCode,
+  Printer,
+  Download,
+  X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { ReactNode } from 'react';
+import QRCode from 'qrcode';
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 import {
@@ -94,6 +99,44 @@ export default function DetalhesEquipamento() {
   const { equipments, inspections, setCurrentTab, user, deleteEquipment, users } = useAppStore();
 
   const eq = equipments.find((e) => e.id === id);
+
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState('');
+
+  useEffect(() => {
+    if (!qrModalOpen || !eq?.qrcode) return;
+    let cancelled = false;
+    QRCode.toDataURL(eq.qrcode, {
+      errorCorrectionLevel: 'H',
+      margin: 1,
+      width: 512,
+      color: { dark: '#111111', light: '#FFFFFF' },
+    }).then((url) => {
+      if (!cancelled) setQrDataUrl(url);
+    }).catch((err) => {
+      console.error('[Detalhes] Erro ao gerar QR:', err);
+    });
+    return () => { cancelled = true; };
+  }, [qrModalOpen, eq?.qrcode]);
+
+  const handleDownloadQr = async () => {
+    if (!eq) return;
+    try {
+      const url = await QRCode.toDataURL(eq.qrcode || eq.id, {
+        errorCorrectionLevel: 'H',
+        margin: 1,
+        width: 512,
+        color: { dark: '#111111', light: '#FFFFFF' },
+      });
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `QR-${eq.id}.png`;
+      a.click();
+      showToast({ kind: 'success', title: 'QR Code baixado.' });
+    } catch {
+      showToast({ kind: 'error', title: 'Erro ao baixar QR Code.' });
+    }
+  };
 
   if (!eq) {
     return (
@@ -189,6 +232,7 @@ export default function DetalhesEquipamento() {
   };
 
   return (
+    <>
     <div className="space-y-4 sm:space-y-6 pb-24">
       {/* Page header */}
       <header className="page-header">
@@ -333,8 +377,39 @@ export default function DetalhesEquipamento() {
             ) : undefined
           }
         />
-        <Field label="QR Code" value={eq.qrcode} mono />
       </DetailSection>
+
+      {/* QR Code Actions */}
+      {eq.qrcode && (
+        <DetailSection title="QR Code" icon={QrCode} cols={3}>
+          <div className="col-span-full flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setQrModalOpen(true)}
+              className="btn-primary btn-sm"
+            >
+              <Eye className="w-4 h-4" />
+              Ver QR Code
+            </button>
+            <button
+              type="button"
+              onClick={() => { setQrModalOpen(true); }}
+              className="btn-ghost btn-sm"
+            >
+              <Printer className="w-4 h-4" />
+              Imprimir
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadQr}
+              className="btn-ghost btn-sm"
+            >
+              <Download className="w-4 h-4" />
+              Baixar
+            </button>
+          </div>
+        </DetailSection>
+      )}
 
       {/* Observações (only if exists) */}
       {eq.observacoes && (
@@ -409,5 +484,71 @@ export default function DetalhesEquipamento() {
         )}
       </div>
     </div>
+
+    {/* QR Code Modal */}
+    {qrModalOpen && (
+      <div
+        className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+        onClick={() => setQrModalOpen(false)}
+      >
+        <div
+          className="bg-white rounded-2xl max-w-sm w-full p-6 space-y-5 shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-black text-gray-900 uppercase tracking-wide">
+              QR Code
+            </h3>
+            <button
+              type="button"
+              onClick={() => setQrModalOpen(false)}
+              className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex flex-col items-center gap-3 py-4">
+            <div className="w-56 h-56 bg-white border border-gray-100 rounded-xl flex items-center justify-center shadow-sm">
+              {qrDataUrl ? (
+                <img
+                  src={qrDataUrl}
+                  alt={`QR Code ${eq.id}`}
+                  className="w-52 h-52"
+                />
+              ) : (
+                <div className="w-8 h-8 border-[3px] border-primary border-t-transparent rounded-full animate-spin" />
+              )}
+            </div>
+            <span className="font-mono text-xs font-bold text-gray-500">{eq.id}</span>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setQrModalOpen(false);
+                setTimeout(() => window.print(), 100);
+              }}
+              disabled={!qrDataUrl}
+              className="btn-primary flex-1 disabled:opacity-50"
+            >
+              <Printer className="w-4 h-4" />
+              Imprimir
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadQr}
+              disabled={!qrDataUrl}
+              className="btn-ghost flex-1 disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" />
+              Baixar PNG
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

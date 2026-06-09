@@ -1,4 +1,4 @@
-import type { Equipment, Inspection, ActionPlan, Inspector } from '../types';
+import type { Equipment, Inspection, ActionPlan } from '../types';
 
 export interface DbEquipamento {
   id: string;
@@ -145,13 +145,6 @@ export interface DbPlanoAcao {
   status: ActionPlan['status'];
   created_at: string;
   updated_at: string;
-}
-
-export interface DbInspetor {
-  id: string;
-  nome: string;
-  cargo: string;
-  role?: 'admin' | 'inspector';
 }
 
 const emptyToUndef = (v: string | null | undefined): string | undefined =>
@@ -448,6 +441,4 @@ export function actionPlanToDb(plan: Partial<ActionPlan>): Partial<DbPlanoAcao> 
   return row;
 }
 
-export function dbToInspector(row: DbInspetor): Inspector {
-  return { id: row.id, nome: row.nome, cargo: row.cargo, role: row.role ?? 'inspector' };
-}
+

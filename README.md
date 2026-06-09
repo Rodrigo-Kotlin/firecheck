@@ -26,8 +26,9 @@ automática para a nuvem via Supabase.
   inspetores só editam os próprios cadastros; admin edita tudo.
   RLS restritivo no Supabase.
 - 📷 **Scanner de QR Code** com `html5-qrcode`.
-- 📋 **Checklists dinâmicos** por tipo de equipamento.
+- 📋 **Checklists dinâmicos** por tipo de equipamento com mais de 100 campos opcionais.
 - 📑 **Relatórios em PDF** com `jsPDF` + `html2canvas`.
+- 🖨️ **Gerenciamento de QR Codes** — página dedicada com busca, seleção múltipla, impressão em lote A4 e download individual.
 - 🔄 **Sincronização bidirecional** Dexie ↔ Supabase (oportunística).
 - 📡 **Modo offline** completo — todas as escritas vão para IndexedDB
   instantaneamente; a sincronização acontece quando a conexão volta.
@@ -150,6 +151,8 @@ firecheck/
 - [x] RBAC admin/inspector com permissões por ownership + RLS restritivo
 - [x] PWA instalável com botão "Instalar", iOS detection e update notification
 - [x] Indicadores visuais de conectividade e sincronização (banners, pills, toasts)
+- [x] Formulário dinâmico por tipo de equipamento com dezenas de campos opcionais
+- [x] Gerenciamento de QR Codes com impressão em lote
 - [ ] Conflict resolution (last-write-wins com campo `version`)
 - [ ] Sincronização periódica em background (Service Worker)
 - [ ] Supabase CLI para versionar migrations (`supabase db push`)

@@ -271,15 +271,6 @@ export const TIPOS_DETECTOR_CALOR = [
   'OUTRO',
 ] as const;
 
-export const CARGA_TYPES = [
-  'N/A',
-  'Água Pressurizada',
-  'CO2',
-  'PQS',
-  'Espuma',
-  'Classe K',
-] as const;
-
 export const ESTADOS_GERAIS = [
   'Bom',
   'Regular',
@@ -455,32 +446,4 @@ export const FIELD_CONFIGS: FieldConfig[] = [
   { name: 'dataProximoTeste', label: 'Data do Próximo Teste', type: 'date', section: 'inspecaoManutencao', tipos: ['Acionador manual', 'Alarme', 'Central de alarme', 'Iluminação de emergência', 'Bomba', 'Detector de fumaça', 'Detector de calor'] },
 ];
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
-export function getFieldsForTipo(tipo: string, section: FieldSection): FieldConfig[] {
-  return FIELD_CONFIGS.filter(
-    (f) => f.section === section && f.tipos.includes(tipo),
-  );
-}
-
-export function getCommonFields(): string[] {
-  return ['local', 'setor', 'pavimento', 'dataProximaInspecao', 'dataUltimaInspecao', 'observacoes'];
-}
-
-export const SECTION_LABEL: Record<FieldSection, string> = {
-  identificacao: 'Identificação',
-  localizacao: 'Localização',
-  dadosTecnicos: 'Dados Técnicos',
-  inspecaoManutencao: 'Inspeção / Manutenção',
-  observacoes: 'Observações',
-};
-
-export const SECTION_ICON: Record<FieldSection, string> = {
-  identificacao: 'Tag',
-  localizacao: 'MapPin',
-  dadosTecnicos: 'Wrench',
-  inspecaoManutencao: 'Calendar',
-  observacoes: 'FileText',
-};

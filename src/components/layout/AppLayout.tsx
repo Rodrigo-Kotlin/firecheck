@@ -181,6 +181,8 @@ export default function AppLayout() {
       setCurrentTab('dashboard');
     } else if (path.startsWith('/equipamentos')) {
       setCurrentTab('equipamentos');
+    } else if (path === '/qrcodes') {
+      setCurrentTab('qrcodes');
     } else if (path === '/inspecionar' || path === '/scan') {
       setCurrentTab('inspecionar');
     } else if (path === '/relatorios' || path === '/planodeacao') {
@@ -265,6 +267,7 @@ export default function AppLayout() {
   const tabs = [
     { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard, path: '/' },
     { id: 'equipamentos' as const, label: 'Equipamentos', icon: Shield, path: '/equipamentos' },
+    { id: 'qrcodes' as const, label: 'QR Codes', icon: QrCode, path: '/qrcodes' },
     { id: 'inspecionar' as const, label: 'Inspecionar', icon: QrCode, path: '/scan' },
     { id: 'relatorios' as const, label: 'Relatórios', icon: FileBarChart, path: '/relatorios' },
   ];
@@ -308,7 +311,9 @@ export default function AppLayout() {
     ? user.nome.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase()
     : 'FC';
 
-  const currentTitle = location.pathname === '/planodeacao'
+  const currentTitle = location.pathname === '/qrcodes'
+    ? 'QR Codes'
+    : location.pathname === '/planodeacao'
     ? 'Plano de Ação'
     : location.pathname === '/admin/usuarios'
     ? 'Usuários'
@@ -383,6 +388,7 @@ export default function AppLayout() {
           {[
             { label: 'Dashboard', icon: LayoutDashboard, path: '/' },
             { label: 'Equipamentos', icon: Shield, path: '/equipamentos' },
+            { label: 'QR Codes', icon: QrCode, path: '/qrcodes' },
             { label: 'Inspecionar', icon: QrCode, path: '/scan' },
             { label: 'Relatórios', icon: FileBarChart, path: '/relatorios' },
             { label: 'Plano de Ação', icon: ClipboardList, path: '/planodeacao' },
