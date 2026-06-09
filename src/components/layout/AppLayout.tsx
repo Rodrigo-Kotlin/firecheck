@@ -267,7 +267,6 @@ export default function AppLayout() {
   const tabs = [
     { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard, path: '/' },
     { id: 'equipamentos' as const, label: 'Equipamentos', icon: Shield, path: '/equipamentos' },
-    { id: 'qrcodes' as const, label: 'QR Codes', icon: QrCode, path: '/qrcodes' },
     { id: 'inspecionar' as const, label: 'Inspecionar', icon: QrCode, path: '/scan' },
     { id: 'relatorios' as const, label: 'Relatórios', icon: FileBarChart, path: '/relatorios' },
   ];
