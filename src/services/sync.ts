@@ -55,7 +55,7 @@ function canSync(): boolean {
 // PUSH
 // ---------------------------------------------------------------------------
 
-async function pushEquipments(): Promise<{ ok: number; errors: number; deleted: number }> {
+async function pushEquipments(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
@@ -75,7 +75,12 @@ async function pushEquipments(): Promise<{ ok: number; errors: number; deleted: 
   // 2) pending upserts
   const pending = await db.equipamentos.filter((e) => !e.sincronizado && !e.pendingDelete).toArray();
   for (const eq of pending) {
-    const success = await upsertEquipment(eq);
+    let toUpsert = eq;
+    if (!eq.createdBy && userId) {
+      await db.equipamentos.update(eq.id, { createdBy: userId });
+      toUpsert = { ...eq, createdBy: userId };
+    }
+    const success = await upsertEquipment(toUpsert);
     if (success) {
       await db.equipamentos.update(eq.id, { sincronizado: true });
       ok++;
@@ -86,7 +91,7 @@ async function pushEquipments(): Promise<{ ok: number; errors: number; deleted: 
   return { ok, errors, deleted };
 }
 
-async function pushInspections(): Promise<{ ok: number; errors: number; deleted: number }> {
+async function pushInspections(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
@@ -108,7 +113,12 @@ async function pushInspections(): Promise<{ ok: number; errors: number; deleted:
 
   const pending = await db.inspecoes.filter((i) => !i.sincronizado && !i.pendingDelete).toArray();
   for (const insp of pending) {
-    const success = await upsertInspection(insp);
+    let toUpsert = insp;
+    if (!insp.userId && userId) {
+      await db.inspecoes.update(insp.id, { userId });
+      toUpsert = { ...insp, userId };
+    }
+    const success = await upsertInspection(toUpsert);
     if (success) {
       await db.inspecoes.update(insp.id, { sincronizado: true });
       ok++;
@@ -121,6 +131,7 @@ async function pushInspections(): Promise<{ ok: number; errors: number; deleted:
 
 async function pushActionPlans(
   plans: LocalActionPlan[],
+  userId?: string,
 ): Promise<{ ok: number; errors: number; deleted: number }> {
   let ok = 0;
   let errors = 0;
@@ -150,6 +161,7 @@ async function pushActionPlans(
       prazo: plan.prazo,
       status: plan.status,
       createdAt: plan.createdAt,
+      userId: plan.userId ?? userId,
     };
     const success = await upsertActionPlan(clean);
     if (success) {
@@ -214,6 +226,8 @@ export interface SyncOptions {
   pushOnly?: boolean;
   /** Skip the local→cloud push phase (pull only). */
   pullOnly?: boolean;
+  /** Current user ID to stamp ownership on records that lack it. */
+  userId?: string;
 }
 
 export async function syncAll(
@@ -235,9 +249,9 @@ export async function syncAll(
 
   try {
     if (!options.pullOnly) {
-      const eqR = await pushEquipments();
-      const insR = await pushInspections();
-      const apR = await pushActionPlans(localActionPlans);
+      const eqR = await pushEquipments(options.userId);
+      const insR = await pushInspections(options.userId);
+      const apR = await pushActionPlans(localActionPlans, options.userId);
       pushed += eqR.ok + insR.ok + apR.ok;
       deleted += eqR.deleted + insR.deleted + apR.deleted;
       errors += eqR.errors + insR.errors + apR.errors;

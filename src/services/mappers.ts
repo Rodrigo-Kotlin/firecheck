@@ -117,6 +117,7 @@ export interface DbEquipamento {
   qrcode: string | null;
   foto_url: string | null;
   observacoes: string | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -129,6 +130,7 @@ export interface DbInspecao {
   status: Equipment['status'];
   observacoes: string | null;
   checklist_json: unknown;
+  user_id: string | null;
   sincronizado: boolean;
   created_at: string;
   updated_at: string;
@@ -143,6 +145,7 @@ export interface DbPlanoAcao {
   responsavel: string;
   prazo: string | null;
   status: ActionPlan['status'];
+  user_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -268,6 +271,7 @@ export function dbToEquipment(row: DbEquipamento): Equipment {
     qrcode: emptyToUndef(row.qrcode),
     fotoUrl: emptyToUndef(row.foto_url),
     observacoes: emptyToUndef(row.observacoes),
+    createdBy: emptyToUndef(row.created_by),
   };
 }
 
@@ -389,6 +393,7 @@ export function equipmentToDb(eq: Partial<Equipment>): Partial<DbEquipamento> {
   if (eq.qrcode !== undefined) row.qrcode = eq.qrcode ?? null;
   if (eq.fotoUrl !== undefined) row.foto_url = eq.fotoUrl ?? null;
   if (eq.observacoes !== undefined) row.observacoes = eq.observacoes ?? null;
+  if (eq.createdBy !== undefined) row.created_by = eq.createdBy ?? null;
   return row;
 }
 
@@ -400,6 +405,7 @@ export function dbToInspection(row: DbInspecao): Inspection {
     inspetor: row.inspetor,
     status: row.status,
     observacoes: emptyToUndef(row.observacoes),
+    userId: emptyToUndef(row.user_id),
   };
 }
 
@@ -411,6 +417,7 @@ export function inspectionToDb(insp: Partial<Inspection>): Partial<DbInspecao> {
   if (insp.inspetor !== undefined) row.inspetor = insp.inspetor;
   if (insp.status !== undefined) row.status = insp.status;
   if (insp.observacoes !== undefined) row.observacoes = insp.observacoes ?? null;
+  if (insp.userId !== undefined) row.user_id = insp.userId ?? null;
   return row;
 }
 
@@ -425,6 +432,7 @@ export function dbToActionPlan(row: DbPlanoAcao): ActionPlan {
     prazo: emptyToUndef(row.prazo) ?? '',
     status: row.status,
     createdAt: row.created_at.split('T')[0],
+    userId: emptyToUndef(row.user_id),
   };
 }
 
@@ -438,6 +446,7 @@ export function actionPlanToDb(plan: Partial<ActionPlan>): Partial<DbPlanoAcao> 
   if (plan.responsavel !== undefined) row.responsavel = plan.responsavel;
   if (plan.prazo !== undefined) row.prazo = plan.prazo ?? null;
   if (plan.status !== undefined) row.status = plan.status;
+  if (plan.userId !== undefined) row.user_id = plan.userId ?? null;
   return row;
 }
 

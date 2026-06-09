@@ -139,7 +139,7 @@ export const useAppStore = create<AppState>()(
             sincronizado: (p as LocalActionPlan).sincronizado ?? true,
             pendingDelete: (p as LocalActionPlan).pendingDelete ?? false,
           }));
-          const report = await syncAll(localActionPlans);
+          const report = await syncAll(localActionPlans, { userId: get().user?.id });
           void report;
           set({ lastSyncAt: Date.now() });
           await get().refreshPendingCount();
