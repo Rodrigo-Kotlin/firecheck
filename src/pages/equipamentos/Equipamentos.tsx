@@ -40,7 +40,7 @@ export default function Equipamentos() {
   });
 
   const STATUS_STYLES: Record<string, { border: string; pill: string; label: string }> = {
-    regular:       { border: 'border-l-success',  pill: 'bg-green-100 text-success',     label: 'Regular' },
+    regular:       { border: 'border-l-success',  pill: 'bg-green-100 text-success',     label: 'Conforme' },
     pendente:      { border: 'border-l-pending',  pill: 'bg-amber-100 text-pending',     label: 'Pendente' },
     vencido:       { border: 'border-l-critical', pill: 'bg-red-100 text-critical',      label: 'Vencido' },
     observacao:    { border: 'border-l-gray-300', pill: 'bg-gray-100 text-gray-500',     label: 'Observação' },

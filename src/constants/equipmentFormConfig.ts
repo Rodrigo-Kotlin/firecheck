@@ -30,7 +30,7 @@ export const EQUIP_STATUS = [
 ] as const;
 
 export const STATUS_LABEL: Record<string, string> = {
-  regular: 'Regular',
+  regular: 'Conforme',
   pendente: 'Pendente',
   vencido: 'Vencido',
   observacao: 'Com observação',
@@ -315,7 +315,7 @@ export const FIELD_CONFIGS: FieldConfig[] = [
   { name: 'modeloExtintor', label: 'Modelo do Extintor', type: 'select', section: 'dadosTecnicos', tipos: ['Extintor'], options: EXTINTOR_MODELOS },
   { name: 'capacidade', label: 'Capacidade', type: 'select', section: 'dadosTecnicos', tipos: ['Extintor'], options: CAPACIDADES_EXTINTOR },
   { name: 'classeFogo', label: 'Classe de Fogo', type: 'select', section: 'dadosTecnicos', tipos: ['Extintor'], options: CLASSES_FOGO },
-  { name: 'tipoCarga', label: 'Tipo de Carga', type: 'select', section: 'dadosTecnicos', tipos: ['Extintor'], options: CARGA_TYPES },
+
   { name: 'seloLacre', label: 'Selo / Lacre', type: 'select', section: 'dadosTecnicos', tipos: ['Extintor'], options: SIM_NAO },
   { name: 'manometro', label: 'Manômetro', type: 'select', section: 'dadosTecnicos', tipos: ['Extintor'], options: ['OK', 'Defeito', 'Inexistente'] },
   { name: 'suporte', label: 'Suporte', type: 'select', section: 'dadosTecnicos', tipos: ['Extintor'], options: ESTADOS_GERAIS },
