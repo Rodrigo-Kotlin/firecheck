@@ -75,27 +75,7 @@ async function pushEquipments(): Promise<{ ok: number; errors: number; deleted: 
   // 2) pending upserts
   const pending = await db.equipamentos.filter((e) => !e.sincronizado && !e.pendingDelete).toArray();
   for (const eq of pending) {
-    const clean: Equipment = {
-      id: eq.id,
-      tipo: eq.tipo,
-      subtipo: eq.subtipo,
-      local: eq.local,
-      setor: eq.setor,
-      pavimento: eq.pavimento,
-      fabricante: eq.fabricante,
-      numSerie: eq.numSerie,
-      capacidade: eq.capacidade,
-      tipoCarga: eq.tipoCarga,
-      dataFabricacao: eq.dataFabricacao,
-      dataUltimaManutencao: eq.dataUltimaManutencao,
-      dataProximaManutencao: eq.dataProximaManutencao,
-      dataProximaInspecao: eq.dataProximaInspecao,
-      status: eq.status,
-      qrcode: eq.qrcode,
-      fotoUrl: eq.fotoUrl,
-      observacoes: eq.observacoes,
-    };
-    const success = await upsertEquipment(clean);
+    const success = await upsertEquipment(eq);
     if (success) {
       await db.equipamentos.update(eq.id, { sincronizado: true });
       ok++;
@@ -128,15 +108,7 @@ async function pushInspections(): Promise<{ ok: number; errors: number; deleted:
 
   const pending = await db.inspecoes.filter((i) => !i.sincronizado && !i.pendingDelete).toArray();
   for (const insp of pending) {
-    const clean: Inspection = {
-      id: insp.id,
-      equipmentId: insp.equipmentId,
-      data: insp.data,
-      inspetor: insp.inspetor,
-      status: insp.status,
-      observacoes: insp.observacoes,
-    };
-    const success = await upsertInspection(clean);
+    const success = await upsertInspection(insp);
     if (success) {
       await db.inspecoes.update(insp.id, { sincronizado: true });
       ok++;

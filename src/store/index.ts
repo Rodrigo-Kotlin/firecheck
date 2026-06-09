@@ -217,38 +217,11 @@ export const useAppStore = create<AppState>()(
             listUsers(),
           ]);
 
-          // Auto-clear old seed data on first load after cleanup
-          if (localEqs.some((e) => ['EXT-001', 'HID-042', 'EXT-109'].includes(e.id))) {
-            await Promise.all([
-              db.fotos.clear(),
-              db.inspecoes.clear(),
-              db.acoes_pendentes.clear(),
-              db.equipamentos.clear(),
-            ]);
-            if (typeof window !== 'undefined') {
-              localStorage.removeItem('firecheck-storage');
-            }
-            if (isSupabaseConfigured && supabase) {
-              try {
-                const { error } = await supabase.from('equipamentos').delete().neq('id', '_');
-                if (error) console.warn('[hydrate] erro ao limpar nuvem:', error);
-              } catch (err) {
-                console.warn('[hydrate] erro ao limpar nuvem:', err);
-              }
-            }
-            set({
-              equipments: [],
-              inspections: [],
-              stats: { total: 0, emDia: 0, pendentes: 0, vencidos: 0, conformidade: 0 },
-              actionPlans: [],
-            });
-          } else {
-            set({
-              equipments: localEqs.map(toEquipment),
-              inspections: localInsps.map(toInspection),
-              stats: recomputeStats(localEqs.map(toEquipment)),
-            });
-          }
+          set({
+            equipments: localEqs.map(toEquipment),
+            inspections: localInsps.map(toInspection),
+            stats: recomputeStats(localEqs.map(toEquipment)),
+          });
 
           const sessionUser = await resolveSession();
           set({
@@ -291,7 +264,9 @@ export const useAppStore = create<AppState>()(
               stats: recomputeStats(updated),
             };
           });
-          void db.equipamentos.put({ ...stamped, sincronizado: false } as LocalEquipment);
+          db.equipamentos.put({ ...stamped, sincronizado: false } as LocalEquipment).catch((err) =>
+            console.error('[store.addEquipment] erro ao persistir no Dexie:', err),
+          );
           void runSync().then(() => get().refreshPendingCount());
         },
 
@@ -359,21 +334,25 @@ export const useAppStore = create<AppState>()(
             };
           });
           const finalId = id;
-          void (async () => {
-            const stamped: Inspection = {
-              ...newInspection,
-              id: finalId,
-              userId: newInspection.userId ?? get().user?.id,
-            };
-            const full: LocalInspection = { ...stamped, sincronizado: false };
-            await db.inspecoes.put(full);
-            const eq = await db.equipamentos.get(newInspection.equipmentId);
-            if (eq) {
-              await db.equipamentos.put({
-                ...eq,
-                status: newInspection.status,
-                sincronizado: false,
-              });
+          (async () => {
+            try {
+              const stamped: Inspection = {
+                ...newInspection,
+                id: finalId,
+                userId: newInspection.userId ?? get().user?.id,
+              };
+              const full: LocalInspection = { ...stamped, sincronizado: false };
+              await db.inspecoes.put(full);
+              const eq = await db.equipamentos.get(newInspection.equipmentId);
+              if (eq) {
+                await db.equipamentos.put({
+                  ...eq,
+                  status: newInspection.status,
+                  sincronizado: false,
+                });
+              }
+            } catch (err) {
+              console.error('[store.addInspection] erro ao persistir no Dexie:', err);
             }
           })();
           void runSync().then(() => get().refreshPendingCount());
