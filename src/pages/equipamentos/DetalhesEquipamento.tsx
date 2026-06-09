@@ -16,11 +16,16 @@ import {
   Trash2,
   Lock,
   FileText,
+  SearchX,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
+import {
+  FIELD_CONFIGS,
+  STATUS_LABEL,
+} from '../../constants/equipmentFormConfig';
 
 type FieldProps = {
   label: string;
@@ -89,6 +94,7 @@ export default function DetalhesEquipamento() {
   const { equipments, inspections, setCurrentTab, user, deleteEquipment, users } = useAppStore();
 
   const eq = equipments.find((e) => e.id === id);
+
   if (!eq) {
     return (
       <div className="space-y-4 text-center py-12">
@@ -103,6 +109,14 @@ export default function DetalhesEquipamento() {
       </div>
     );
   }
+
+  const fieldsDadosTecnicos = FIELD_CONFIGS.filter(
+    (f) => f.section === 'dadosTecnicos' && f.tipos.includes(eq.tipo),
+  );
+
+  const fieldsInspecao = FIELD_CONFIGS.filter(
+    (f) => f.section === 'inspecaoManutencao' && f.tipos.includes(eq.tipo),
+  );
 
   const eqInspections = inspections.filter((i) => i.equipmentId === eq.id);
 
@@ -136,31 +150,15 @@ export default function DetalhesEquipamento() {
 
   const expStatus = getExpirationStatus();
 
-  const statusConfigs = {
-    regular: {
-      label: 'EM DIA',
-      pillClass: 'bg-green-100 text-success',
-      borderClass: 'border-l-success',
-      icon: CheckCircle2,
-    },
-    pendente: {
-      label: 'PENDENTE',
-      pillClass: 'bg-amber-100 text-pending',
-      borderClass: 'border-l-pending',
-      icon: AlertTriangle,
-    },
-    vencido: {
-      label: 'VENCIDO',
-      pillClass: 'bg-red-100 text-critical',
-      borderClass: 'border-l-critical',
-      icon: XCircle,
-    },
-    observacao: {
-      label: 'OBSERVAÇÃO',
-      pillClass: 'bg-gray-100 text-gray-500',
-      borderClass: 'border-l-gray-300',
-      icon: Info,
-    },
+  const statusConfigs: Record<string, { label: string; pillClass: string; borderClass: string; icon: LucideIcon }> = {
+    regular:         { label: 'EM DIA',            pillClass: 'bg-green-100 text-success',   borderClass: 'border-l-success',  icon: CheckCircle2 },
+    pendente:        { label: 'PENDENTE',          pillClass: 'bg-amber-100 text-pending',   borderClass: 'border-l-pending',  icon: AlertTriangle },
+    vencido:         { label: 'VENCIDO',           pillClass: 'bg-red-100 text-critical',    borderClass: 'border-l-critical', icon: XCircle },
+    observacao:      { label: 'OBSERVAÇÃO',        pillClass: 'bg-gray-100 text-gray-500',   borderClass: 'border-l-gray-300', icon: Info },
+    em_manutencao:   { label: 'EM MANUTENÇÃO',     pillClass: 'bg-blue-100 text-blue-600',   borderClass: 'border-l-blue-500', icon: Info },
+    inativo:         { label: 'INATIVO',           pillClass: 'bg-gray-200 text-gray-600',   borderClass: 'border-l-gray-400', icon: SearchX },
+    substituido:     { label: 'SUBSTITUÍDO',       pillClass: 'bg-purple-100 text-purple-600', borderClass: 'border-l-purple-500', icon: Info },
+    extraviado:      { label: 'EXTRAVIADO',        pillClass: 'bg-red-100 text-red-600',     borderClass: 'border-l-red-500',  icon: SearchX },
   };
 
   const config = statusConfigs[eq.status] || statusConfigs.observacao;
@@ -183,6 +181,11 @@ export default function DetalhesEquipamento() {
     deleteEquipment(eq.id);
     showToast({ kind: 'success', title: 'Equipamento excluído.' });
     navigate('/equipamentos', { replace: true });
+  };
+
+  const fieldValue = (name: string): ReactNode => {
+    const v = (eq as unknown as Record<string, unknown>)[name];
+    return v != null && v !== '' ? String(v) : undefined;
   };
 
   return (
@@ -283,7 +286,7 @@ export default function DetalhesEquipamento() {
 
       {/* Identificação */}
       <DetailSection title="Identificação" icon={Tag} cols={3}>
-        <Field label="Modelo / Subtipo" value={eq.subtipo} />
+        <Field label="Status" value={STATUS_LABEL[eq.status] || eq.status} />
         <Field label="Fabricante" value={eq.fabricante} />
         <Field label="Nº de Série" value={eq.numSerie} mono />
       </DetailSection>
@@ -295,19 +298,27 @@ export default function DetalhesEquipamento() {
         <Field label="Pavimento" value={eq.pavimento} />
       </DetailSection>
 
-      {/* Dados Técnicos */}
-      <DetailSection title="Dados Técnicos" icon={Wrench} cols={3}>
-        {eq.tipo === 'Extintor' && <Field label="Modelo do Extintor" value={eq.modeloExtintor} />}
-        <Field label="Tipo de Carga" value={eq.tipoCarga} />
-        <Field label="Capacidade" value={eq.capacidade} />
-        <Field label="QR Code" value={eq.qrcode} mono />
-      </DetailSection>
+      {/* Dados Técnicos (dinâmico por tipo) */}
+      {fieldsDadosTecnicos.length > 0 && (
+        <DetailSection title="Dados Técnicos" icon={Wrench} cols={3}>
+          {fieldsDadosTecnicos.map((f) => (
+            <Field key={f.name} label={f.label} value={fieldValue(f.name)} />
+          ))}
+        </DetailSection>
+      )}
 
-      {/* Cronograma */}
+      {/* Inspeção / Manutenção (dinâmico por tipo) */}
+      {fieldsInspecao.length > 0 && (
+        <DetailSection title="Inspeção / Manutenção" icon={Calendar} cols={3}>
+          {fieldsInspecao.map((f) => (
+            <Field key={f.name} label={f.label} value={fieldValue(f.name)} />
+          ))}
+        </DetailSection>
+      )}
+
+      {/* Cronograma (comum) */}
       <DetailSection title="Cronograma" icon={Calendar} cols={4}>
-        <Field label="Fabricação" value={eq.dataFabricacao} icon={Calendar} />
-        <Field label="Última Manutenção" value={eq.dataUltimaManutencao} />
-        <Field label="Próxima Manutenção" value={eq.dataProximaManutencao} />
+        <Field label="Última Inspeção" value={eq.dataUltimaInspecao} />
         <Field
           label="Próxima Inspeção"
           icon={Calendar}
@@ -322,6 +333,7 @@ export default function DetalhesEquipamento() {
             ) : undefined
           }
         />
+        <Field label="QR Code" value={eq.qrcode} mono />
       </DetailSection>
 
       {/* Observações (only if exists) */}

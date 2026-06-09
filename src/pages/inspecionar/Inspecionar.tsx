@@ -147,6 +147,30 @@ const EQUIPMENT_STATUS_CONFIGS: Record<
     borderClass: 'border-l-blue-500',
     icon: Info,
   },
+  em_manutencao: {
+    label: 'EM MANUTENÇÃO',
+    pillClass: 'bg-blue-100 text-blue-600',
+    borderClass: 'border-l-blue-500',
+    icon: Info,
+  },
+  inativo: {
+    label: 'INATIVO',
+    pillClass: 'bg-gray-200 text-gray-600',
+    borderClass: 'border-l-gray-400',
+    icon: XCircle,
+  },
+  substituido: {
+    label: 'SUBSTITUÍDO',
+    pillClass: 'bg-purple-100 text-purple-600',
+    borderClass: 'border-l-purple-500',
+    icon: Info,
+  },
+  extraviado: {
+    label: 'EXTRAVIADO',
+    pillClass: 'bg-red-100 text-red-600',
+    borderClass: 'border-l-red-500',
+    icon: XCircle,
+  },
 };
 
 // ---------------------------------------------------------------------------

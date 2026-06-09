@@ -35,8 +35,8 @@ function recomputeStats(eqs: Equipment[]): Stats {
   const total = eqs.length;
   const emDia = eqs.filter((e) => e.status === 'regular').length;
   const pendentes = eqs.filter((e) => e.status === 'pendente').length;
-  const vencidos = eqs.filter((e) => e.status === 'vencido').length;
-  const observacao = eqs.filter((e) => e.status === 'observacao').length;
+  const vencidos = eqs.filter((e) => e.status === 'vencido' || e.status === 'extraviado').length;
+  const observacao = eqs.filter((e) => e.status === 'observacao' || e.status === 'em_manutencao' || e.status === 'inativo' || e.status === 'substituido').length;
   const conformidade = total === 0 ? 0 : Math.round(((emDia + observacao) / total) * 100);
   return { total, emDia, pendentes, vencidos, conformidade };
 }

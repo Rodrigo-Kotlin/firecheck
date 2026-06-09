@@ -40,10 +40,14 @@ export default function Equipamentos() {
   });
 
   const STATUS_STYLES: Record<string, { border: string; pill: string; label: string }> = {
-    regular:    { border: 'border-l-success',  pill: 'bg-green-100 text-success',  label: 'Regular' },
-    pendente:   { border: 'border-l-pending',  pill: 'bg-amber-100 text-pending',  label: 'Pendente' },
-    vencido:    { border: 'border-l-critical', pill: 'bg-red-100 text-critical',   label: 'Vencido' },
-    observacao: { border: 'border-l-gray-300', pill: 'bg-gray-100 text-gray-500',  label: 'Observação' },
+    regular:       { border: 'border-l-success',  pill: 'bg-green-100 text-success',     label: 'Regular' },
+    pendente:      { border: 'border-l-pending',  pill: 'bg-amber-100 text-pending',     label: 'Pendente' },
+    vencido:       { border: 'border-l-critical', pill: 'bg-red-100 text-critical',      label: 'Vencido' },
+    observacao:    { border: 'border-l-gray-300', pill: 'bg-gray-100 text-gray-500',     label: 'Observação' },
+    em_manutencao: { border: 'border-l-blue-500', pill: 'bg-blue-100 text-blue-600',     label: 'Em manutenção' },
+    inativo:       { border: 'border-l-gray-400', pill: 'bg-gray-200 text-gray-600',     label: 'Inativo' },
+    substituido:   { border: 'border-l-purple-500', pill: 'bg-purple-100 text-purple-600', label: 'Substituído' },
+    extraviado:    { border: 'border-l-red-500',  pill: 'bg-red-100 text-red-600',       label: 'Extraviado' },
   };
   const getStatusStyle = (status: string) => STATUS_STYLES[status] ?? STATUS_STYLES.observacao;
 

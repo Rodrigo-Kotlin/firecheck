@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, useMemo, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -16,45 +16,136 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import QrCodePrintCard from '../../components/QrCodePrintCard';
-import { EXTINTOR_MODELOS } from '../../constants/equipmentOptions';
+import {
+  EQUIP_TYPES,
+  EQUIP_STATUS,
+  STATUS_LABEL,
+  FIELD_CONFIGS,
+  type FieldConfig,
+  type FieldSection,
+} from '../../constants/equipmentFormConfig';
 import type { Equipment } from '../../types';
-
-const EQUIP_TYPES = [
-  'Extintor', 'Hidrante', 'Mangueira', 'Abrigo de mangueira', 'Esguicho',
-  'Chave storz', 'Acionador manual', 'Alarme', 'Central de alarme',
-  'Iluminação de emergência', 'Sinalização', 'Sprinkler', 'Bomba',
-  'Porta corta-fogo', 'Detector de fumaça', 'Detector de calor'
-];
-
-const CARGA_TYPES = [
-  'N/A', 'Água Pressurizada', 'CO2', 'PQS', 'Espuma', 'Classe K'
-];
 
 const schema = z.object({
   id: z.string().min(3, { message: 'Código deve conter no mínimo 3 caracteres' }).toUpperCase(),
   tipo: z.string().min(1, { message: 'Selecione o tipo do equipamento' }),
-  subtipo: z.string().optional(),
+  status: z.string().min(1, { message: 'Selecione o status' }),
   local: z.string().min(3, { message: 'Localização é obrigatória' }),
   setor: z.string().min(3, { message: 'Setor é obrigatório' }),
   pavimento: z.string().optional(),
   fabricante: z.string().optional(),
   numSerie: z.string().optional(),
-  capacidade: z.string().optional(),
-  tipoCarga: z.string().optional(),
+  dataProximaInspecao: z.string().optional(),
+  dataUltimaInspecao: z.string().optional(),
+  qrcode: z.string().optional(),
+  observacoes: z.string().optional(),
   modeloExtintor: z.string().optional(),
+  capacidade: z.string().optional(),
+  classeFogo: z.string().optional(),
+  tipoCarga: z.string().optional(),
+  seloLacre: z.string().optional(),
+  manometro: z.string().optional(),
+  suporte: z.string().optional(),
+  sinalizacao: z.string().optional(),
+  acessoDesobstruido: z.string().optional(),
+  estadoGeral: z.string().optional(),
+  tipoHidrante: z.string().optional(),
+  tipoAbrigoVinculado: z.string().optional(),
+  registro: z.string().optional(),
+  valvula: z.string().optional(),
+  adaptador: z.string().optional(),
+  tampao: z.string().optional(),
+  pressao: z.string().optional(),
+  tipoMangueira: z.string().optional(),
+  diametro: z.string().optional(),
+  comprimento: z.string().optional(),
+  tipoUniao: z.string().optional(),
+  estadoMangueira: z.string().optional(),
+  acondicionamento: z.string().optional(),
+  possuiEtiquetaInspecao: z.string().optional(),
+  tipoAbrigo: z.string().optional(),
+  material: z.string().optional(),
+  estadoPorta: z.string().optional(),
+  estadoVisor: z.string().optional(),
+  possuiMangueira: z.string().optional(),
+  possuiEsguicho: z.string().optional(),
+  possuiChaveStorz: z.string().optional(),
+  possuiRegistro: z.string().optional(),
+  tipoEsguicho: z.string().optional(),
+  estadoRoscas: z.string().optional(),
+  estadoVedacao: z.string().optional(),
+  compatibilidadeMangueira: z.string().optional(),
+  localAcondicionamento: z.string().optional(),
+  tipoChaveStorz: z.string().optional(),
+  diametroCompativel: z.string().optional(),
+  estadoFisico: z.string().optional(),
+  tipoAcionador: z.string().optional(),
+  enderecoZona: z.string().optional(),
+  estadoTampa: z.string().optional(),
+  estadoBotao: z.string().optional(),
+  alturaInstalacao: z.string().optional(),
+  funcionamentoTestado: z.string().optional(),
+  tipoAlarme: z.string().optional(),
+  sireneAudiovisual: z.string().optional(),
+  sireneSonora: z.string().optional(),
+  sinalizadorVisual: z.string().optional(),
+  zonaLaco: z.string().optional(),
+  fonteAlimentacao: z.string().optional(),
+  tipoCentral: z.string().optional(),
+  quantidadeLacosZonas: z.string().optional(),
+  bateriaBackup: z.string().optional(),
+  comunicacaoDispositivos: z.string().optional(),
+  statusPainel: z.string().optional(),
+  localInstalacao: z.string().optional(),
+  modeloIluminacao: z.string().optional(),
+  funcaoIluminacao: z.string().optional(),
+  autonomia: z.string().optional(),
+  tipoInstalacao: z.string().optional(),
+  potencia: z.string().optional(),
+  tipoSinalizacao: z.string().optional(),
+  codigoPlaca: z.string().optional(),
+  fotoluminescente: z.string().optional(),
+  visibilidade: z.string().optional(),
+  estadoConservacao: z.string().optional(),
+  fixacaoAdequada: z.string().optional(),
+  tipoSprinkler: z.string().optional(),
+  temperaturaAcionamento: z.string().optional(),
+  posicaoInstalacao: z.string().optional(),
+  estadoBulbo: z.string().optional(),
+  obstrucao: z.string().optional(),
+  corrosao: z.string().optional(),
+  vazamento: z.string().optional(),
+  areaProtegida: z.string().optional(),
+  tipoBomba: z.string().optional(),
+  vazao: z.string().optional(),
+  alimentacaoEletrica: z.string().optional(),
+  painelComando: z.string().optional(),
+  bombaJockey: z.string().optional(),
+  bombaPrincipal: z.string().optional(),
+  bombaReserva: z.string().optional(),
+  tipoPorta: z.string().optional(),
+  tempoResistenciaFogo: z.string().optional(),
+  barraAntipanico: z.string().optional(),
+  dobradicas: z.string().optional(),
+  molaAerea: z.string().optional(),
+  fechamentoAutomatico: z.string().optional(),
+  vedacao: z.string().optional(),
+  tipoDetectorFumaca: z.string().optional(),
+  tipoDetectorCalor: z.string().optional(),
+  nomeModelo: z.string().optional(),
+  descricaoTecnica: z.string().optional(),
   dataFabricacao: z.string().optional(),
   dataUltimaManutencao: z.string().optional(),
   dataProximaManutencao: z.string().optional(),
-  dataProximaInspecao: z.string().optional(),
-  qrcode: z.string().optional(),
-  observacoes: z.string().optional()
+  dataUltimoTeste: z.string().optional(),
+  dataProximoTeste: z.string().optional(),
+  dataTesteHidrostatico: z.string().optional(),
+  dataValidadeTeste: z.string().optional(),
 });
 
 type FormData = z.infer<typeof schema>;
 
-/* ----- Local form primitives -----
-   FormSection: card with a tinted icon + section title.
-   FormField: label (with required indicator) + control slot + error/hint. */
+/* ----- Local form primitives ----- */
 
 type FormSectionProps = {
   title: string;
@@ -107,6 +198,53 @@ function FormField({ label, required, error, hint, htmlFor, children }: FormFiel
   );
 }
 
+/* ----- Render a single field based on config ----- */
+
+type FieldRendererProps = {
+  field: FieldConfig;
+  register: ReturnType<typeof useForm<FormData>>['register'];
+  errors: Record<string, { message?: string }>;
+};
+
+function FieldRenderer({ field, register, errors }: FieldRendererProps) {
+  const error = errors[field.name]?.message;
+
+  if (field.type === 'select' && field.options) {
+    return (
+      <FormField key={field.name} label={field.label} error={error} htmlFor={field.name}>
+        <select id={field.name} {...register(field.name as keyof FormData)} className={`field-input ${error ? 'border-critical' : ''}`}>
+          <option value="">Selecione...</option>
+          {field.options.map((opt) => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+      </FormField>
+    );
+  }
+
+  if (field.type === 'date') {
+    return (
+      <FormField key={field.name} label={field.label} error={error} htmlFor={field.name}>
+        <input id={field.name} type="date" {...register(field.name as keyof FormData)} className={`field-input ${error ? 'border-critical' : ''}`} />
+      </FormField>
+    );
+  }
+
+  return (
+    <FormField key={field.name} label={field.label} error={error} htmlFor={field.name}>
+      <input
+        id={field.name}
+        type="text"
+        {...register(field.name as keyof FormData)}
+        placeholder={field.placeholder}
+        className={`field-input ${error ? 'border-critical' : ''}`}
+      />
+    </FormField>
+  );
+}
+
+/* ----- Page component ----- */
+
 export default function NovoEquipamento() {
   const navigate = useNavigate();
   const { addEquipment, equipments } = useAppStore();
@@ -121,12 +259,22 @@ export default function NovoEquipamento() {
   } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
-      tipoCarga: 'N/A',
+      status: 'regular',
       tipo: ''
     }
   });
 
   const tipoSelecionado = watch('tipo');
+
+  const fieldsPorSecao = useMemo(() => {
+    if (!tipoSelecionado) return null as Record<string, FieldConfig[]> | null;
+    const secoes: FieldSection[] = ['identificacao', 'localizacao', 'dadosTecnicos', 'inspecaoManutencao'];
+    const map: Record<string, FieldConfig[]> = { identificacao: [], localizacao: [], dadosTecnicos: [], inspecaoManutencao: [] };
+    for (const sec of secoes) {
+      map[sec] = FIELD_CONFIGS.filter((f) => f.section === sec && f.tipos.includes(tipoSelecionado));
+    }
+    return map;
+  }, [tipoSelecionado]);
 
   const onSubmit = (data: FormData) => {
     const isDuplicate = equipments.some((e) => e.id.toUpperCase() === data.id.toUpperCase());
@@ -139,22 +287,118 @@ export default function NovoEquipamento() {
     const newEquipment: Equipment = {
       id: data.id,
       tipo: data.tipo,
-      subtipo: data.subtipo || '',
       local: data.local,
       setor: data.setor,
-      status: 'regular',
+      status: data.status as Equipment['status'],
       pavimento: data.pavimento,
       fabricante: data.fabricante,
       numSerie: data.numSerie,
-      capacidade: data.capacidade,
-      tipoCarga: data.tipoCarga,
+      dataProximaInspecao: data.dataProximaInspecao,
+      dataUltimaInspecao: data.dataUltimaInspecao,
+      qrcode: data.qrcode,
+      observacoes: data.observacoes,
       modeloExtintor: data.modeloExtintor,
+      capacidade: data.capacidade,
+      classeFogo: data.classeFogo,
+      tipoCarga: data.tipoCarga,
+      seloLacre: data.seloLacre,
+      manometro: data.manometro,
+      suporte: data.suporte,
+      sinalizacao: data.sinalizacao,
+      acessoDesobstruido: data.acessoDesobstruido,
+      estadoGeral: data.estadoGeral,
+      tipoHidrante: data.tipoHidrante,
+      tipoAbrigoVinculado: data.tipoAbrigoVinculado,
+      registro: data.registro,
+      valvula: data.valvula,
+      adaptador: data.adaptador,
+      tampao: data.tampao,
+      pressao: data.pressao,
+      tipoMangueira: data.tipoMangueira,
+      diametro: data.diametro,
+      comprimento: data.comprimento,
+      tipoUniao: data.tipoUniao,
+      estadoMangueira: data.estadoMangueira,
+      acondicionamento: data.acondicionamento,
+      possuiEtiquetaInspecao: data.possuiEtiquetaInspecao,
+      tipoAbrigo: data.tipoAbrigo,
+      material: data.material,
+      estadoPorta: data.estadoPorta,
+      estadoVisor: data.estadoVisor,
+      possuiMangueira: data.possuiMangueira,
+      possuiEsguicho: data.possuiEsguicho,
+      possuiChaveStorz: data.possuiChaveStorz,
+      possuiRegistro: data.possuiRegistro,
+      tipoEsguicho: data.tipoEsguicho,
+      estadoRoscas: data.estadoRoscas,
+      estadoVedacao: data.estadoVedacao,
+      compatibilidadeMangueira: data.compatibilidadeMangueira,
+      localAcondicionamento: data.localAcondicionamento,
+      tipoChaveStorz: data.tipoChaveStorz,
+      diametroCompativel: data.diametroCompativel,
+      estadoFisico: data.estadoFisico,
+      tipoAcionador: data.tipoAcionador,
+      enderecoZona: data.enderecoZona,
+      estadoTampa: data.estadoTampa,
+      estadoBotao: data.estadoBotao,
+      alturaInstalacao: data.alturaInstalacao,
+      funcionamentoTestado: data.funcionamentoTestado,
+      tipoAlarme: data.tipoAlarme,
+      sireneAudiovisual: data.sireneAudiovisual,
+      sireneSonora: data.sireneSonora,
+      sinalizadorVisual: data.sinalizadorVisual,
+      zonaLaco: data.zonaLaco,
+      fonteAlimentacao: data.fonteAlimentacao,
+      tipoCentral: data.tipoCentral,
+      quantidadeLacosZonas: data.quantidadeLacosZonas,
+      bateriaBackup: data.bateriaBackup,
+      comunicacaoDispositivos: data.comunicacaoDispositivos,
+      statusPainel: data.statusPainel,
+      localInstalacao: data.localInstalacao,
+      modeloIluminacao: data.modeloIluminacao,
+      funcaoIluminacao: data.funcaoIluminacao,
+      autonomia: data.autonomia,
+      tipoInstalacao: data.tipoInstalacao,
+      potencia: data.potencia,
+      tipoSinalizacao: data.tipoSinalizacao,
+      codigoPlaca: data.codigoPlaca,
+      fotoluminescente: data.fotoluminescente,
+      visibilidade: data.visibilidade,
+      estadoConservacao: data.estadoConservacao,
+      fixacaoAdequada: data.fixacaoAdequada,
+      tipoSprinkler: data.tipoSprinkler,
+      temperaturaAcionamento: data.temperaturaAcionamento,
+      posicaoInstalacao: data.posicaoInstalacao,
+      estadoBulbo: data.estadoBulbo,
+      obstrucao: data.obstrucao,
+      corrosao: data.corrosao,
+      vazamento: data.vazamento,
+      areaProtegida: data.areaProtegida,
+      tipoBomba: data.tipoBomba,
+      vazao: data.vazao,
+      alimentacaoEletrica: data.alimentacaoEletrica,
+      painelComando: data.painelComando,
+      bombaJockey: data.bombaJockey,
+      bombaPrincipal: data.bombaPrincipal,
+      bombaReserva: data.bombaReserva,
+      tipoPorta: data.tipoPorta,
+      tempoResistenciaFogo: data.tempoResistenciaFogo,
+      barraAntipanico: data.barraAntipanico,
+      dobradicas: data.dobradicas,
+      molaAerea: data.molaAerea,
+      fechamentoAutomatico: data.fechamentoAutomatico,
+      vedacao: data.vedacao,
+      tipoDetectorFumaca: data.tipoDetectorFumaca,
+      tipoDetectorCalor: data.tipoDetectorCalor,
+      nomeModelo: data.nomeModelo,
+      descricaoTecnica: data.descricaoTecnica,
       dataFabricacao: data.dataFabricacao,
       dataUltimaManutencao: data.dataUltimaManutencao,
       dataProximaManutencao: data.dataProximaManutencao,
-      dataProximaInspecao: data.dataProximaInspecao,
-      qrcode: data.qrcode,
-      observacoes: data.observacoes
+      dataUltimoTeste: data.dataUltimoTeste,
+      dataProximoTeste: data.dataProximoTeste,
+      dataTesteHidrostatico: data.dataTesteHidrostatico,
+      dataValidadeTeste: data.dataValidadeTeste,
     };
 
     addEquipment(newEquipment);
@@ -196,201 +440,173 @@ export default function NovoEquipamento() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-            {/* Seção 1: Identificação */}
-            <FormSection title="Identificação" icon={Tag}>
-              <FormField label="Código / ID" required error={errors.id?.message} htmlFor="id">
-                <input
-                  id="id"
-                  type="text"
-                  {...register('id')}
-                  placeholder="Ex: EXT-110"
-                  className={`field-input ${errors.id ? 'border-critical' : ''}`}
-                />
-              </FormField>
-
-              <FormField label="Tipo" required error={errors.tipo?.message} htmlFor="tipo">
-                <select
-                  id="tipo"
-                  {...register('tipo')}
-                  className={`field-input ${errors.tipo ? 'border-critical' : ''}`}
-                >
-                  <option value="">Selecione o tipo...</option>
-                  {EQUIP_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </FormField>
-
-              <FormField label="Subtipo / Modelo" htmlFor="subtipo">
-                <input
-                  id="subtipo"
-                  type="text"
-                  {...register('subtipo')}
-                  placeholder="Ex: PQS 6kg"
-                  className="field-input"
-                />
-              </FormField>
-            </FormSection>
-
-            {/* Seção 2: Localização */}
-            <FormSection title="Localização" icon={MapPin}>
-              <FormField label="Localização Física" required error={errors.local?.message} htmlFor="local">
-                <input
-                  id="local"
-                  type="text"
-                  {...register('local')}
-                  placeholder="Ex: Bloco B, Corredor Leste"
-                  className={`field-input ${errors.local ? 'border-critical' : ''}`}
-                />
-              </FormField>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <FormField label="Setor" required error={errors.setor?.message} htmlFor="setor">
-                  <input
-                    id="setor"
-                    type="text"
-                    {...register('setor')}
-                    placeholder="Ex: TI"
-                    className={`field-input ${errors.setor ? 'border-critical' : ''}`}
-                  />
-                </FormField>
-
-                <FormField label="Pavimento" htmlFor="pavimento">
-                  <input
-                    id="pavimento"
-                    type="text"
-                    {...register('pavimento')}
-                    placeholder="Ex: Piso 2"
-                    className="field-input"
-                  />
-                </FormField>
-              </div>
-            </FormSection>
-
-            {/* Seção 3: Dados técnicos */}
-            <FormSection title="Dados Técnicos" icon={Wrench}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <FormField label="Fabricante" htmlFor="fabricante">
-                  <input
-                    id="fabricante"
-                    type="text"
-                    {...register('fabricante')}
-                    placeholder="Ex: Resil"
-                    className="field-input"
-                  />
-                </FormField>
-
-                <FormField label="Nº Série" htmlFor="numSerie">
-                  <input
-                    id="numSerie"
-                    type="text"
-                    {...register('numSerie')}
-                    placeholder="Ex: 987654"
-                    className="field-input"
-                  />
-                </FormField>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <FormField label="Capacidade" htmlFor="capacidade">
-                  <input
-                    id="capacidade"
-                    type="text"
-                    {...register('capacidade')}
-                    placeholder="Ex: 6kg / 20m"
-                    className="field-input"
-                  />
-                </FormField>
-
-                <FormField label="Tipo de Carga" htmlFor="tipoCarga">
-                  <select id="tipoCarga" {...register('tipoCarga')} className="field-input">
-                    {CARGA_TYPES.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </FormField>
-              </div>
-
-              {tipoSelecionado === 'Extintor' && (
-                <FormField label="Modelo do Extintor" htmlFor="modeloExtintor">
-                  <select id="modeloExtintor" {...register('modeloExtintor')} className="field-input">
-                    <option value="">Selecione o modelo...</option>
-                    {EXTINTOR_MODELOS.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                </FormField>
-              )}
-            </FormSection>
-
-            {/* Seção 4: Cronograma */}
-            <FormSection title="Cronograma" icon={Calendar}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <FormField label="Fabricação" htmlFor="dataFabricacao">
-                  <input id="dataFabricacao" type="date" {...register('dataFabricacao')} className="field-input" />
-                </FormField>
-                <FormField label="Última Manutenção" htmlFor="dataUltimaManutencao">
-                  <input id="dataUltimaManutencao" type="date" {...register('dataUltimaManutencao')} className="field-input" />
-                </FormField>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <FormField label="Próxima Manutenção" htmlFor="dataProximaManutencao">
-                  <input id="dataProximaManutencao" type="date" {...register('dataProximaManutencao')} className="field-input" />
-                </FormField>
-                <FormField label="Próxima Inspeção" htmlFor="dataProximaInspecao">
-                  <input id="dataProximaInspecao" type="date" {...register('dataProximaInspecao')} className="field-input" />
-                </FormField>
-              </div>
-            </FormSection>
+          {/* Tipo de Equipamento — always visible, always first */}
+          <div className="card-subtle bg-white">
+            <FormField label="Tipo de Equipamento" required error={errors.tipo?.message} htmlFor="tipo">
+              <select
+                id="tipo"
+                {...register('tipo')}
+                className={`field-input text-base ${errors.tipo ? 'border-critical' : ''}`}
+              >
+                <option value="">Selecione o tipo...</option>
+                {EQUIP_TYPES.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </FormField>
           </div>
 
-          {/* Seção 5: Outros — full width */}
-          <FormSection title="Outros" icon={FileText}>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <FormField label="QR Code Vinculado" htmlFor="qrcode">
-                <input
-                  id="qrcode"
-                  type="text"
-                  {...register('qrcode')}
-                  placeholder="Código QR escaneado"
-                  className="field-input"
-                />
-              </FormField>
-
-              <div>
-                <label htmlFor="foto" className="field-label">Foto do Equipamento</label>
-                <div
-                  id="foto"
-                  className="border border-dashed border-gray-300 rounded-lg p-4 text-center bg-gray-50 text-xs text-gray-400 font-bold uppercase tracking-wider h-[44px] lg:h-[48px] flex items-center justify-center"
-                >
-                  Upload de Imagem (em breve)
-                </div>
+          {!tipoSelecionado && (
+            <div className="card-subtle bg-gray-50 border border-dashed border-gray-200 text-center py-10 px-4">
+              <div className="w-14 h-14 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Tag className="w-7 h-7 text-primary" />
               </div>
+              <p className="text-sm font-bold text-gray-700 mb-1">
+                Selecione o tipo de equipamento
+              </p>
+              <p className="text-xs text-gray-500">
+                Escolha acima para carregar os campos específicos do equipamento.
+              </p>
             </div>
+          )}
 
-            <FormField label="Observações" htmlFor="observacoes">
-              <textarea
-                id="observacoes"
-                {...register('observacoes')}
-                placeholder="Adicione observações gerais sobre o estado técnico do equipamento..."
-                rows={4}
-                className="field-textarea"
-              />
-            </FormField>
-          </FormSection>
+          {tipoSelecionado && fieldsPorSecao && (
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                {/* Identificação */}
+                <FormSection title="Identificação" icon={Tag}>
+                  <FormField label="Código / ID" required error={errors.id?.message} htmlFor="id">
+                    <input
+                      id="id"
+                      type="text"
+                      {...register('id')}
+                      placeholder="Ex: EXT-110"
+                      className={`field-input ${errors.id ? 'border-critical' : ''}`}
+                    />
+                  </FormField>
+
+                  <FormField label="Status" required error={errors.status?.message} htmlFor="status">
+                    <select id="status" {...register('status')} className={`field-input ${errors.status ? 'border-critical' : ''}`}>
+                      {EQUIP_STATUS.map((s) => (
+                        <option key={s} value={s}>{STATUS_LABEL[s]}</option>
+                      ))}
+                    </select>
+                  </FormField>
+
+                  {fieldsPorSecao.identificacao.map((f) => (
+                    <FieldRenderer key={f.name} field={f} register={register} errors={errors} />
+                  ))}
+                </FormSection>
+
+                {/* Localização */}
+                <FormSection title="Localização" icon={MapPin}>
+                  <FormField label="Localização Física" required error={errors.local?.message} htmlFor="local">
+                    <input
+                      id="local"
+                      type="text"
+                      {...register('local')}
+                      placeholder="Ex: Bloco B, Corredor Leste"
+                      className={`field-input ${errors.local ? 'border-critical' : ''}`}
+                    />
+                  </FormField>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <FormField label="Setor" required error={errors.setor?.message} htmlFor="setor">
+                      <input
+                        id="setor"
+                        type="text"
+                        {...register('setor')}
+                        placeholder="Ex: TI"
+                        className={`field-input ${errors.setor ? 'border-critical' : ''}`}
+                      />
+                    </FormField>
+
+                    <FormField label="Pavimento" htmlFor="pavimento">
+                      <input
+                        id="pavimento"
+                        type="text"
+                        {...register('pavimento')}
+                        placeholder="Ex: Piso 2"
+                        className="field-input"
+                      />
+                    </FormField>
+                  </div>
+                </FormSection>
+
+                {/* Dados Técnicos */}
+                {fieldsPorSecao.dadosTecnicos.length > 0 && (
+                  <FormSection title="Dados Técnicos" icon={Wrench}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {fieldsPorSecao.dadosTecnicos.map((f) => (
+                        <FieldRenderer key={f.name} field={f} register={register} errors={errors} />
+                      ))}
+                    </div>
+                  </FormSection>
+                )}
+
+                {/* Inspeção / Manutenção */}
+                {fieldsPorSecao.inspecaoManutencao.length > 0 && (
+                  <FormSection title="Inspeção / Manutenção" icon={Calendar}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {fieldsPorSecao.inspecaoManutencao.map((f) => (
+                        <FieldRenderer key={f.name} field={f} register={register} errors={errors} />
+                      ))}
+                    </div>
+                  </FormSection>
+                )}
+              </div>
+
+              {/* Datas de inspeção — common for all types */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                <FormSection title="Inspeção / Manutenção" icon={Calendar}>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <FormField label="Data da Última Inspeção" htmlFor="dataUltimaInspecao">
+                      <input id="dataUltimaInspecao" type="date" {...register('dataUltimaInspecao')} className="field-input" />
+                    </FormField>
+                    <FormField label="Data da Próxima Inspeção" htmlFor="dataProximaInspecao">
+                      <input id="dataProximaInspecao" type="date" {...register('dataProximaInspecao')} className="field-input" />
+                    </FormField>
+                  </div>
+                </FormSection>
+
+                {/* Outros / Observações */}
+                <FormSection title="Outros" icon={FileText}>
+                  <FormField label="QR Code Vinculado" htmlFor="qrcode">
+                    <input
+                      id="qrcode"
+                      type="text"
+                      {...register('qrcode')}
+                      placeholder="Código QR escaneado"
+                      className="field-input"
+                    />
+                  </FormField>
+                </FormSection>
+              </div>
+
+              {/* Observações — full width */}
+              <FormSection title="Observações" icon={FileText}>
+                <FormField label="Observações" htmlFor="observacoes">
+                  <textarea
+                    id="observacoes"
+                    {...register('observacoes')}
+                    placeholder="Adicione observações gerais sobre o estado técnico do equipamento..."
+                    rows={4}
+                    className="field-textarea"
+                  />
+                </FormField>
+              </FormSection>
+            </>
+          )}
 
           {/* Submit button — sticky on mobile */}
-          <div className="sticky bottom-20 lg:bottom-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-neutralBg lg:bg-transparent lg:px-0 lg:py-0 lg:mx-0">
-            <button
-              type="submit"
-              className="btn-primary"
-            >
-              <Save className="w-5 h-5" />
-              Salvar Equipamento
-            </button>
-          </div>
+          {tipoSelecionado && (
+            <div className="sticky bottom-20 lg:bottom-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-neutralBg lg:bg-transparent lg:px-0 lg:py-0 lg:mx-0">
+              <button type="submit" className="btn-primary">
+                <Save className="w-5 h-5" />
+                Salvar Equipamento
+              </button>
+            </div>
+          )}
         </form>
       )}
     </div>
