@@ -1,0 +1,17 @@
+export const EXTINTOR_MODELOS = [
+  'AMPOLA - CO₂ OU N₂',
+  'AP',
+  'API',
+  'CLASSE D',
+  'CLASSE K',
+  'CO₂',
+  'ESPUMA MECÂNICA',
+  'ESPUMA MECÂNICA INDIRETA',
+  'FE36',
+  'LÍTIO AB',
+  'PQS ABC',
+  'PQS BC',
+  'PQSI ABC',
+  'PQSI BC',
+  'OUTRO',
+] as const;

@@ -35,6 +35,7 @@ export interface Equipment {
   numSerie?: string;
   capacidade?: string;
   tipoCarga?: 'Água Pressurizada' | 'CO2' | 'PQS' | 'Espuma' | 'Classe K' | string;
+  modeloExtintor?: string;
   dataFabricacao?: string;
   dataUltimaManutencao?: string;
   dataProximaManutencao?: string;

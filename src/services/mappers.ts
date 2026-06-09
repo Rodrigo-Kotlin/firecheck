@@ -20,6 +20,7 @@ export interface DbEquipamento {
   num_serie: string | null;
   capacidade: string | null;
   tipo_carga: string | null;
+  modelo_extintor: string | null;
   data_fabricacao: string | null;
   data_ultima_manutencao: string | null;
   data_proxima_manutencao: string | null;
@@ -84,6 +85,7 @@ export function dbToEquipment(row: DbEquipamento): Equipment {
     numSerie: emptyToUndef(row.num_serie),
     capacidade: emptyToUndef(row.capacidade),
     tipoCarga: emptyToUndef(row.tipo_carga),
+    modeloExtintor: emptyToUndef(row.modelo_extintor),
     dataFabricacao: emptyToUndef(row.data_fabricacao),
     dataUltimaManutencao: emptyToUndef(row.data_ultima_manutencao),
     dataProximaManutencao: emptyToUndef(row.data_proxima_manutencao),
@@ -107,6 +109,7 @@ export function equipmentToDb(eq: Partial<Equipment>): Partial<DbEquipamento> {
   if (eq.numSerie !== undefined) row.num_serie = eq.numSerie ?? null;
   if (eq.capacidade !== undefined) row.capacidade = eq.capacidade ?? null;
   if (eq.tipoCarga !== undefined) row.tipo_carga = eq.tipoCarga ?? null;
+  if (eq.modeloExtintor !== undefined) row.modelo_extintor = eq.modeloExtintor ?? null;
   if (eq.dataFabricacao !== undefined) row.data_fabricacao = eq.dataFabricacao ?? null;
   if (eq.dataUltimaManutencao !== undefined) row.data_ultima_manutencao = eq.dataUltimaManutencao ?? null;
   if (eq.dataProximaManutencao !== undefined) row.data_proxima_manutencao = eq.dataProximaManutencao ?? null;

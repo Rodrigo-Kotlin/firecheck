@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import QrCodePrintCard from '../../components/QrCodePrintCard';
+import { EXTINTOR_MODELOS } from '../../constants/equipmentOptions';
 import type { Equipment } from '../../types';
 
 const EQUIP_TYPES = [
@@ -40,6 +41,7 @@ const schema = z.object({
   numSerie: z.string().optional(),
   capacidade: z.string().optional(),
   tipoCarga: z.string().optional(),
+  modeloExtintor: z.string().optional(),
   dataFabricacao: z.string().optional(),
   dataUltimaManutencao: z.string().optional(),
   dataProximaManutencao: z.string().optional(),
@@ -114,6 +116,7 @@ export default function NovoEquipamento() {
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors }
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -122,6 +125,8 @@ export default function NovoEquipamento() {
       tipo: ''
     }
   });
+
+  const tipoSelecionado = watch('tipo');
 
   const onSubmit = (data: FormData) => {
     const isDuplicate = equipments.some((e) => e.id.toUpperCase() === data.id.toUpperCase());
@@ -143,6 +148,7 @@ export default function NovoEquipamento() {
       numSerie: data.numSerie,
       capacidade: data.capacidade,
       tipoCarga: data.tipoCarga,
+      modeloExtintor: data.modeloExtintor,
       dataFabricacao: data.dataFabricacao,
       dataUltimaManutencao: data.dataUltimaManutencao,
       dataProximaManutencao: data.dataProximaManutencao,
@@ -305,6 +311,17 @@ export default function NovoEquipamento() {
                   </select>
                 </FormField>
               </div>
+
+              {tipoSelecionado === 'Extintor' && (
+                <FormField label="Modelo do Extintor" htmlFor="modeloExtintor">
+                  <select id="modeloExtintor" {...register('modeloExtintor')} className="field-input">
+                    <option value="">Selecione o modelo...</option>
+                    {EXTINTOR_MODELOS.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </FormField>
+              )}
             </FormSection>
 
             {/* Seção 4: Cronograma */}

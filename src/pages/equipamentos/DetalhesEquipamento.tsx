@@ -297,6 +297,7 @@ export default function DetalhesEquipamento() {
 
       {/* Dados Técnicos */}
       <DetailSection title="Dados Técnicos" icon={Wrench} cols={3}>
+        {eq.tipo === 'Extintor' && <Field label="Modelo do Extintor" value={eq.modeloExtintor} />}
         <Field label="Tipo de Carga" value={eq.tipoCarga} />
         <Field label="Capacidade" value={eq.capacidade} />
         <Field label="QR Code" value={eq.qrcode} mono />
