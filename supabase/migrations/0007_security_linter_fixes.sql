@@ -100,34 +100,42 @@ create policy "p_equipamentos_delete" on public.equipamentos
 
 -- 4b. inspecoes ─── owner column: user_id (uuid) ───────────────────────────
 
+drop policy if exists "p_inspecoes_select" on public.inspecoes;
 create policy "p_inspecoes_select" on public.inspecoes
   for select to authenticated using (true);
 
+drop policy if exists "p_inspecoes_insert" on public.inspecoes;
 create policy "p_inspecoes_insert" on public.inspecoes
   for insert to authenticated with check (user_id = auth.uid());
 
+drop policy if exists "p_inspecoes_update" on public.inspecoes;
 create policy "p_inspecoes_update" on public.inspecoes
   for update to authenticated
   using (public.is_admin() or user_id = auth.uid())
   with check (public.is_admin() or user_id = auth.uid());
 
+drop policy if exists "p_inspecoes_delete" on public.inspecoes;
 create policy "p_inspecoes_delete" on public.inspecoes
   for delete to authenticated
   using (public.is_admin() or user_id = auth.uid());
 
 -- 4c. planos_acao ─── owner column: user_id (uuid) ─────────────────────────
 
+drop policy if exists "p_planos_select" on public.planos_acao;
 create policy "p_planos_select" on public.planos_acao
   for select to authenticated using (true);
 
+drop policy if exists "p_planos_insert" on public.planos_acao;
 create policy "p_planos_insert" on public.planos_acao
   for insert to authenticated with check (user_id = auth.uid());
 
+drop policy if exists "p_planos_update" on public.planos_acao;
 create policy "p_planos_update" on public.planos_acao
   for update to authenticated
   using (public.is_admin() or user_id = auth.uid())
   with check (public.is_admin() or user_id = auth.uid());
 
+drop policy if exists "p_planos_delete" on public.planos_acao;
 create policy "p_planos_delete" on public.planos_acao
   for delete to authenticated
   using (public.is_admin() or user_id = auth.uid());
@@ -136,9 +144,11 @@ create policy "p_planos_delete" on public.planos_acao
 -- Since fotos_inspecao has no direct owner column, we join through
 -- inspection_id → inspecoes.id to check user_id.
 
+drop policy if exists "p_fotos_select" on public.fotos_inspecao;
 create policy "p_fotos_select" on public.fotos_inspecao
   for select to authenticated using (true);
 
+drop policy if exists "p_fotos_insert" on public.fotos_inspecao;
 create policy "p_fotos_insert" on public.fotos_inspecao
   for insert to authenticated
   with check (
@@ -149,6 +159,7 @@ create policy "p_fotos_insert" on public.fotos_inspecao
     )
   );
 
+drop policy if exists "p_fotos_update" on public.fotos_inspecao;
 create policy "p_fotos_update" on public.fotos_inspecao
   for update to authenticated
   using (
@@ -159,6 +170,7 @@ create policy "p_fotos_update" on public.fotos_inspecao
     )
   );
 
+drop policy if exists "p_fotos_delete" on public.fotos_inspecao;
 create policy "p_fotos_delete" on public.fotos_inspecao
   for delete to authenticated
   using (
@@ -171,17 +183,21 @@ create policy "p_fotos_delete" on public.fotos_inspecao
 
 -- 4e. inspetores ─── reference table, admin-only writes ────────────────────
 
+drop policy if exists "p_inspetores_select" on public.inspetores;
 create policy "p_inspetores_select" on public.inspetores
   for select to authenticated using (true);
 
+drop policy if exists "p_inspetores_insert" on public.inspetores;
 create policy "p_inspetores_insert" on public.inspetores
   for insert to authenticated with check (public.is_admin());
 
+drop policy if exists "p_inspetores_update" on public.inspetores;
 create policy "p_inspetores_update" on public.inspetores
   for update to authenticated
   using (public.is_admin())
   with check (public.is_admin());
 
+drop policy if exists "p_inspetores_delete" on public.inspetores;
 create policy "p_inspetores_delete" on public.inspetores
   for delete to authenticated
   using (public.is_admin());
