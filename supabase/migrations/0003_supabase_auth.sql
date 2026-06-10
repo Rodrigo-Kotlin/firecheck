@@ -176,22 +176,27 @@ drop policy if exists "p_all_inspecoes"    on public.inspecoes;
 drop policy if exists "p_all_planos"       on public.planos_acao;
 drop policy if exists "p_all_fotos"        on public.fotos_inspecao;
 
+drop policy if exists "p_auth_equipamentos" on public.equipamentos;
 create policy "p_auth_equipamentos" on public.equipamentos
   for all to authenticated
   using (true) with check (true);
 
+drop policy if exists "p_auth_inspetores" on public.inspetores;
 create policy "p_auth_inspetores" on public.inspetores
   for all to authenticated
   using (true) with check (true);
 
+drop policy if exists "p_auth_inspecoes" on public.inspecoes;
 create policy "p_auth_inspecoes" on public.inspecoes
   for all to authenticated
   using (true) with check (true);
 
+drop policy if exists "p_auth_planos" on public.planos_acao;
 create policy "p_auth_planos" on public.planos_acao
   for all to authenticated
   using (true) with check (true);
 
+drop policy if exists "p_auth_fotos" on public.fotos_inspecao;
 create policy "p_auth_fotos" on public.fotos_inspecao
   for all to authenticated
   using (true) with check (true);
