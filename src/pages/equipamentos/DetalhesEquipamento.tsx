@@ -104,9 +104,10 @@ export default function DetalhesEquipamento() {
   const [qrDataUrl, setQrDataUrl] = useState('');
 
   useEffect(() => {
-    if (!qrModalOpen || !eq?.qrcode) return;
+    if (!qrModalOpen || !eq) return;
+    const value = eq.qrcode || eq.qrCode || eq.id;
     let cancelled = false;
-    QRCode.toDataURL(eq.qrcode, {
+    QRCode.toDataURL(value, {
       errorCorrectionLevel: 'H',
       margin: 1,
       width: 512,
@@ -117,12 +118,13 @@ export default function DetalhesEquipamento() {
       console.error('[Detalhes] Erro ao gerar QR:', err);
     });
     return () => { cancelled = true; };
-  }, [qrModalOpen, eq?.qrcode]);
+  }, [qrModalOpen, eq]);
 
   const handleDownloadQr = async () => {
     if (!eq) return;
+    const value = eq.qrcode || eq.qrCode || eq.id;
     try {
-      const url = await QRCode.toDataURL(eq.qrcode || eq.id, {
+      const url = await QRCode.toDataURL(value, {
         errorCorrectionLevel: 'H',
         margin: 1,
         width: 512,
@@ -227,8 +229,11 @@ export default function DetalhesEquipamento() {
   };
 
   const fieldValue = (name: string): ReactNode => {
-    const v = (eq as unknown as Record<string, unknown>)[name];
-    return v != null && v !== '' ? String(v) : undefined;
+    const direct = (eq as unknown as Record<string, unknown>)[name];
+    if (direct != null && direct !== '') return String(direct);
+    const dt = eq.dadosTecnicos?.[name];
+    if (dt != null && dt !== '') return String(dt);
+    return undefined;
   };
 
   return (
@@ -380,7 +385,7 @@ export default function DetalhesEquipamento() {
       </DetailSection>
 
       {/* QR Code Actions */}
-      {eq.qrcode && (
+      {(eq.qrcode || eq.qrCode) && (
         <DetailSection title="QR Code" icon={QrCode} cols={3}>
           <div className="col-span-full flex flex-wrap gap-2">
             <button

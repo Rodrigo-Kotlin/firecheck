@@ -34,11 +34,18 @@ export async function upsertEquipment(eq: Equipment): Promise<boolean> {
     notConfigured<boolean>('upsertEquipment');
     return false;
   }
+  const payload = equipmentToDb(eq);
   const { error } = await supabase
     .from('equipamentos')
-    .upsert(equipmentToDb(eq) as DbEquipamento, { onConflict: 'id' });
+    .upsert(payload, { onConflict: 'id' });
   if (error) {
-    console.error('[equipment.upsertEquipment]', error);
+    console.error('[equipment.upsertEquipment]', {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      payload,
+    });
     return false;
   }
   return true;

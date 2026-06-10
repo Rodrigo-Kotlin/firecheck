@@ -24,7 +24,7 @@ import {
   type FieldConfig,
   type FieldSection,
 } from '../../constants/equipmentFormConfig';
-import type { Equipment } from '../../types';
+import type { Equipment, EquipmentStatus } from '../../types';
 
 const schema = z.object({
   id: z.string().min(3, { message: 'Código deve conter no mínimo 3 caracteres' }).toUpperCase(),
@@ -276,6 +276,15 @@ export default function NovoEquipamento() {
     return map;
   }, [tipoSelecionado]);
 
+  const COMMON_FORM_FIELDS = new Set([
+    'id', 'tipo', 'status', 'local', 'setor', 'pavimento', 'fabricante', 'numSerie',
+    'capacidade', 'tipoCarga',
+    'dataFabricacao', 'dataUltimaManutencao', 'dataProximaManutencao',
+    'dataProximaInspecao', 'dataUltimaInspecao',
+    'dataUltimoTeste', 'dataProximoTeste', 'dataTesteHidrostatico', 'dataValidadeTeste',
+    'qrcode', 'observacoes',
+  ]);
+
   const onSubmit = (data: FormData) => {
     const isDuplicate = equipments.some((e) => e.id.toUpperCase() === data.id.toUpperCase());
     if (isDuplicate) {
@@ -284,124 +293,43 @@ export default function NovoEquipamento() {
     }
     setDuplicateError('');
 
-    data.qrcode = data.qrcode || data.id;
+    const qrCode = data.qrcode || data.id;
 
     const newEquipment: Equipment = {
       id: data.id,
       tipo: data.tipo,
       local: data.local,
       setor: data.setor,
-      status: data.status as Equipment['status'],
+      status: data.status as EquipmentStatus,
       pavimento: data.pavimento,
       fabricante: data.fabricante,
       numSerie: data.numSerie,
-      dataProximaInspecao: data.dataProximaInspecao,
-      dataUltimaInspecao: data.dataUltimaInspecao,
-      qrcode: data.qrcode,
-      observacoes: data.observacoes,
-      modeloExtintor: data.modeloExtintor,
       capacidade: data.capacidade,
-      classeFogo: data.classeFogo,
       tipoCarga: data.tipoCarga,
-      seloLacre: data.seloLacre,
-      manometro: data.manometro,
-      suporte: data.suporte,
-      sinalizacao: data.sinalizacao,
-      acessoDesobstruido: data.acessoDesobstruido,
-      estadoGeral: data.estadoGeral,
-      tipoHidrante: data.tipoHidrante,
-      tipoAbrigoVinculado: data.tipoAbrigoVinculado,
-      registro: data.registro,
-      valvula: data.valvula,
-      adaptador: data.adaptador,
-      tampao: data.tampao,
-      pressao: data.pressao,
-      tipoMangueira: data.tipoMangueira,
-      diametro: data.diametro,
-      comprimento: data.comprimento,
-      tipoUniao: data.tipoUniao,
-      estadoMangueira: data.estadoMangueira,
-      acondicionamento: data.acondicionamento,
-      possuiEtiquetaInspecao: data.possuiEtiquetaInspecao,
-      tipoAbrigo: data.tipoAbrigo,
-      material: data.material,
-      estadoPorta: data.estadoPorta,
-      estadoVisor: data.estadoVisor,
-      possuiMangueira: data.possuiMangueira,
-      possuiEsguicho: data.possuiEsguicho,
-      possuiChaveStorz: data.possuiChaveStorz,
-      possuiRegistro: data.possuiRegistro,
-      tipoEsguicho: data.tipoEsguicho,
-      estadoRoscas: data.estadoRoscas,
-      estadoVedacao: data.estadoVedacao,
-      compatibilidadeMangueira: data.compatibilidadeMangueira,
-      localAcondicionamento: data.localAcondicionamento,
-      tipoChaveStorz: data.tipoChaveStorz,
-      diametroCompativel: data.diametroCompativel,
-      estadoFisico: data.estadoFisico,
-      tipoAcionador: data.tipoAcionador,
-      enderecoZona: data.enderecoZona,
-      estadoTampa: data.estadoTampa,
-      estadoBotao: data.estadoBotao,
-      alturaInstalacao: data.alturaInstalacao,
-      funcionamentoTestado: data.funcionamentoTestado,
-      tipoAlarme: data.tipoAlarme,
-      sireneAudiovisual: data.sireneAudiovisual,
-      sireneSonora: data.sireneSonora,
-      sinalizadorVisual: data.sinalizadorVisual,
-      zonaLaco: data.zonaLaco,
-      fonteAlimentacao: data.fonteAlimentacao,
-      tipoCentral: data.tipoCentral,
-      quantidadeLacosZonas: data.quantidadeLacosZonas,
-      bateriaBackup: data.bateriaBackup,
-      comunicacaoDispositivos: data.comunicacaoDispositivos,
-      statusPainel: data.statusPainel,
-      localInstalacao: data.localInstalacao,
-      modeloIluminacao: data.modeloIluminacao,
-      funcaoIluminacao: data.funcaoIluminacao,
-      autonomia: data.autonomia,
-      tipoInstalacao: data.tipoInstalacao,
-      potencia: data.potencia,
-      tipoSinalizacao: data.tipoSinalizacao,
-      codigoPlaca: data.codigoPlaca,
-      fotoluminescente: data.fotoluminescente,
-      visibilidade: data.visibilidade,
-      estadoConservacao: data.estadoConservacao,
-      fixacaoAdequada: data.fixacaoAdequada,
-      tipoSprinkler: data.tipoSprinkler,
-      temperaturaAcionamento: data.temperaturaAcionamento,
-      posicaoInstalacao: data.posicaoInstalacao,
-      estadoBulbo: data.estadoBulbo,
-      obstrucao: data.obstrucao,
-      corrosao: data.corrosao,
-      vazamento: data.vazamento,
-      areaProtegida: data.areaProtegida,
-      tipoBomba: data.tipoBomba,
-      vazao: data.vazao,
-      alimentacaoEletrica: data.alimentacaoEletrica,
-      painelComando: data.painelComando,
-      bombaJockey: data.bombaJockey,
-      bombaPrincipal: data.bombaPrincipal,
-      bombaReserva: data.bombaReserva,
-      tipoPorta: data.tipoPorta,
-      tempoResistenciaFogo: data.tempoResistenciaFogo,
-      barraAntipanico: data.barraAntipanico,
-      dobradicas: data.dobradicas,
-      molaAerea: data.molaAerea,
-      fechamentoAutomatico: data.fechamentoAutomatico,
-      vedacao: data.vedacao,
-      tipoDetectorFumaca: data.tipoDetectorFumaca,
-      tipoDetectorCalor: data.tipoDetectorCalor,
-      nomeModelo: data.nomeModelo,
-      descricaoTecnica: data.descricaoTecnica,
       dataFabricacao: data.dataFabricacao,
       dataUltimaManutencao: data.dataUltimaManutencao,
       dataProximaManutencao: data.dataProximaManutencao,
+      dataProximaInspecao: data.dataProximaInspecao,
+      dataUltimaInspecao: data.dataUltimaInspecao,
       dataUltimoTeste: data.dataUltimoTeste,
       dataProximoTeste: data.dataProximoTeste,
       dataTesteHidrostatico: data.dataTesteHidrostatico,
       dataValidadeTeste: data.dataValidadeTeste,
+      qrcode: qrCode,
+      qrCode,
+      observacoes: data.observacoes,
+      dadosTecnicos: {},
     };
+
+    const dataRecord = data as unknown as Record<string, unknown>;
+    for (const key of Object.keys(dataRecord)) {
+      if (!COMMON_FORM_FIELDS.has(key)) {
+        const val = dataRecord[key];
+        if (val !== undefined && val !== '') {
+          newEquipment.dadosTecnicos![key] = val as string;
+        }
+      }
+    }
 
     addEquipment(newEquipment);
     setCreatedEquipment(newEquipment);

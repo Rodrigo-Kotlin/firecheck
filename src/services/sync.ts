@@ -85,6 +85,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
       await db.equipamentos.update(eq.id, { sincronizado: true });
       ok++;
     } else {
+      console.error('[sync] Falha ao sincronizar equipamento %s — mantendo sincronizado: false', eq.id);
       errors++;
     }
   }
@@ -123,6 +124,7 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       await db.inspecoes.update(insp.id, { sincronizado: true });
       ok++;
     } else {
+      console.error('[sync] Falha ao sincronizar inspeção %s — mantendo sincronizado: false', insp.id);
       errors++;
     }
   }
@@ -167,6 +169,7 @@ async function pushActionPlans(
     if (success) {
       ok++;
     } else {
+      console.error('[sync] Falha ao sincronizar plano de ação %s — mantendo sincronizado: false', plan.id);
       errors++;
     }
   }

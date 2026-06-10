@@ -138,8 +138,10 @@ export interface Equipment {
   dataProximaInspecao?: string;
   dataUltimaInspecao?: string;
   qrcode?: string;
+  qrCode?: string;
   fotoUrl?: string;
   observacoes?: string;
+  dadosTecnicos?: Record<string, string | number | boolean | null>;
   /** ID of the user who created this equipment. */
   createdBy?: string;
 }
