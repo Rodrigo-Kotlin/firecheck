@@ -1,4 +1,4 @@
-import { useState, useMemo, type ReactNode } from 'react';
+import { useState, useMemo, useEffect, useCallback, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -10,7 +10,9 @@ import {
   ChevronLeft,
   FileText,
   MapPin,
+  RefreshCw,
   Save,
+  Sparkles,
   Tag,
   Wrench,
   type LucideIcon,
@@ -25,6 +27,7 @@ import {
   type FieldSection,
 } from '../../constants/equipmentFormConfig';
 import type { Equipment, EquipmentStatus } from '../../types';
+import { generateNextTag, isValidTagForType, TAG_PREFIXES } from '../../utils/tagGenerator';
 
 const schema = z.object({
   id: z.string().min(3, { message: 'Código deve conter no mínimo 3 caracteres' }).toUpperCase(),
@@ -250,11 +253,14 @@ export default function NovoEquipamento() {
   const { addEquipment, equipments } = useAppStore();
   const [createdEquipment, setCreatedEquipment] = useState<Equipment | null>(null);
   const [duplicateError, setDuplicateError] = useState('');
+  const [tagEditadaManualmente, setTagEditadaManualmente] = useState(false);
+  const [tagAviso, setTagAviso] = useState('');
 
   const {
     register,
     handleSubmit,
     watch,
+    setValue,
     formState: { errors }
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -265,6 +271,39 @@ export default function NovoEquipamento() {
   });
 
   const tipoSelecionado = watch('tipo');
+  const idAtual = watch('id');
+
+  const existingIds = useMemo(() => equipments.map((e) => e.id), [equipments]);
+
+  const gerarTag = useCallback((tipo: string) => {
+    if (!tipo || !TAG_PREFIXES[tipo]) return;
+    const tag = generateNextTag(tipo, existingIds);
+    setValue('id', tag);
+    setTagEditadaManualmente(false);
+    setTagAviso('');
+  }, [existingIds, setValue]);
+
+  useEffect(() => {
+    if (tipoSelecionado && !tagEditadaManualmente) {
+      gerarTag(tipoSelecionado);
+    }
+  }, [tipoSelecionado, tagEditadaManualmente, gerarTag]);
+
+  useEffect(() => {
+    if (!tipoSelecionado || !idAtual || !tagEditadaManualmente) {
+      setTagAviso('');
+      return;
+    }
+    if (!isValidTagForType(idAtual, tipoSelecionado)) {
+      const prefix = TAG_PREFIXES[tipoSelecionado];
+      setTagAviso(prefix
+        ? `Padrão esperado: ${prefix}-001. A TAG livre será reaproveitada.`
+        : ''
+      );
+    } else {
+      setTagAviso('');
+    }
+  }, [idAtual, tipoSelecionado, tagEditadaManualmente]);
 
   const fieldsPorSecao = useMemo(() => {
     if (!tipoSelecionado) return null as Record<string, FieldConfig[]> | null;
@@ -405,15 +444,69 @@ export default function NovoEquipamento() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                 {/* Identificação */}
                 <FormSection title="Identificação" icon={Tag}>
-                  <FormField label="Código / ID" required error={errors.id?.message} htmlFor="id">
-                    <input
-                      id="id"
-                      type="text"
-                      {...register('id')}
-                      placeholder="Ex: EXT-110"
-                      className={`field-input ${errors.id ? 'border-critical' : ''}`}
-                    />
-                  </FormField>
+                  <div>
+                    <label htmlFor="id" className="field-label flex items-baseline gap-1">
+                      <span>TAG / Código</span>
+                      <span className="text-critical text-xs font-black" aria-label="obrigatório">*</span>
+                    </label>
+
+                    <div className="relative flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          id="id"
+                          type="text"
+                          {...register('id', {
+                            onChange: () => setTagEditadaManualmente(true),
+                          })}
+                          placeholder="Gerado automaticamente"
+                          className={`field-input font-mono tracking-wider pr-10 ${errors.id ? 'border-critical' : ''}`}
+                          autoComplete="off"
+                          autoCapitalize="characters"
+                        />
+                        {!tagEditadaManualmente && idAtual && (
+                          <span
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-success flex items-center"
+                            title="TAG gerada automaticamente"
+                          >
+                            <Sparkles className="w-3 h-3" />
+                          </span>
+                        )}
+                      </div>
+
+                      {tipoSelecionado && TAG_PREFIXES[tipoSelecionado] && (
+                        <button
+                          type="button"
+                          onClick={() => gerarTag(tipoSelecionado)}
+                          className="flex-shrink-0 w-10 h-11 flex items-center justify-center rounded-lg bg-gray-50 border border-gray-200 text-gray-500 hover:text-primary hover:border-primary hover:bg-primary/5 transition-colors min-h-0 min-w-0"
+                          title="Regerar TAG automaticamente"
+                          aria-label="Regerar TAG"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {errors.id?.message && (
+                      <span className="field-error flex items-center gap-1 mt-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span>{errors.id.message}</span>
+                      </span>
+                    )}
+
+                    {tagAviso && !errors.id?.message && (
+                      <span className="text-[11px] text-pending font-medium flex items-center gap-1 mt-1.5">
+                        <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                        {tagAviso}
+                      </span>
+                    )}
+
+                    {!tagEditadaManualmente && idAtual && !errors.id?.message && (
+                      <span className="field-hint flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-success" />
+                        TAG gerada automaticamente · próxima disponível
+                      </span>
+                    )}
+                  </div>
 
                   <FormField label="Status" required error={errors.status?.message} htmlFor="status">
                     <select id="status" {...register('status')} className={`field-input ${errors.status ? 'border-critical' : ''}`}>
