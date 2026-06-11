@@ -68,6 +68,9 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
       await db.equipamentos.delete(eq.id);
       deleted++;
     } else {
+      console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', {
+        id: eq.id,
+      });
       errors++;
     }
   }
@@ -107,6 +110,13 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
         await db.inspecoes.delete(insp.id);
         deleted++;
       } else {
+        console.error('[sync.pushInspections] Falha ao deletar inspeção no Supabase', {
+          id: insp.id,
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
         errors++;
       }
     }

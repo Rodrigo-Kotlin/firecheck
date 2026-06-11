@@ -58,7 +58,13 @@ export async function deleteEquipment(id: string): Promise<boolean> {
   }
   const { error } = await supabase.from('equipamentos').delete().eq('id', id);
   if (error) {
-    console.error('[equipment.deleteEquipment]', error);
+    console.error('[equipment.deleteEquipment] Falha ao excluir equipamento', {
+      id,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
     return false;
   }
   return true;

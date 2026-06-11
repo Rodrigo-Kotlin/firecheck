@@ -226,7 +226,7 @@ export async function registerUser(input: RegisterInput): Promise<Inspector> {
     throw authError('CARGO_INVALID', 'Informe seu cargo.');
   }
   const policy = checkPasswordPolicy(input.password);
-  if (!policy.ok) {
+  if (policy.ok === false) {
     throw authError('PASSWORD_WEAK', policy.reason);
   }
 
@@ -340,7 +340,7 @@ export async function updateOwnPassword(newPassword: string): Promise<void> {
     throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
   }
   const policy = checkPasswordPolicy(newPassword);
-  if (!policy.ok) {
+  if (policy.ok === false) {
     throw authError('PASSWORD_WEAK', policy.reason);
   }
   const { error } = await supabase.auth.updateUser({ password: newPassword });

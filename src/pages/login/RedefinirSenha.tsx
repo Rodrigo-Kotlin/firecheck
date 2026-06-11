@@ -116,7 +116,7 @@ export default function RedefinirSenha() {
       return;
     }
     const policy = checkPasswordPolicy(newPassword);
-    if (!policy.ok) {
+    if (policy.ok === false) {
       showToast({ kind: 'error', title: policy.reason });
       return;
     }

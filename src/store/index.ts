@@ -217,10 +217,12 @@ export const useAppStore = create<AppState>()(
             listUsers(),
           ]);
 
+          const activeEqs = localEqs.filter((e) => !e.pendingDelete);
+
           set({
-            equipments: localEqs.map(toEquipment),
+            equipments: activeEqs.map(toEquipment),
             inspections: localInsps.map(toInspection),
-            stats: recomputeStats(localEqs.map(toEquipment)),
+            stats: recomputeStats(activeEqs.map(toEquipment)),
           });
 
           const sessionUser = await resolveSession();
@@ -278,14 +280,7 @@ export const useAppStore = create<AppState>()(
               stats: recomputeStats(updated),
             };
           });
-          void db.equipamentos.delete(id);
-          void (async () => {
-            const inspections = await db.inspecoes.where('equipmentId').equals(id).toArray();
-            for (const insp of inspections) {
-              await db.fotos.where('inspectionId').equals(insp.id).delete();
-            }
-            await db.inspecoes.where('equipmentId').equals(id).delete();
-          })();
+          void db.equipamentos.update(id, { pendingDelete: true, sincronizado: false });
           void runSync().then(() => get().refreshPendingCount());
         },
 
