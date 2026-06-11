@@ -27,6 +27,7 @@ import type { LucideIcon } from 'lucide-react';
 import QRCode from 'qrcode';
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
+import ConfirmDialog from '../../components/ConfirmDialog';
 import {
   FIELD_CONFIGS,
   STATUS_LABEL,
@@ -102,6 +103,7 @@ export default function DetalhesEquipamento() {
 
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     if (!qrModalOpen || !eq) return;
@@ -219,10 +221,6 @@ export default function DetalhesEquipamento() {
   const owner = eq.createdBy ? users.find((u) => u.id === eq.createdBy) : null;
 
   const handleDelete = () => {
-    if (!deletable) return;
-    if (!window.confirm(`Excluir o equipamento ${eq.id}? Esta ação também remove as inspeções vinculadas e não pode ser desfeita.`)) {
-      return;
-    }
     deleteEquipment(eq.id);
     showToast({ kind: 'success', title: 'Equipamento excluído.' });
     navigate('/equipamentos', { replace: true });
@@ -256,7 +254,7 @@ export default function DetalhesEquipamento() {
         {deletable && (
           <button
             type="button"
-            onClick={handleDelete}
+            onClick={() => setConfirmDelete(true)}
             className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0"
             aria-label="Excluir equipamento"
             title="Excluir equipamento"
@@ -489,6 +487,16 @@ export default function DetalhesEquipamento() {
         )}
       </div>
     </div>
+
+    <ConfirmDialog
+      open={confirmDelete}
+      onClose={() => setConfirmDelete(false)}
+      onConfirm={handleDelete}
+      title="Excluir equipamento"
+      message={`Excluir o equipamento ${eq.id}? Esta ação também remove as inspeções vinculadas e não pode ser desfeita.`}
+      confirmLabel="Sim, excluir"
+      cancelLabel="Cancelar"
+    />
 
     {/* QR Code Modal */}
     {qrModalOpen && (

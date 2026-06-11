@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight } from 'lucide-react';
-import { canEditEquipment } from '../../services/permissions';
+import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight, Trash2 } from 'lucide-react';
+import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
+import { showToast } from '../../hooks/useToasts';
+import ConfirmDialog from '../../components/ConfirmDialog';
 
 const CATEGORIES = [
   { label: 'Tudo', filter: 'Tudo' },
@@ -17,7 +19,7 @@ const CATEGORIES = [
 ];
 
 export default function Equipamentos() {
-  const { equipments, inspections, user } = useAppStore();
+  const { equipments, inspections, user, deleteEquipment } = useAppStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [activeChip, setActiveChip] = useState('Tudo');
@@ -55,6 +57,13 @@ export default function Equipamentos() {
   const clearFilters = () => {
     setSearch('');
     setActiveChip('Tudo');
+  };
+
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const handleDelete = () => {
+    if (!deleteTarget) return;
+    deleteEquipment(deleteTarget);
+    showToast({ kind: 'success', title: 'Equipamento excluído.' });
   };
 
   return (
@@ -130,6 +139,7 @@ export default function Equipamentos() {
           const lastInsp = inspections.find(i => i.equipmentId === eq.id);
           const isExpiring = eq.status === 'vencido' || eq.status === 'pendente';
           const editable = canEditEquipment(user, eq);
+          const deletable = canDeleteEquipment(user, eq);
           const status = getStatusStyle(eq.status);
 
           return (
@@ -155,6 +165,20 @@ export default function Equipamentos() {
                       <Lock className="w-3 h-3" />
                       Leitura
                     </span>
+                  )}
+                  {deletable && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteTarget(eq.id);
+                      }}
+                      className="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0 transition-colors"
+                      aria-label={`Excluir ${eq.id}`}
+                      title="Excluir equipamento"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   )}
                   <ChevronRight className="w-4 h-4 text-gray-300" aria-hidden="true" />
                 </div>
@@ -227,6 +251,16 @@ export default function Equipamentos() {
       >
         <Plus className="w-6 h-6" />
       </button>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDelete}
+        title="Excluir equipamento"
+        message={`Excluir o equipamento ${deleteTarget ?? ''}? Esta ação também remove as inspeções vinculadas e não pode ser desfeita.`}
+        confirmLabel="Sim, excluir"
+        cancelLabel="Cancelar"
+      />
     </div>
   );
 }
