@@ -476,7 +476,7 @@ input[type="checkbox"], input[type="radio"] {
   bottom: 0;
   left: 0;
   right: 0;
-  height: 4rem;
+  height: 4.5rem;
   background: white;
   border-top: 1px solid var(--color-border-soft);
   display: flex;
@@ -484,12 +484,80 @@ input[type="checkbox"], input[type="radio"] {
   align-items: center;
   z-index: 30;
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.04);
-  padding-bottom: env(safe-area-inset-bottom, 0);
+  padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  padding-left: env(safe-area-inset-left, 0);
+  padding-right: env(safe-area-inset-right, 0);
 }
 @media (min-width: 1024px) {
   .app-bottom-nav {
     display: none;
   }
+}
+
+.bottom-nav-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  height: 100%;
+  min-height: 44px;
+  min-width: 44px;
+  border: none;
+  background: transparent;
+  color: #9CA3AF;
+  transition: color 0.15s ease;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+.bottom-nav-tab:hover {
+  color: #6B7280;
+}
+.bottom-nav-tab--active {
+  color: var(--color-primary);
+}
+.bottom-nav-tab__label {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  text-align: center;
+}
+
+/* Scanner FAB — elevated central button */
+.bottom-nav-fab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  height: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0;
+  position: relative;
+}
+.bottom-nav-fab__inner {
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 999px;
+  background: var(--color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  margin-top: -0.75rem;
+}
+.bottom-nav-fab__inner:hover {
+  transform: scale(1.05);
+  box-shadow: 0 6px 20px rgba(220, 38, 38, 0.45);
+}
+.bottom-nav-fab__inner:active {
+  transform: scale(0.95);
 }
 
 /* Top header — visible on desktop above the page header (replaces bottom nav) */

@@ -1,16 +1,46 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
 
-// https://vite.dev/config/
 export default defineConfig({
-  // Em produção (GitHub Pages) o app é servido em /firecheck/.
-  // Em desenvolvimento usamos '/' para evitar paths absolutos quebrados.
   base: process.env.GITHUB_PAGES ? '/firecheck/' : '/',
-  plugins: [react()],
+  plugins: [
+    react(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'supabase-api',
+              networkTimeoutSeconds: 10,
+            },
+          },
+        ],
+      },
+      manifest: false,
+    }),
+  ],
   build: {
     outDir: 'dist',
     sourcemap: false,
     chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router-dom')) {
+            return 'vendor-react';
+          }
+          if (id.includes('node_modules/@supabase/supabase-js')) return 'vendor-supabase';
+          if (id.includes('node_modules/dexie')) return 'vendor-dexie';
+          if (id.includes('node_modules/html5-qrcode')) return 'vendor-scanner';
+          if (id.includes('node_modules/qrcode')) return 'vendor-qr';
+        },
+      },
+    },
   },
   server: {
     port: 5173,

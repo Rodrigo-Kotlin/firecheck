@@ -3,6 +3,21 @@
   "name": "FireCheck - Inspeção de Equipamentos",
   "description": "Sistema móvel para inspeção de equipamentos de combate a incêndio.",
   "lang": "pt-BR",
+  "id": "/",
+  "background_color": "#DC2626",
+  "screenshots": [
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Dashboard FireCheck"
+    }
+  ],
+  "handle_links": "preferred",
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
   "icons": [
     {
       "src": "favicon-16x16.png",
@@ -85,7 +100,6 @@
   ],
   "start_url": ".",
   "scope": ".",
-  "background_color": "#FFFFFF",
   "theme_color": "#DC2626",
   "display": "standalone",
   "orientation": "portrait",

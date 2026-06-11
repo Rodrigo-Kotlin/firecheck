@@ -16,7 +16,7 @@ import {
   type AuthError,
 } from '../services/authService';
 
-type Tab = 'dashboard' | 'equipamentos' | 'qrcodes' | 'inspecionar' | 'relatorios';
+export type Tab = 'dashboard' | 'equipamentos' | 'qrcodes' | 'inspecionar' | 'relatorios';
 
 function inferCriticidade(inspectionObs: string, eqTipo: string): import('../types').Criticidade {
   const obs = inspectionObs.toLowerCase();

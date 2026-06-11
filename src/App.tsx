@@ -1,27 +1,33 @@
 import { useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import Login from './pages/login/Login';
 import Cadastro from './pages/login/Cadastro';
 import RecuperarSenha from './pages/login/RecuperarSenha';
 import RedefinirSenha from './pages/login/RedefinirSenha';
 import AppLayout from './components/layout/AppLayout';
-import Dashboard from './pages/dashboard/Dashboard';
-import Equipamentos from './pages/equipamentos/Equipamentos';
-import NovoEquipamento from './pages/equipamentos/NovoEquipamento';
-import DetalhesEquipamento from './pages/equipamentos/DetalhesEquipamento';
-import Inspecionar from './pages/inspecionar/Inspecionar';
-import ScanQr from './pages/scan/ScanQr';
-import QrCodes from './pages/qrcodes/QrCodes';
-import PlanoDeAcao from './pages/planodeacao/PlanoDeAcao';
-import Configuracoes from './pages/configuracoes/Configuracoes';
-import AdminUsuarios from './pages/admin/AdminUsuarios';
 import Toaster from './components/Toaster';
 import { usePwaUpdate } from './hooks/usePwaUpdate';
 import { useAppStore } from './store';
 
-// Lazy-load da página de relatórios: ela importa jsPDF + html2canvas,
-// que são pesos grandes. Só baixamos quando o usuário acessa a rota.
+const Login = lazy(() => import('./pages/login/Login'));
+const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'));
+const Equipamentos = lazy(() => import('./pages/equipamentos/Equipamentos'));
+const NovoEquipamento = lazy(() => import('./pages/equipamentos/NovoEquipamento'));
+const DetalhesEquipamento = lazy(() => import('./pages/equipamentos/DetalhesEquipamento'));
+const Inspecionar = lazy(() => import('./pages/inspecionar/Inspecionar'));
+const ScanQr = lazy(() => import('./pages/scan/ScanQr'));
+const QrCodes = lazy(() => import('./pages/qrcodes/QrCodes'));
+const PlanoDeAcao = lazy(() => import('./pages/planodeacao/PlanoDeAcao'));
+const Configuracoes = lazy(() => import('./pages/configuracoes/Configuracoes'));
+const AdminUsuarios = lazy(() => import('./pages/admin/AdminUsuarios'));
 const Relatorios = lazy(() => import('./pages/relatorios/Relatorios'));
+
+function LoadingSpinner() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-neutralBg">
+      <div className="w-10 h-10 border-[3px] border-primary border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
 
 function RelatoriosFallback() {
   return (
@@ -47,8 +53,6 @@ export default function App() {
   const hydrate = useAppStore((s) => s.hydrate);
 
   useEffect(() => {
-    // Carrega equipamentos/inspeções do Dexie (seed automático a partir
-    // dos mocks na primeira execução) e dispara a sincronização inicial.
     void hydrate();
   }, [hydrate]);
 
@@ -56,37 +60,37 @@ export default function App() {
 
   return (
     <Router>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/cadastro" element={<Cadastro />} />
-        <Route path="/recuperar-senha" element={<RecuperarSenha />} />
-        <Route path="/redefinir-senha" element={<RedefinirSenha />} />
+      <Suspense fallback={<LoadingSpinner />}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/cadastro" element={<Cadastro />} />
+          <Route path="/recuperar-senha" element={<RecuperarSenha />} />
+          <Route path="/redefinir-senha" element={<RedefinirSenha />} />
 
-        {/* Main layout with bottom nav (protected inside layout) */}
-        <Route path="/" element={<AppLayout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="equipamentos" element={<Equipamentos />} />
-          <Route path="equipamentos/novo" element={<NovoEquipamento />} />
-          <Route path="equipamentos/:id" element={<DetalhesEquipamento />} />
-          <Route path="inspecionar" element={<Inspecionar />} />
-          <Route path="scan" element={<ScanQr />} />
-          <Route
-            path="relatorios"
-            element={
-              <Suspense fallback={<RelatoriosFallback />}>
-                <Relatorios />
-              </Suspense>
-            }
-          />
-          <Route path="qrcodes" element={<QrCodes />} />
-          <Route path="planodeacao" element={<PlanoDeAcao />} />
-          <Route path="configuracoes" element={<Configuracoes />} />
-          <Route path="admin/usuarios" element={<AdminUsuarios />} />
-        </Route>
+          <Route path="/" element={<AppLayout />}>
+            <Route index element={<Dashboard />} />
+            <Route path="equipamentos" element={<Equipamentos />} />
+            <Route path="equipamentos/novo" element={<NovoEquipamento />} />
+            <Route path="equipamentos/:id" element={<DetalhesEquipamento />} />
+            <Route path="inspecionar" element={<Inspecionar />} />
+            <Route path="scan" element={<ScanQr />} />
+            <Route
+              path="relatorios"
+              element={
+                <Suspense fallback={<RelatoriosFallback />}>
+                  <Relatorios />
+                </Suspense>
+              }
+            />
+            <Route path="qrcodes" element={<QrCodes />} />
+            <Route path="planodeacao" element={<PlanoDeAcao />} />
+            <Route path="configuracoes" element={<Configuracoes />} />
+            <Route path="admin/usuarios" element={<AdminUsuarios />} />
+          </Route>
 
-        {/* Fallback redirect */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
       <Toaster />
     </Router>
   );

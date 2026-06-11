@@ -1,22 +1,33 @@
 import { useEffect } from 'react';
-import { register } from '../registerSW';
+import { registerSW } from 'virtual:pwa-register';
 import { showToast } from './useToasts';
 
 export function usePwaUpdate(): void {
   useEffect(() => {
-    register((reload) => {
-      showToast({
-        kind: 'info',
-        title: 'Nova versão disponível',
-        description: 'Atualize agora para obter as últimas melhorias.',
-        action: { label: 'Atualizar', onClick: reload },
-        duration: 0,
-      });
+    const updateSW = registerSW({
+      onNeedRefresh() {
+        showToast({
+          kind: 'info',
+          title: 'Nova versão disponível',
+          description: 'Atualize agora para obter as últimas melhorias.',
+          action: {
+            label: 'Atualizar',
+            onClick: () => updateSW(true),
+          },
+          duration: 0,
+        });
+      },
+      onOfflineReady() {
+        showToast({
+          kind: 'success',
+          title: 'App pronto para uso offline',
+          description: 'Todos os recursos essenciais estão disponíveis sem conexão.',
+          duration: 4000,
+        });
+      },
     });
   }, []);
 
-  // Toast de confirmação quando o usuário instala o PWA. Dispara uma vez
-  // graças à natureza do evento `appinstalled`.
   useEffect(() => {
     const onInstalled = () => {
       showToast({
