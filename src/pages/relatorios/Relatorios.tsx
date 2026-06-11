@@ -1,8 +1,11 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { FileText, ChevronDown, ShieldCheck, AlertOctagon, ClipboardList } from 'lucide-react';
+import { FileText, ChevronDown, ShieldCheck, AlertOctagon, ClipboardList, Trash2 } from 'lucide-react';
 import jsPDF from 'jspdf';
+import { canDeleteInspection } from '../../services/permissions';
+import { showToast } from '../../hooks/useToasts';
+import ConfirmDialog from '../../components/ConfirmDialog';
 import type { Inspection, Equipment, Stats } from '../../types';
 
 type HistoryEntry = {
@@ -717,13 +720,14 @@ function generateMonthlyPDF(
 }
 
 export default function Relatorios() {
-  const { inspections, stats, equipments, config } = useAppStore();
+  const { inspections, stats, equipments, config, user, deleteInspection } = useAppStore();
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<HistoryStatus | 'Todos'>('Todos');
   const [visibleCount, setVisibleCount] = useState(4);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const history = useMemo(() => {
     return inspections.map(i => ({
@@ -766,6 +770,12 @@ export default function Relatorios() {
   };
 
   const hasActiveFilters = !!search || !!dateFilter || statusFilter !== 'Todos';
+
+  const handleDeleteInspection = () => {
+    if (!deleteTarget) return;
+    deleteInspection(deleteTarget);
+    showToast({ kind: 'success', title: 'Relatório excluído.' });
+  };
 
   const handleIndividualPDF = (h: HistoryEntry) => {
     const eq = equipments.find(e => e.id === h.equipId);
@@ -936,6 +946,17 @@ export default function Relatorios() {
               >
                 <FileText className="w-4 h-4 text-gray-500" />
               </button>
+              {canDeleteInspection(user, { userId: undefined }) && (
+                <button
+                  type="button"
+                  onClick={() => setDeleteTarget(h.id)}
+                  className="w-10 h-10 flex items-center justify-center text-gray-300 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0 transition-colors"
+                  aria-label={`Excluir relatório ${h.id}`}
+                  title="Excluir relatório"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
             </div>
           ))}
 
@@ -951,6 +972,15 @@ export default function Relatorios() {
           )}
         </div>
       </div>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteInspection}
+        title="Excluir relatório"
+        message={`Excluir o relatório ${deleteTarget ?? ''}? Esta ação não pode ser desfeita.`}
+        confirmLabel="Sim, excluir"
+        cancelLabel="Cancelar"
+      />
     </div>
   );
 }

@@ -106,6 +106,7 @@ interface AppState {
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
   deleteActionPlan: (id: string) => void;
   deleteEquipment: (id: string) => void;
+  deleteInspection: (id: string) => void;
   updateConfig: (updates: Partial<AppConfig>) => void;
   loadUsers: () => Promise<void>;
   setUserRole: (id: string, role: 'admin' | 'inspector') => Promise<void>;
@@ -281,6 +282,14 @@ export const useAppStore = create<AppState>()(
             };
           });
           void db.equipamentos.update(id, { pendingDelete: true, sincronizado: false });
+          void runSync().then(() => get().refreshPendingCount());
+        },
+
+        deleteInspection: (id) => {
+          set((state) => ({
+            inspections: state.inspections.filter((i) => i.id !== id),
+          }));
+          void db.inspecoes.update(id, { pendingDelete: true, sincronizado: false });
           void runSync().then(() => get().refreshPendingCount());
         },
 

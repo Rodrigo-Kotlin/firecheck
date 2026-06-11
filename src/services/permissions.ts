@@ -28,9 +28,18 @@ export function canEditEquipment(
 
 export function canDeleteEquipment(
   user: Inspector | null,
-  equipment: Pick<Equipment, 'createdBy'>,
+  _e: Pick<Equipment, 'createdBy'>,
 ): boolean {
-  return canEditEquipment(user, equipment);
+  void _e;
+  return isAdmin(user);
+}
+
+export function canDeleteInspection(
+  user: Inspector | null,
+  _i: Pick<Inspection, 'userId'>,
+): boolean {
+  void _i;
+  return isAdmin(user);
 }
 
 export function canEditInspection(
