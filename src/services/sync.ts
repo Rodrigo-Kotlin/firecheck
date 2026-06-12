@@ -229,7 +229,9 @@ async function pullEquipments(): Promise<number> {
 async function pullInspections(): Promise<number> {
   const cloud = await fetchInspections();
   if (!cloud) return 0;
+  const cloudIds = new Set(cloud.map((i) => i.id));
   let pulled = 0;
+
   await db.transaction('rw', db.inspecoes, async () => {
     for (const insp of cloud) {
       const local = await db.inspecoes.get(insp.id);
@@ -241,7 +243,15 @@ async function pullInspections(): Promise<number> {
         pulled++;
       }
     }
+
+    const allLocal = await db.inspecoes.toArray();
+    for (const local of allLocal) {
+      if (!cloudIds.has(local.id) && local.sincronizado && !local.pendingDelete) {
+        await db.inspecoes.delete(local.id);
+      }
+    }
   });
+
   return pulled;
 }
 
