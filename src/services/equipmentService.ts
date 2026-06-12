@@ -84,10 +84,9 @@ export async function deleteEquipment(id: string): Promise<boolean> {
 
 export async function carregarEquipamentos(): Promise<Equipment[]> {
   const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
-  const isDemo = import.meta.env.VITE_ENABLE_DEMO_DATA === 'true';
 
   if (isDev) {
-    console.log(`[loader] online=${isOnline}, demo=${isDemo}, supabase=${isSupabaseConfigured}`);
+    console.log(`[loader] online=${isOnline}, supabase=${isSupabaseConfigured}`);
   }
 
   // Online path: fetch from Supabase
@@ -96,7 +95,6 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
 
     if (cloudData !== null) {
       if (cloudData.length > 0) {
-        // Cloud has data — replace local cache
         await db.equipamentos.clear();
         for (const eq of cloudData) {
           await db.equipamentos.put({ ...eq, sincronizado: true });
@@ -105,25 +103,12 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
         return cloudData;
       }
 
-      // Cloud returned empty — clear stale local cache
       await limparEquipamentosLocais();
       if (isDev) console.log('[loader] Supabase vazio — cache local limpo');
       return [];
     }
 
-    // fetchEquipments returned null (error) — fall through to offline
     if (isDev) console.warn('[loader] falha ao buscar do Supabase — tentando cache local');
-  }
-
-  // Demo mode: load mock data
-  if (isDemo && isDev) {
-    const demoData = getDemoEquipamentos();
-    await db.equipamentos.clear();
-    for (const eq of demoData) {
-      await db.equipamentos.put({ ...eq, sincronizado: false });
-    }
-    if (isDev) console.log(`[loader] ${demoData.length} equipamentos carregados do demo`);
-    return demoData;
   }
 
   // Offline / fallback: load from IndexedDB
@@ -135,8 +120,6 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
     console.log(`[loader] ${localEqs.length} equipamentos carregados do IndexedDB (offline)`);
   }
 
-  // If we're online but local has data, this means the Supabase query failed.
-  // Still show local data as best-effort rather than breaking the UI.
   return localEqs.map(stripSyncMeta);
 }
 
@@ -176,62 +159,4 @@ export async function limparCacheLocalDoApp(): Promise<void> {
   if (isDev) console.log('[cleanup] cache local do app completamente limpo');
 }
 
-// ---------------------------------------------------------------------------
-// Demo data (only used when VITE_ENABLE_DEMO_DATA=true)
-// ---------------------------------------------------------------------------
 
-function getDemoEquipamentos(): Equipment[] {
-  return [
-    {
-      id: 'EXT-001',
-      tipo: 'Extintor',
-      subtipo: 'CO2',
-      local: 'Hall de entrada',
-      setor: 'Térreo',
-      status: 'regular',
-      capacidade: '6 kg',
-      dataProximaInspecao: '2026-12-15',
-      createdBy: 'demo',
-    },
-    {
-      id: 'EXT-002',
-      tipo: 'Extintor',
-      subtipo: 'Pó Químico',
-      local: 'Corredor administrativo',
-      setor: '1º Andar',
-      status: 'regular',
-      capacidade: '4 kg',
-      dataProximaInspecao: '2027-01-20',
-      createdBy: 'demo',
-    },
-    {
-      id: 'HID-001',
-      tipo: 'Hidrante',
-      subtipo: 'Para-choque',
-      local: 'Garagem subsolo',
-      setor: 'Subsolo',
-      status: 'pendente',
-      dataProximaInspecao: '2026-06-30',
-      createdBy: 'demo',
-    },
-    {
-      id: 'ALM-001',
-      tipo: 'Alarme',
-      subtipo: 'Central Detectora',
-      local: 'Sala de segurança',
-      setor: 'Térreo',
-      status: 'regular',
-      createdBy: 'demo',
-    },
-    {
-      id: 'ILU-001',
-      tipo: 'Iluminação',
-      subtipo: 'Emergência',
-      local: 'Escadaria A',
-      setor: 'Térreo',
-      status: 'regular',
-      dataProximaInspecao: '2027-03-10',
-      createdBy: 'demo',
-    },
-  ];
-}
