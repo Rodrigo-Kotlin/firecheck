@@ -30,7 +30,7 @@ import {
   inspectionToDb,
   actionPlanToDb,
 } from './mappers';
-import type { ActionPlan, Equipment, Inspection } from '../types';
+import type { ActionPlan } from '../types';
 
 export interface SyncReport {
   pushed: number;
@@ -190,12 +190,18 @@ async function pushActionPlans(
 // PULL
 // ---------------------------------------------------------------------------
 
-/** Replace equipment rows from cloud, but never overwrite local unsynced edits. */
+/** Replace equipment rows from cloud, but never overwrite local unsynced edits.
+ *  After importing, remove any local rows that are fully synced (`sincronizado: true`)
+ *  but no longer exist in the cloud — the cloud is the source of truth for synced
+ *  data. */
 async function pullEquipments(): Promise<number> {
   const cloud = await fetchEquipments();
   if (!cloud) return 0;
+  const cloudIds = new Set(cloud.map((e) => e.id));
   let pulled = 0;
+
   await db.transaction('rw', db.equipamentos, async () => {
+    // Import / update cloud rows
     for (const eq of cloud) {
       const local = await db.equipamentos.get(eq.id);
       if (!local) {
@@ -207,7 +213,16 @@ async function pullEquipments(): Promise<number> {
       }
       // else: local has unsynced changes — preserve them.
     }
+
+    // Purge stale synced rows that no longer exist in the cloud
+    const allLocal = await db.equipamentos.toArray();
+    for (const local of allLocal) {
+      if (!cloudIds.has(local.id) && local.sincronizado && !local.pendingDelete) {
+        await db.equipamentos.delete(local.id);
+      }
+    }
   });
+
   return pulled;
 }
 
@@ -290,35 +305,6 @@ export async function pendingSyncCount(): Promise<number> {
   // Action plans are not in Dexie; callers should also count those from the
   // store if they care.
   return eqs + ins;
-}
-
-// ---------------------------------------------------------------------------
-// SEED (first-run only)
-// ---------------------------------------------------------------------------
-
-/** One-time seed: copy the in-memory mock data into Dexie so it can sync. */
-export async function seedFromMock(
-  mockEquipments: Equipment[],
-  mockInspections: Inspection[],
-): Promise<number> {
-  let n = 0;
-  await db.transaction('rw', db.equipamentos, db.inspecoes, async () => {
-    for (const eq of mockEquipments) {
-      const exists = await db.equipamentos.get(eq.id);
-      if (!exists) {
-        await db.equipamentos.put({ ...eq, sincronizado: false });
-        n++;
-      }
-    }
-    for (const insp of mockInspections) {
-      const exists = await db.inspecoes.get(insp.id);
-      if (!exists) {
-        await db.inspecoes.put({ ...insp, sincronizado: false });
-        n++;
-      }
-    }
-  });
-  return n;
 }
 
 // Re-export the mapper helpers for convenience.

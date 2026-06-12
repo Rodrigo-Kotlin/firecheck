@@ -228,8 +228,17 @@ export default function Equipamentos() {
               <Search className="w-6 h-6 text-gray-400" />
             </div>
             <div>
-              <p className="text-sm font-bold text-gray-700">Nenhum equipamento encontrado</p>
-              <p className="text-xs text-gray-400 mt-1">Ajuste os filtros ou cadastre um novo equipamento.</p>
+              {hasActiveFilters ? (
+                <>
+                  <p className="text-sm font-bold text-gray-700">Nenhum equipamento encontrado</p>
+                  <p className="text-xs text-gray-400 mt-1">Ajuste os filtros ou cadastre um novo equipamento.</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-bold text-gray-700">Nenhum equipamento cadastrado</p>
+                  <p className="text-xs text-gray-400 mt-1">Cadastre o primeiro equipamento para iniciar as inspeções.</p>
+                </>
+              )}
             </div>
             {hasActiveFilters && (
               <button

@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig } from '../types';
 import { db, type LocalActionPlan, type LocalEquipment, type LocalInspection } from '../db';
 import { syncAll, pendingSyncCount } from '../services/sync';
+import { carregarEquipamentos, limparCacheLocalDoApp } from '../services/equipmentService';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   loginUser,
@@ -42,12 +43,6 @@ function recomputeStats(eqs: Equipment[]): Stats {
 }
 
 /** Strip Dexie-only sync metadata so we can store the row in the Zustand state. */
-function toEquipment(row: LocalEquipment): Equipment {
-  const { sincronizado: _s, pendingDelete: _p, ...eq } = row;
-  void _s;
-  void _p;
-  return eq;
-}
 function toInspection(row: LocalInspection): Inspection {
   const { sincronizado: _s, pendingDelete: _p, ...insp } = row;
   void _s;
@@ -114,6 +109,7 @@ interface AppState {
   hydrate: () => Promise<void>;
   triggerSync: () => Promise<void>;
   refreshPendingCount: () => Promise<void>;
+  clearLocalData: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,32 +204,36 @@ export const useAppStore = create<AppState>()(
           set((state) => ({ config: { ...state.config, ...updates } })),
 
         // -----------------------------------------------------------------
-        // Hydration: load from Dexie (seed from mocks on first run) and
-        // resolve the current auth session (Supabase getSession + profile).
+        // Hydration: resolve auth session, then load equipment data using
+        // the centralised loader (Supabase-first, IndexedDB as offline
+        // fallback). Inspections are loaded from IndexedDB and later synced.
         // -----------------------------------------------------------------
         hydrate: async () => {
-          const [localEqs, localInsps, allUsers] = await Promise.all([
-            db.equipamentos.toArray(),
-            db.inspecoes.toArray(),
-            listUsers(),
-          ]);
-
-          const activeEqs = localEqs.filter((e) => !e.pendingDelete);
-
-          set({
-            equipments: activeEqs.map(toEquipment),
-            inspections: localInsps.map(toInspection),
-            stats: recomputeStats(activeEqs.map(toEquipment)),
-          });
-
           const sessionUser = await resolveSession();
+          const allUsers = await listUsers();
+          const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+
+          // Load equipments through the centralised loader
+          const loadedEqs = await carregarEquipamentos();
+
+          // Load inspections from local cache (will be synced later)
+          const localInsps = await db.inspecoes
+            .filter((i) => !i.pendingDelete)
+            .toArray();
+
           set({
+            equipments: loadedEqs,
+            inspections: localInsps.map(toInspection),
+            stats: recomputeStats(loadedEqs),
             user: sessionUser ?? get().user,
             users: allUsers,
             authReady: true,
           });
+
           await get().refreshPendingCount();
-          if (sessionUser) void runSync();
+
+          // Fire-and-forget sync if logged in and online
+          if (sessionUser && isOnline) void runSync();
         },
 
         refreshPendingCount: async () => {
@@ -250,6 +250,16 @@ export const useAppStore = create<AppState>()(
 
         triggerSync: async () => {
           await runSync();
+        },
+
+        clearLocalData: async () => {
+          await limparCacheLocalDoApp();
+          set({
+            equipments: [],
+            inspections: [],
+            stats: recomputeStats([]),
+            actionPlans: [],
+          });
         },
 
         // -----------------------------------------------------------------

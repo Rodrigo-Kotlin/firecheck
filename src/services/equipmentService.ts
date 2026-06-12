@@ -9,12 +9,19 @@ import {
   equipmentToDb,
   type DbEquipamento,
 } from './mappers';
+import { db } from '../db';
 import type { Equipment } from '../types';
+
+const isDev = import.meta.env.DEV;
 
 function notConfigured<T>(op: string): T | null {
   console.warn(`[equipment.${op}] Supabase não configurado — ignorando.`);
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Supabase CRUD
+// ---------------------------------------------------------------------------
 
 export async function fetchEquipments(): Promise<Equipment[] | null> {
   if (!isSupabaseConfigured || !supabase) return notConfigured('fetchEquipments');
@@ -68,4 +75,163 @@ export async function deleteEquipment(id: string): Promise<boolean> {
     return false;
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Centralised equipment loader — Supabase is the primary source of truth.
+// IndexedDB is only used as offline fallback.
+// ---------------------------------------------------------------------------
+
+export async function carregarEquipamentos(): Promise<Equipment[]> {
+  const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+  const isDemo = import.meta.env.VITE_ENABLE_DEMO_DATA === 'true';
+
+  if (isDev) {
+    console.log(`[loader] online=${isOnline}, demo=${isDemo}, supabase=${isSupabaseConfigured}`);
+  }
+
+  // Online path: fetch from Supabase
+  if (isOnline && isSupabaseConfigured && supabase) {
+    const cloudData = await fetchEquipments();
+
+    if (cloudData !== null) {
+      if (cloudData.length > 0) {
+        // Cloud has data — replace local cache
+        await db.equipamentos.clear();
+        for (const eq of cloudData) {
+          await db.equipamentos.put({ ...eq, sincronizado: true });
+        }
+        if (isDev) console.log(`[loader] ${cloudData.length} equipamentos carregados do Supabase`);
+        return cloudData;
+      }
+
+      // Cloud returned empty — clear stale local cache
+      await limparEquipamentosLocais();
+      if (isDev) console.log('[loader] Supabase vazio — cache local limpo');
+      return [];
+    }
+
+    // fetchEquipments returned null (error) — fall through to offline
+    if (isDev) console.warn('[loader] falha ao buscar do Supabase — tentando cache local');
+  }
+
+  // Demo mode: load mock data
+  if (isDemo && isDev) {
+    const demoData = getDemoEquipamentos();
+    await db.equipamentos.clear();
+    for (const eq of demoData) {
+      await db.equipamentos.put({ ...eq, sincronizado: false });
+    }
+    if (isDev) console.log(`[loader] ${demoData.length} equipamentos carregados do demo`);
+    return demoData;
+  }
+
+  // Offline / fallback: load from IndexedDB
+  const localEqs = await db.equipamentos
+    .filter((e) => !e.pendingDelete)
+    .toArray();
+
+  if (isDev) {
+    console.log(`[loader] ${localEqs.length} equipamentos carregados do IndexedDB (offline)`);
+  }
+
+  // If we're online but local has data, this means the Supabase query failed.
+  // Still show local data as best-effort rather than breaking the UI.
+  return localEqs.map(stripSyncMeta);
+}
+
+/** Strip Dexie-only sync metadata from an equipment row. */
+function stripSyncMeta(row: { sincronizado: boolean; pendingDelete?: boolean } & Equipment): Equipment {
+  const { sincronizado: _s, pendingDelete: _p, ...eq } = row;
+  void _s; void _p;
+  return eq;
+}
+
+// ---------------------------------------------------------------------------
+// Cleanup helpers
+// ---------------------------------------------------------------------------
+
+export async function limparEquipamentosLocais(): Promise<void> {
+  await db.equipamentos.clear();
+  if (isDev) console.log('[cleanup] equipamentos locais limpos');
+}
+
+export async function limparInspecoesLocais(): Promise<void> {
+  await db.inspecoes.clear();
+  if (isDev) console.log('[cleanup] inspeções locais limpas');
+}
+
+export async function limparFotosLocais(): Promise<void> {
+  await db.fotos.clear();
+  if (isDev) console.log('[cleanup] fotos locais limpas');
+}
+
+export async function limparAcoesPendentes(): Promise<void> {
+  await db.acoes_pendentes.clear();
+  if (isDev) console.log('[cleanup] ações pendentes limpas');
+}
+
+export async function limparCacheLocalDoApp(): Promise<void> {
+  await db.clearCache();
+  if (isDev) console.log('[cleanup] cache local do app completamente limpo');
+}
+
+// ---------------------------------------------------------------------------
+// Demo data (only used when VITE_ENABLE_DEMO_DATA=true)
+// ---------------------------------------------------------------------------
+
+function getDemoEquipamentos(): Equipment[] {
+  return [
+    {
+      id: 'EXT-001',
+      tipo: 'Extintor',
+      subtipo: 'CO2',
+      local: 'Hall de entrada',
+      setor: 'Térreo',
+      status: 'regular',
+      capacidade: '6 kg',
+      dataProximaInspecao: '2026-12-15',
+      createdBy: 'demo',
+    },
+    {
+      id: 'EXT-002',
+      tipo: 'Extintor',
+      subtipo: 'Pó Químico',
+      local: 'Corredor administrativo',
+      setor: '1º Andar',
+      status: 'regular',
+      capacidade: '4 kg',
+      dataProximaInspecao: '2027-01-20',
+      createdBy: 'demo',
+    },
+    {
+      id: 'HID-001',
+      tipo: 'Hidrante',
+      subtipo: 'Para-choque',
+      local: 'Garagem subsolo',
+      setor: 'Subsolo',
+      status: 'pendente',
+      dataProximaInspecao: '2026-06-30',
+      createdBy: 'demo',
+    },
+    {
+      id: 'ALM-001',
+      tipo: 'Alarme',
+      subtipo: 'Central Detectora',
+      local: 'Sala de segurança',
+      setor: 'Térreo',
+      status: 'regular',
+      createdBy: 'demo',
+    },
+    {
+      id: 'ILU-001',
+      tipo: 'Iluminação',
+      subtipo: 'Emergência',
+      local: 'Escadaria A',
+      setor: 'Térreo',
+      status: 'regular',
+      dataProximaInspecao: '2027-03-10',
+      createdBy: 'demo',
+    },
+  ];
 }

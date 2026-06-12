@@ -100,6 +100,23 @@ export class FireCheckDatabase extends Dexie {
         }
       });
   }
+
+  /** Purge all local data tables. Used when clearing stale cache or
+   *  when the user requests "Limpar dados locais deste dispositivo". */
+  async clearCache(): Promise<void> {
+    await this.transaction('rw',
+      this.equipamentos,
+      this.inspecoes,
+      this.fotos,
+      this.acoes_pendentes,
+      async () => {
+        await this.equipamentos.clear();
+        await this.inspecoes.clear();
+        await this.fotos.clear();
+        await this.acoes_pendentes.clear();
+      },
+    );
+  }
 }
 
 export const db = new FireCheckDatabase();

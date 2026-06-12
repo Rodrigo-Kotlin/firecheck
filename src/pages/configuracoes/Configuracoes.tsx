@@ -23,12 +23,14 @@ import {
   Eye,
   Download,
   Share2,
+  Trash2,
   type LucideIcon,
 } from 'lucide-react';
 import { isAdmin } from '../../services/permissions';
 import ToggleSwitch from '../../components/ToggleSwitch';
 import { showToast } from '../../hooks/useToasts';
 import { usePwaInstall, type InstallState } from '../../hooks/usePwaInstall';
+import ConfirmDialog from '../../components/ConfirmDialog';
 
 // ---------------------------------------------------------------------------
 // Section shell — consistent header + body used by all 4 config sections.
@@ -358,6 +360,24 @@ export default function Configuracoes() {
   const [unidade, setUnidade] = useState(config.unidade);
   const [saved, setSaved] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [clearingLocalData, setClearingLocalData] = useState(false);
+
+  const handleClearLocalData = async () => {
+    try {
+      await useAppStore.getState().clearLocalData();
+      showToast({
+        kind: 'success',
+        title: 'Dados locais removidos',
+        description: 'Cache do dispositivo limpo com sucesso.',
+      });
+    } catch {
+      showToast({
+        kind: 'error',
+        title: 'Erro ao limpar dados',
+        description: 'Tente novamente em alguns instantes.',
+      });
+    }
+  };
 
   const initials = user?.nome
     ? user.nome.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase()
@@ -729,6 +749,37 @@ export default function Configuracoes() {
               </div>
             </dl>
           </Section>
+
+          {/* 05 — Dados locais */}
+          <Section
+            icon={Trash2}
+            index={5}
+            title="Dados Locais"
+            description="Gerencie os dados armazenados neste dispositivo."
+          >
+            <p className="text-[11px] text-gray-500 font-medium leading-snug">
+              Remove dados salvos apenas neste dispositivo. Dados já sincronizados
+              no Supabase não serão apagados.
+            </p>
+            <button
+              type="button"
+              onClick={() => setClearingLocalData(true)}
+              className="btn-ghost w-full"
+            >
+              <Trash2 className="w-4 h-4" />
+              Limpar dados locais deste dispositivo
+            </button>
+          </Section>
+
+          <ConfirmDialog
+            open={clearingLocalData}
+            onClose={() => setClearingLocalData(false)}
+            onConfirm={handleClearLocalData}
+            title="Limpar dados locais"
+            message="Esta ação remove dados salvos apenas neste dispositivo. Dados já sincronizados no Supabase não serão apagados."
+            confirmLabel="Sim, limpar"
+            cancelLabel="Cancelar"
+          />
 
           <button
             type="button"
