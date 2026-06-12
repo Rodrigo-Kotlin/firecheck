@@ -559,7 +559,7 @@ export default function Inspecionar() {
       id: inspectionId,
       equipmentId: selectedEquipment.id,
       data: new Date().toISOString().split('T')[0],
-      inspetor: user?.nome || 'Rodrigo Silva',
+      inspetor: user?.nome || 'Inspetor',
       status: finalStatus,
       observacoes,
       sincronizado: false
