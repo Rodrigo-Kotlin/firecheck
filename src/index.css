@@ -1322,3 +1322,248 @@ input[type="checkbox"], input[type="radio"] {
     transition: none;
   }
 }
+
+/* ===== QR Code Label / Print Layout ===== */
+
+/* --- Hidden print area (spawned inside an iframe or in-page div) --- */
+.print-only {
+  display: none;
+}
+
+/* --- Label card (shown on screen in preview or inside the print area) --- */
+.qr-label-print {
+  width: 100%;
+  max-width: 280px;
+  margin: 0 auto;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 0;
+  overflow: hidden;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.ql-top-bar {
+  height: 6px;
+  background: #DC2626;
+}
+
+.ql-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.5rem 0.5rem 0;
+}
+
+.ql-brand-name {
+  font-size: 0.875rem;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #DC2626;
+}
+
+.ql-brand-sub {
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9CA3AF;
+  margin-top: 0.125rem;
+}
+
+.ql-body {
+  padding: 0.5rem 0.75rem 0.625rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.ql-qr {
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  border: 1px solid #E5E7EB;
+  padding: 0.25rem;
+}
+
+.ql-qr img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.ql-qr-placeholder {
+  width: 80%;
+  height: 80%;
+  border: 2px dashed #D1D5DB;
+  border-radius: 4px;
+}
+
+.ql-code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 0.75rem;
+  font-weight: 900;
+  color: #111827;
+  text-align: center;
+  letter-spacing: 0.02em;
+  word-break: break-all;
+  max-width: 100%;
+}
+
+.ql-type {
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: #6B7280;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ql-details {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin-top: 0.125rem;
+}
+
+.ql-detail {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.125rem 0.375rem;
+  background: #F9FAFB;
+  border-radius: 2px;
+}
+
+.ql-detail-label {
+  font-size: 0.45rem;
+  font-weight: 800;
+  color: #9CA3AF;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ql-detail-value {
+  font-size: 0.5rem;
+  font-weight: 700;
+  color: #374151;
+  text-align: right;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ql-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.375rem 0.5rem;
+  border-top: 1px solid #F3F4F6;
+  font-size: 0.4375rem;
+  color: #9CA3AF;
+}
+
+.ql-footer span:last-child {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6B7280;
+}
+
+/* --- Print grid --- */
+.qr-label-grid {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem;
+}
+
+/* ===== Print styles ===== */
+
+@media print {
+  /* Hide everything except the print area */
+  body * {
+    visibility: hidden;
+  }
+  .print-only,
+  .print-only * {
+    display: block !important;
+    visibility: visible !important;
+  }
+  .print-area,
+  .print-area *,
+  .qr-label-grid,
+  .qr-label-grid *,
+  .qr-label-print,
+  .qr-label-print * {
+    visibility: visible !important;
+  }
+
+  /* Reset page */
+  @page {
+    size: A4 portrait;
+    margin: 12mm 10mm 10mm 10mm;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: white;
+  }
+
+  /* Grid: 3 columns on A4 landscape or 2 columns portrait */
+  .qr-label-grid {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6mm 4mm;
+    padding: 0;
+    align-items: start;
+  }
+
+  .qr-label-print {
+    max-width: none;
+    border: 1px solid #ccc;
+    border-radius: 0;
+    box-shadow: none;
+    margin: 0;
+  }
+
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+
+  /* Ensure no orphan labels */
+  .qr-label-print {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Last row left-aligned if odd count */
+  .qr-label-grid > :last-child:nth-child(3n-2):last-child {
+    grid-column: 1;
+  }
+}
+
+/* Responsive adjustment: fewer columns on very small viewports */
+@media (max-width: 480px) {
+  .qr-label-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 481px) and (max-width: 768px) {
+  .qr-label-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
