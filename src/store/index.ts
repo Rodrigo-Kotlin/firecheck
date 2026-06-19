@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig } from '../types';
+import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus } from '../types';
 import { db, type LocalActionPlan, type LocalEquipment, type LocalInspection } from '../db';
 import { syncAll, pendingSyncCount } from '../services/sync';
 import { carregarEquipamentos, limparCacheLocalDoApp } from '../services/equipmentService';
@@ -43,23 +43,7 @@ function recomputeStats(eqs: Equipment[]): Stats {
   return { total, emDia, pendentes, vencidos, conformidade };
 }
 
-function toActionPlan(row: LocalActionPlan): ActionPlan {
-  const { sincronizado: _s, pendingDelete: _p, ...plan } = row;
-  void _s;
-  void _p;
-  return plan;
-}
 
-/** Generate the next sequential inspection ID (e.g. INSP-007). */
-function nextInspectionId(existing: Inspection[]): string {
-  const max = existing.reduce((acc, i) => {
-    const m = /INSP-(\d+)/.exec(i.id);
-    if (!m) return acc;
-    const n = Number.parseInt(m[1] ?? '0', 10);
-    return n > acc ? n : acc;
-  }, 0);
-  return `INSP-${String(max + 1).padStart(3, '0')}`;
-}
 
 interface AppState {
   user: Inspector | null;
@@ -71,6 +55,8 @@ interface AppState {
   inspections: Inspection[];
   stats: Stats;
   actionPlans: ActionPlan[];
+  /** Sync metadata for action plans (sincronizado, pendingDelete). */
+  actionPlanMeta: Record<string, { sincronizado: boolean; pendingDelete: boolean }>;
   config: AppConfig;
   currentTab: Tab;
 
@@ -89,7 +75,16 @@ interface AppState {
   register: (input: { email: string; password: string; nome: string; cargo: string }) => Promise<void>;
   logout: () => Promise<void>;
   setCurrentTab: (tab: Tab) => void;
-  addInspection: (inspection: Omit<Inspection, 'id'>) => void;
+  addInspection: (data: {
+    equipmentId: string;
+    data: string;
+    inspetor: string;
+    status: EquipmentStatus;
+    observacoes?: string;
+    userId?: string;
+    photoBase64?: string | null;
+    dataProximaInspecao?: string;
+  }) => Promise<string>;
   addEquipment: (eq: Equipment) => void;
   addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'> & { status?: ActionPlanStatus }) => void;
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
@@ -116,6 +111,7 @@ export const useAppStore = create<AppState>()(
       /**
        * Helper: kick off a background sync attempt and update telemetry.
        * Never throws — failures are reflected in `lastSync.errors`.
+       * Guards against concurrent sync via the sync module's flag.
        */
       const runSync = async (): Promise<void> => {
         if (!isSupabaseConfigured) return;
@@ -125,13 +121,66 @@ export const useAppStore = create<AppState>()(
         }
         set({ syncing: true });
         try {
-          const localActionPlans: LocalActionPlan[] = get().actionPlans.map((p) => ({
-            ...p,
-            sincronizado: (p as LocalActionPlan).sincronizado ?? true,
-            pendingDelete: (p as LocalActionPlan).pendingDelete ?? false,
-          }));
+          const meta = get().actionPlanMeta;
+          const plans = get().actionPlans;
+          // Build sync queue from visible plans + pending-delete plans not in visible list
+          const localActionPlans: LocalActionPlan[] = [];
+          const seenIds = new Set<string>();
+          for (const p of plans) {
+            const m = meta[p.id];
+            if (m?.pendingDelete || m?.sincronizado === false || m === undefined) {
+              localActionPlans.push({
+                ...p,
+                sincronizado: m?.sincronizado ?? true,
+                pendingDelete: m?.pendingDelete ?? false,
+              } as LocalActionPlan);
+              seenIds.add(p.id);
+            }
+          }
+          // Include pending-delete entries not present in actionPlans (removed from UI)
+          for (const [id, m] of Object.entries(meta)) {
+            if (m.pendingDelete && !seenIds.has(id)) {
+              // We don't have the full plan data, but we only need id + flags for delete
+              localActionPlans.push({
+                id,
+                equipmentId: '',
+                local: '',
+                descricao: '',
+                criticidade: 'Baixo',
+                responsavel: '',
+                prazo: '',
+                status: 'Aberta',
+                createdAt: '',
+                sincronizado: false,
+                pendingDelete: true,
+              } as LocalActionPlan);
+              seenIds.add(id);
+            }
+          }
           const report = await syncAll(localActionPlans, { userId: get().user?.id });
-          void report;
+          // Mark action plans as synced after successful push
+          if (report.pushedActionPlanIds.length > 0) {
+            set((state) => {
+              const newMeta = { ...state.actionPlanMeta };
+              for (const id of report.pushedActionPlanIds) {
+                newMeta[id] = { ...newMeta[id], sincronizado: true };
+              }
+              return { actionPlanMeta: newMeta };
+            });
+          }
+          // Remove action plans that were deleted from cloud
+          if (report.deletedActionPlanIds.length > 0) {
+            set((state) => {
+              const newMeta = { ...state.actionPlanMeta };
+              for (const id of report.deletedActionPlanIds) {
+                delete newMeta[id];
+              }
+              return {
+                actionPlans: state.actionPlans.filter((p) => !report.deletedActionPlanIds.includes(p.id)),
+                actionPlanMeta: newMeta,
+              };
+            });
+          }
           set({ lastSyncAt: Date.now() });
           await get().refreshPendingCount();
         } catch (err) {
@@ -149,6 +198,7 @@ export const useAppStore = create<AppState>()(
         inspections: [],
         stats: { total: 0, emDia: 0, pendentes: 0, vencidos: 0, conformidade: 0 },
         actionPlans: [],
+        actionPlanMeta: {},
         config: {
           empresa: 'FireCheck Corp',
           unidade: 'Sede São Paulo',
@@ -232,8 +282,9 @@ export const useAppStore = create<AppState>()(
             return;
           }
           const cloudPending = await pendingSyncCount();
-          const localPending = get().actionPlans.filter(
-            (p) => !(p as LocalActionPlan).sincronizado || !!(p as LocalActionPlan).pendingDelete,
+          const meta = get().actionPlanMeta;
+          const localPending = Object.values(meta).filter(
+            (m) => !m.sincronizado || m.pendingDelete,
           ).length;
           set({ pending: cloudPending + localPending });
         },
@@ -268,6 +319,7 @@ export const useAppStore = create<AppState>()(
             inspections: [],
             stats: recomputeStats([]),
             actionPlans: [],
+            actionPlanMeta: {},
           });
         },
 
@@ -312,30 +364,74 @@ export const useAppStore = create<AppState>()(
           void runSync().then(() => get().refreshPendingCount());
         },
 
-        addInspection: (newInspection) => {
-          let id = '';
-          set((state) => {
-            id = nextInspectionId(state.inspections);
-            const stamped: Inspection = {
-              ...newInspection,
-              id,
-              userId: newInspection.userId ?? get().user?.id,
-            };
-            const updatedInspections = [stamped, ...state.inspections];
+        addInspection: async (data) => {
+          const id = `INSP-${crypto.randomUUID()}`;
+          const userId = data.userId ?? get().user?.id;
 
+          const stamped: Inspection = {
+            id,
+            equipmentId: data.equipmentId,
+            data: data.data,
+            inspetor: data.inspetor,
+            status: data.status,
+            observacoes: data.observacoes || undefined,
+            userId,
+          };
+
+          // 1. Save inspection to Dexie
+          try {
+            await db.inspecoes.put({ ...stamped, sincronizado: false } as LocalInspection);
+          } catch (err) {
+            console.error('[store.addInspection] erro ao persistir inspeção no Dexie:', err);
+            throw Error('Falha ao salvar inspeção no banco local.', { cause: err });
+          }
+
+          // 2. Save photo to Dexie if provided
+          if (data.photoBase64) {
+            try {
+              await db.fotos.put({
+                id,
+                inspectionId: id,
+                base64: data.photoBase64,
+              });
+            } catch (err) {
+              console.error('[store.addInspection] erro ao persistir foto no Dexie:', err);
+            }
+          }
+
+          // 3. Update equipment in Dexie
+          try {
+            await db.equipamentos.where('id').equals(data.equipmentId).modify((eq) => {
+              eq.status = data.status;
+              eq.sincronizado = false;
+              if (data.dataProximaInspecao) {
+                eq.dataProximaInspecao = data.dataProximaInspecao;
+              }
+            });
+          } catch (err) {
+            console.error('[store.addInspection] erro ao atualizar equipamento no Dexie:', err);
+          }
+
+          // 4. Update Zustand state
+          let actionPlanId: string | null = null;
+          set((state) => {
+            const updatedInspections = [stamped, ...state.inspections];
             const updatedEquipments = state.equipments.map((eq) =>
-              eq.id === newInspection.equipmentId
-                ? { ...eq, status: newInspection.status }
+              eq.id === data.equipmentId
+                ? { ...eq, status: data.status, dataProximaInspecao: data.dataProximaInspecao ?? eq.dataProximaInspecao }
                 : eq,
             );
 
             let updatedActionPlans = [...state.actionPlans];
-            if (newInspection.status === 'vencido' || newInspection.status === 'pendente') {
-              const eq = updatedEquipments.find((e) => e.id === newInspection.equipmentId);
-              const descObs = newInspection.observacoes || 'Não conformidade identificada durante inspeção';
-              const newPlan: LocalActionPlan = {
-                id: `PAC-${Date.now()}`,
-                equipmentId: newInspection.equipmentId,
+            const updatedMeta = { ...state.actionPlanMeta };
+
+            if (data.status === 'vencido' || data.status === 'pendente') {
+              const eq = updatedEquipments.find((e) => e.id === data.equipmentId);
+              const descObs = data.observacoes || 'Não conformidade identificada durante inspeção';
+              actionPlanId = `PAC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+              const newPlan: ActionPlan = {
+                id: actionPlanId,
+                equipmentId: data.equipmentId,
                 local: eq?.local || 'Local não especificado',
                 descricao: descObs,
                 criticidade: inferCriticidade(descObs, eq?.tipo || ''),
@@ -343,70 +439,78 @@ export const useAppStore = create<AppState>()(
                 prazo: '',
                 status: 'Aberta',
                 createdAt: new Date().toISOString().split('T')[0],
-                userId: get().user?.id,
-                sincronizado: false,
+                userId,
               };
-              updatedActionPlans = [toActionPlan(newPlan), ...state.actionPlans];
+              updatedActionPlans = [newPlan, ...state.actionPlans];
+              updatedMeta[actionPlanId] = { sincronizado: false, pendingDelete: false };
             }
 
             return {
               inspections: updatedInspections,
               equipments: updatedEquipments,
-              actionPlans: updatedActionPlans,
               stats: recomputeStats(updatedEquipments),
+              actionPlans: updatedActionPlans,
+              actionPlanMeta: updatedMeta,
             };
           });
-          const finalId = id;
-          (async () => {
-            try {
-              const stamped: Inspection = {
-                ...newInspection,
-                id: finalId,
-                userId: newInspection.userId ?? get().user?.id,
-              };
-              const full: LocalInspection = { ...stamped, sincronizado: false };
-              await db.inspecoes.put(full);
-              const eq = await db.equipamentos.get(newInspection.equipmentId);
-              if (eq) {
-                await db.equipamentos.put({
-                  ...eq,
-                  status: newInspection.status,
-                  sincronizado: false,
-                });
-              }
-            } catch (err) {
-              console.error('[store.addInspection] erro ao persistir no Dexie:', err);
-            }
-          })();
+
+          // 5. Trigger sync once
           void runSync().then(() => get().refreshPendingCount());
+
+          return id;
         },
 
         addActionPlan: (plan) => {
-          const newPlan: LocalActionPlan = {
+          const id = `PAC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          const newPlan: ActionPlan = {
             ...plan,
-            id: `PAC-${Date.now()}`,
+            id,
             status: plan.status ?? 'Aberta',
             createdAt: new Date().toISOString().split('T')[0],
             userId: plan.userId ?? get().user?.id,
-            sincronizado: false,
           };
-          set((state) => ({ actionPlans: [toActionPlan(newPlan), ...state.actionPlans] }));
+          set((state) => ({
+            actionPlans: [newPlan, ...state.actionPlans],
+            actionPlanMeta: { ...state.actionPlanMeta, [id]: { sincronizado: false, pendingDelete: false } },
+          }));
           void runSync().then(() => get().refreshPendingCount());
         },
 
         updateActionPlan: (id, updates) => {
-          set((state) => ({
-            actionPlans: state.actionPlans.map((ap) =>
-              ap.id === id ? ({ ...ap, ...updates, sincronizado: false } as ActionPlan) : ap,
-            ),
-          }));
+          set((state) => {
+            const meta = state.actionPlanMeta[id];
+            const newMeta = meta ? { ...meta, sincronizado: false } : { sincronizado: false, pendingDelete: false };
+            return {
+              actionPlans: state.actionPlans.map((ap) =>
+                ap.id === id ? { ...ap, ...updates } : ap,
+              ),
+              actionPlanMeta: { ...state.actionPlanMeta, [id]: newMeta },
+            };
+          });
           void runSync().then(() => get().refreshPendingCount());
         },
 
         deleteActionPlan: (id) => {
-          set((state) => ({
-            actionPlans: state.actionPlans.filter((ap) => ap.id !== id),
-          }));
+          const meta = get().actionPlanMeta[id];
+          const isSynced = meta?.sincronizado === true;
+
+          if (isSynced) {
+            // Mark as pending delete — the sync will issue a DELETE to Supabase
+            set((state) => ({
+              actionPlans: state.actionPlans.filter((ap) => ap.id !== id),
+              actionPlanMeta: { ...state.actionPlanMeta, [id]: { sincronizado: false, pendingDelete: true } },
+            }));
+          } else {
+            // Not synced — safe to remove entirely
+            set((state) => {
+              const newMeta = { ...state.actionPlanMeta };
+              delete newMeta[id];
+              return {
+                actionPlans: state.actionPlans.filter((ap) => ap.id !== id),
+                actionPlanMeta: newMeta,
+              };
+            });
+          }
           void runSync().then(() => get().refreshPendingCount());
         },
 
@@ -450,18 +554,20 @@ export const useAppStore = create<AppState>()(
       // Supabase session + the `profiles` table (see `resolveSession`).
       partialize: (state) => ({
         actionPlans: state.actionPlans,
+        actionPlanMeta: state.actionPlanMeta,
         config: state.config,
         users: state.users,
       }),
       migrate: (persistedState, version) => {
         const base = (persistedState && typeof persistedState === 'object'
           ? persistedState
-          : {}) as { actionPlans?: ActionPlan[]; config?: AppConfig; user?: unknown };
+          : {}) as { actionPlans?: ActionPlan[]; actionPlanMeta?: Record<string, { sincronizado: boolean; pendingDelete: boolean }>; config?: AppConfig; user?: unknown };
         if (version < 2) {
           const { user: _drop, ...rest } = base;
           void _drop;
           return {
             actionPlans: rest.actionPlans ?? [],
+            actionPlanMeta: {},
             config: rest.config ?? {
               empresa: 'FireCheck Corp',
               unidade: 'Sede São Paulo',
@@ -472,6 +578,7 @@ export const useAppStore = create<AppState>()(
         }
         return {
           actionPlans: base.actionPlans ?? [],
+          actionPlanMeta: base.actionPlanMeta ?? {},
           config: base.config ?? {
             empresa: 'FireCheck Corp',
             unidade: 'Sede São Paulo',

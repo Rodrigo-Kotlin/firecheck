@@ -1,7 +1,6 @@
 import { useState, useMemo, useRef, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { db } from '../../db';
 import { compressImage, PHOTO_MAX_WIDTH } from '../../services/photoService';
 import { showToast } from '../../hooks/useToasts';
 import {
@@ -479,6 +478,7 @@ export default function Inspecionar() {
 
   const [success, setSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const selectedEquipment = equipments.find((e) => e.id === eqId);
 
@@ -533,6 +533,9 @@ export default function Inspecionar() {
       return;
     }
 
+    // Prevent double-click
+    if (isSaving) return;
+
     // Determine status logic.
     // REPROVADO > ATENCAO > date warnings > regular.
     let finalStatus: EquipmentStatus = 'regular';
@@ -548,60 +551,33 @@ export default function Inspecionar() {
       const expDate = new Date(validadeDate);
       const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
       if (diffDays <= 7) {
-        finalStatus = 'vencido'; // inspection vencida
+        finalStatus = 'vencido';
       } else if (diffDays <= 30) {
         finalStatus = 'observacao';
       }
     }
 
-    const inspectionId = `INSP-${Date.now()}`;
-    const inspectionData = {
-      id: inspectionId,
-      equipmentId: selectedEquipment.id,
-      data: new Date().toISOString().split('T')[0],
-      inspetor: user?.nome || 'Inspetor',
-      status: finalStatus,
-      observacoes,
-      sincronizado: false
-    };
+    setIsSaving(true);
+    setErrorMsg('');
 
     try {
-      // 1. Save locally to Dexie IndexedDB
-      await db.inspecoes.add(inspectionData);
-
-      // Update equipment mirror locally
-      await db.equipamentos.put({
-        ...selectedEquipment,
-        status: finalStatus,
-        dataProximaInspecao: validadeDate,
-        sincronizado: false,
-      });
-
-      if (photoBase64) {
-        await db.fotos.add({
-          id: inspectionId,
-          inspectionId: inspectionId,
-          base64: photoBase64
-        });
-      }
-
-      // 2. Update Zustand store (reactive state)
-      addInspection({
+      await addInspection({
         equipmentId: selectedEquipment.id,
-        data: inspectionData.data,
-        inspetor: inspectionData.inspetor,
+        data: new Date().toISOString().split('T')[0],
+        inspetor: user?.nome || 'Inspetor',
         status: finalStatus,
-        observacoes: observacoes
+        observacoes,
+        userId: user?.id,
+        photoBase64,
+        dataProximaInspecao: validadeDate || undefined,
       });
 
       setSuccess(true);
-      setErrorMsg('');
-
-      // Trigger background sync with Supabase (no-op if offline/unconfigured)
-      void useAppStore.getState().triggerSync();
     } catch (err) {
       console.error(err);
-      setErrorMsg('Erro ao salvar no banco offline.');
+      setErrorMsg('Erro ao salvar inspeção. Tente novamente.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -881,9 +857,12 @@ export default function Inspecionar() {
           {/* Sticky submit */}
           {selectedEquipment && (
             <div className="sticky bottom-20 lg:bottom-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-neutralBg lg:bg-transparent lg:px-0 lg:py-0 lg:mx-0">
-              <button type="submit" className="btn-primary">
-                <ShieldCheck className="w-5 h-5" />
-                Finalizar Inspeção
+              <button type="submit" className="btn-primary" disabled={isSaving}>
+                {isSaving ? (
+                  <><Loader2 className="w-5 h-5 animate-spin" /> Salvando inspeção...</>
+                ) : (
+                  <><ShieldCheck className="w-5 h-5" /> Finalizar Inspeção</>
+                )}
               </button>
             </div>
           )}
