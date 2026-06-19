@@ -60,17 +60,26 @@ export async function carregarInspecoes(): Promise<Inspection[]> {
 
     if (cloudData !== null) {
       if (cloudData.length > 0) {
-        await db.inspecoes.clear();
+        // Merge: import cloud rows without overwriting local pending data
         for (const insp of cloudData) {
-          await db.inspecoes.put({ ...insp, sincronizado: true });
+          const local = await db.inspecoes.get(insp.id);
+          if (!local) {
+            await db.inspecoes.put({ ...insp, sincronizado: true });
+          } else if (local.sincronizado && !local.pendingDelete) {
+            await db.inspecoes.put({ ...insp, sincronizado: true });
+          }
+          // else: preserve local pending changes
         }
-        if (isDev) console.log(`[loader-inspecoes] ${cloudData.length} inspeções carregadas do Supabase`);
-        return cloudData;
+        if (isDev) console.log(`[loader-inspecoes] ${cloudData.length} inspeções mescladas do Supabase`);
+      } else {
+        if (isDev) console.log('[loader-inspecoes] Supabase vazio — preservando dados locais');
       }
 
-      await limparInspecoesLocais();
-      if (isDev) console.log('[loader-inspecoes] Supabase vazio — cache local limpo');
-      return [];
+      // Return merged data: local + cloud (local pending preserved)
+      const local = await db.inspecoes
+        .filter((i) => !i.pendingDelete)
+        .toArray();
+      return local.map(stripSyncMeta);
     }
 
     if (isDev) console.warn('[loader-inspecoes] falha ao buscar do Supabase — tentando cache local');

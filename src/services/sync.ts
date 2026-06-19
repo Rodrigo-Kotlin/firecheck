@@ -16,6 +16,10 @@
  * The orchestrator is intentionally fire-and-forget: callers can `await`
  * it for tests / UI feedback, but errors never throw — they are logged
  * and the sync state remains valid (rows stay `sincronizado: false`).
+ *
+ * Concurrency: a module-level `_syncInProgress` flag prevents overlapping
+ * sync runs. Callers that attempt a concurrent sync will get a skipped
+ * report.
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { db, type LocalActionPlan } from '../db';
@@ -32,6 +36,9 @@ import {
 } from './mappers';
 import type { ActionPlan } from '../types';
 
+/** Concurrency guard — prevents overlapping sync runs. */
+let _syncInProgress = false;
+
 export interface SyncReport {
   pushed: number;
   pulled: number;
@@ -39,16 +46,24 @@ export interface SyncReport {
   errors: number;
   skipped: boolean;
   reason?: string;
+  /** IDs of action plans that were successfully pushed. */
+  pushedActionPlanIds: string[];
+  /** IDs of action plans that were successfully deleted from cloud. */
+  deletedActionPlanIds: string[];
 }
 
 function skip(reason: string): SyncReport {
-  return { pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason };
+  return { pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason, pushedActionPlanIds: [], deletedActionPlanIds: [] };
 }
 
 function canSync(): boolean {
   if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
   if (!isSupabaseConfigured || !supabase) return false;
   return true;
+}
+
+export function isSyncInProgress(): boolean {
+  return _syncInProgress;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +82,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
     if (success) {
       await db.equipamentos.delete(eq.id);
       deleted++;
+      console.log('[sync] Equipamento %s deletado do Supabase', eq.id);
     } else {
       console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', {
         id: eq.id,
@@ -87,6 +103,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
     if (success) {
       await db.equipamentos.update(eq.id, { sincronizado: true });
       ok++;
+      console.log('[sync] Equipamento %s sincronizado com sucesso', eq.id);
     } else {
       console.error('[sync] Falha ao sincronizar equipamento %s — mantendo sincronizado: false', eq.id);
       errors++;
@@ -144,10 +161,12 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
 async function pushActionPlans(
   plans: LocalActionPlan[],
   userId?: string,
-): Promise<{ ok: number; errors: number; deleted: number }> {
+): Promise<{ ok: number; errors: number; deleted: number; syncedIds: string[]; deletedIds: string[] }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
+  const syncedIds: string[] = [];
+  const deletedIds: string[] = [];
 
   // 1) pending deletes
   const toDelete = plans.filter((p) => p.pendingDelete);
@@ -155,13 +174,16 @@ async function pushActionPlans(
     const success = await deleteActionPlan(plan.id);
     if (success) {
       deleted++;
+      deletedIds.push(plan.id);
+      console.log('[sync] Plano de ação %s deletado do Supabase', plan.id);
     } else {
+      console.error('[sync] Falha ao deletar plano de ação %s no Supabase', plan.id);
       errors++;
     }
   }
 
-  // 2) pending upserts
-  const pending = plans.filter((p) => !p.sincronizado && !p.pendingDelete);
+  // 2) pending upserts — only push plans that have explicit sincronizado: false
+  const pending = plans.filter((p) => p.sincronizado === false && !p.pendingDelete);
   for (const plan of pending) {
     const clean: ActionPlan = {
       id: plan.id,
@@ -178,12 +200,14 @@ async function pushActionPlans(
     const success = await upsertActionPlan(clean);
     if (success) {
       ok++;
+      syncedIds.push(plan.id);
+      console.log('[sync] Plano de ação %s sincronizado com sucesso', plan.id);
     } else {
       console.error('[sync] Falha ao sincronizar plano de ação %s — mantendo sincronizado: false', plan.id);
       errors++;
     }
   }
-  return { ok, errors, deleted };
+  return { ok, errors, deleted, syncedIds, deletedIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -195,8 +219,17 @@ async function pushActionPlans(
  *  but no longer exist in the cloud — the cloud is the source of truth for synced
  *  data. */
 async function pullEquipments(): Promise<number> {
+  console.log('[sync] Pull de equipamentos...');
   const cloud = await fetchEquipments();
-  if (!cloud) return 0;
+  if (!cloud) {
+    console.log('[sync] Supabase retornou null para equipamentos — preservando dados locais');
+    return 0;
+  }
+  if (cloud.length === 0) {
+    console.log('[sync] Supabase retornou lista vazia de equipamentos — preservando dados locais');
+    return 0;
+  }
+
   const cloudIds = new Set(cloud.map((e) => e.id));
   let pulled = 0;
 
@@ -215,6 +248,7 @@ async function pullEquipments(): Promise<number> {
     }
 
     // Purge stale synced rows that no longer exist in the cloud
+    // Only removes rows that are fully synced AND not pending delete
     const allLocal = await db.equipamentos.toArray();
     for (const local of allLocal) {
       if (!cloudIds.has(local.id) && local.sincronizado && !local.pendingDelete) {
@@ -223,12 +257,22 @@ async function pullEquipments(): Promise<number> {
     }
   });
 
+  console.log(`[sync] Pull de equipamentos concluído: ${pulled} importados`);
   return pulled;
 }
 
 async function pullInspections(): Promise<number> {
+  console.log('[sync] Pull de inspeções...');
   const cloud = await fetchInspections();
-  if (!cloud) return 0;
+  if (!cloud) {
+    console.log('[sync] Supabase retornou null para inspeções — preservando dados locais');
+    return 0;
+  }
+  if (cloud.length === 0) {
+    console.log('[sync] Supabase retornou lista vazia de inspeções — preservando dados locais');
+    return 0;
+  }
+
   const cloudIds = new Set(cloud.map((i) => i.id));
   let pulled = 0;
 
@@ -242,6 +286,7 @@ async function pullInspections(): Promise<number> {
         await db.inspecoes.put({ ...insp, sincronizado: true });
         pulled++;
       }
+      // else: local has unsynced changes — preserve them.
     }
 
     const allLocal = await db.inspecoes.toArray();
@@ -252,6 +297,7 @@ async function pullInspections(): Promise<number> {
     }
   });
 
+  console.log(`[sync] Pull de inspeções concluído: ${pulled} importados`);
   return pulled;
 }
 
@@ -272,6 +318,11 @@ export async function syncAll(
   localActionPlans: LocalActionPlan[] = [],
   options: SyncOptions = {},
 ): Promise<SyncReport> {
+  if (_syncInProgress) {
+    console.log('[sync] sync já em andamento — ignorando chamada concorrente');
+    return skip('sync-in-progress');
+  }
+
   if (!canSync()) {
     return skip(
       typeof navigator !== 'undefined' && !navigator.onLine
@@ -280,10 +331,15 @@ export async function syncAll(
     );
   }
 
+  _syncInProgress = true;
+  console.log('[sync] Iniciando sincronização...');
+
   let pushed = 0;
   let pulled = 0;
   let deleted = 0;
   let errors = 0;
+  let pushedActionPlanIds: string[] = [];
+  let deletedActionPlanIds: string[] = [];
 
   try {
     if (!options.pullOnly) {
@@ -293,6 +349,8 @@ export async function syncAll(
       pushed += eqR.ok + insR.ok + apR.ok;
       deleted += eqR.deleted + insR.deleted + apR.deleted;
       errors += eqR.errors + insR.errors + apR.errors;
+      pushedActionPlanIds = apR.syncedIds;
+      deletedActionPlanIds = apR.deletedIds;
     }
 
     if (!options.pushOnly) {
@@ -303,9 +361,12 @@ export async function syncAll(
   } catch (err) {
     console.error('[sync] exceção durante syncAll:', err);
     errors++;
+  } finally {
+    console.log(`[sync] Sincronização concluída. Push: ${pushed}, Pull: ${pulled}, Delete: ${deleted}, Erros: ${errors}`);
+    _syncInProgress = false;
   }
 
-  return { pushed, pulled, deleted, errors, skipped: false };
+  return { pushed, pulled, deleted, errors, skipped: false, pushedActionPlanIds, deletedActionPlanIds };
 }
 
 /** Counts the rows that still need to be pushed — surfaced in the UI. */

@@ -95,17 +95,26 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
 
     if (cloudData !== null) {
       if (cloudData.length > 0) {
-        await db.equipamentos.clear();
+        // Merge: import cloud rows without overwriting local pending data
         for (const eq of cloudData) {
-          await db.equipamentos.put({ ...eq, sincronizado: true });
+          const local = await db.equipamentos.get(eq.id);
+          if (!local) {
+            await db.equipamentos.put({ ...eq, sincronizado: true });
+          } else if (local.sincronizado && !local.pendingDelete) {
+            await db.equipamentos.put({ ...eq, sincronizado: true });
+          }
+          // else: preserve local pending changes
         }
-        if (isDev) console.log(`[loader] ${cloudData.length} equipamentos carregados do Supabase`);
-        return cloudData;
+        if (isDev) console.log(`[loader] ${cloudData.length} equipamentos mesclados do Supabase`);
+      } else {
+        if (isDev) console.log('[loader] Supabase vazio — preservando dados locais');
       }
 
-      await limparEquipamentosLocais();
-      if (isDev) console.log('[loader] Supabase vazio — cache local limpo');
-      return [];
+      // Return merged data
+      const localEqs = await db.equipamentos
+        .filter((e) => !e.pendingDelete)
+        .toArray();
+      return localEqs.map(stripSyncMeta);
     }
 
     if (isDev) console.warn('[loader] falha ao buscar do Supabase — tentando cache local');

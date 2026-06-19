@@ -933,6 +933,7 @@ export default function Relatorios() {
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-black text-gray-900">{h.equipId}</span>
+                  <span className="text-[10px] font-mono text-gray-400 bg-gray-50 px-1 rounded">{h.id}</span>
                   <span className={`pill ${HISTORY_STATUS_BADGE[h.status]}`}>{h.status}</span>
                 </div>
                 <div className="text-xs text-gray-500 font-semibold">{h.data} · {h.inspetor}</div>
