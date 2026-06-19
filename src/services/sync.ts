@@ -239,6 +239,8 @@ async function pullEquipments(): Promise<number> {
 
   const cloudIds = new Set(cloud.map((e) => e.id));
   let pulled = 0;
+  let reconciled = 0;
+  const reconciledIds: string[] = [];
 
   await db.transaction('rw', db.equipamentos, async () => {
     for (const eq of cloud) {
@@ -274,19 +276,53 @@ async function pullEquipments(): Promise<number> {
       pulled++;
     }
 
-    // Purge stale synced rows that no longer exist in the cloud.
-    // With soft delete this is rarely needed (deleted items still have
-    // a row with deleted_at), but kept for edge cases (hard-deleted rows
-    // that existed before the soft-delete migration).
+    // -------------------------------------------------------------------
+    // Reconciliação de órfãos locais (legado hard-delete)
+    // -------------------------------------------------------------------
+    // Equipamentos que foram removidos fisicamente do Supabase antes da
+    // implantação do tombstone (soft delete) podem continuar existindo no
+    // IndexedDB de clientes que nunca receberam a exclusão.
+    //
+    // Após um pull bem-sucedido, detectamos esses órfãos e marcamos com
+    // deletedAt localmente. A UI já filtra deletedAt, então o item some.
+    //
+    // Regras de segurança:
+    //   • sincronizado === false → preservar (alteração local não enviada)
+    //   • pendingDelete === true  → preservar (exclusão local pendente)
+    //   • deletedAt preenchido    → preservar (já reconciliado)
+    //   • ID existe no cloud      → não é órfão
+    // -------------------------------------------------------------------
+    const now = new Date().toISOString();
     const allLocal = await db.equipamentos.toArray();
+
     for (const local of allLocal) {
-      if (!cloudIds.has(local.id) && local.sincronizado && !local.pendingDelete) {
-        await db.equipamentos.delete(local.id);
+      if (!local.sincronizado) continue;        // alteração local não enviada
+      if (local.pendingDelete) continue;         // exclusão local pendente
+      if (local.deletedAt) continue;              // já reconciliado
+      if (cloudIds.has(local.id)) continue;      // ainda existe no cloud
+
+      await db.equipamentos.update(local.id, {
+        deletedAt: now,
+        deletedBy: null,
+        updatedAt: now,
+        sincronizado: true,
+        pendingDelete: false,
+      });
+      reconciled++;
+      reconciledIds.push(local.id);
+      if (import.meta.env.DEV) {
+        console.log('[sync] Órfão reconciliado: %s', local.id);
       }
+    }
+
+    if (import.meta.env.DEV && reconciled > 0) {
+      console.log('[sync] Pull: %d remotos, %d locais, %d órfãos reconciliados',
+        cloud.length, allLocal.length, reconciled);
+      console.log('[sync] IDs reconciliados: %s', reconciledIds.join(', '));
     }
   });
 
-  console.log(`[sync] Pull de equipamentos concluído: ${pulled} importados`);
+  console.log(`[sync] Pull de equipamentos concluído: ${pulled} importados (${reconciled} órfãos reconciliados)`);
   return pulled;
 }
 
