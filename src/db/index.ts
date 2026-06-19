@@ -31,6 +31,10 @@ export interface PhotoData {
 export type LocalEquipment = Equipment & {
   sincronizado: boolean;
   pendingDelete?: boolean;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 /** Action plan row as stored in Dexie. */

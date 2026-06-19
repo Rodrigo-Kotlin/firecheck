@@ -144,6 +144,14 @@ export interface Equipment {
   dadosTecnicos?: Record<string, string | number | boolean | null>;
   /** ID of the user who created this equipment. */
   createdBy?: string;
+  /** ISO date when this equipment record was created. */
+  createdAt?: string;
+  /** ISO date when this equipment record was last updated. */
+  updatedAt?: string;
+  /** ISO date when this equipment was soft-deleted (tombstone). */
+  deletedAt?: string | null;
+  /** ID of the user who deleted this equipment. */
+  deletedBy?: string | null;
 }
 
 export interface Inspection {
