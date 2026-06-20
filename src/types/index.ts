@@ -14,6 +14,12 @@ export interface ActionPlan {
   createdAt: string;
   /** ID of the user who created this action plan. */
   userId?: string;
+  /** ISO date when this action plan was last updated. */
+  updatedAt?: string;
+  /** ISO date when this action plan was soft-deleted (tombstone). */
+  deletedAt?: string | null;
+  /** ID of the user who deleted this action plan. */
+  deletedBy?: string | null;
 }
 
 export interface AppConfig {

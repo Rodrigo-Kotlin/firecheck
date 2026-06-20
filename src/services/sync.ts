@@ -22,19 +22,22 @@
  * report.
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { db, type LocalActionPlan } from '../db';
+import { db } from '../db';
 import { fetchEquipments, createEquipmentRemote, updateEquipmentRemote, findEquipmentById, softDeleteEquipment, applyEquipmentInspectionStatusRemote, type ServiceResult } from './equipmentService';
 import { fetchInspections, upsertInspection } from './inspectionService';
-import { upsertActionPlan, deleteActionPlan } from './actionPlanService';
+import {
+  fetchActionPlans,
+  createActionPlanRemote,
+  updateActionPlanRemote,
+  softDeleteActionPlanRemote,
+} from './actionPlanService';
 import {
   dbToEquipment,
   dbToInspection,
-  dbToActionPlan,
   equipmentToDb,
   inspectionToDb,
-  actionPlanToDb,
 } from './mappers';
-import type { ActionPlan, Equipment } from '../types';
+import type { Equipment } from '../types';
 
 /** Concurrency guard — prevents overlapping sync runs. */
 let _syncInProgress = false;
@@ -60,10 +63,13 @@ export interface SyncReport {
   pullEqEmpty: boolean;
   pullInsEmpty: boolean;
 
-  /** IDs of action plans that were successfully pushed. */
-  pushedActionPlanIds: string[];
-  /** IDs of action plans that were successfully deleted from cloud. */
-  deletedActionPlanIds: string[];
+  // -- Detalhamento de planos de ação --
+  pushApOk: number;
+  pushApErrors: number;
+  pullApImported: number;
+  pullApReconciled: number;
+  pullApError: boolean;
+  pullApEmpty: boolean;
 }
 
 function skip(reason: string): SyncReport {
@@ -74,7 +80,9 @@ function skip(reason: string): SyncReport {
     pullInsImported: 0, pullInsReconciled: 0,
     pullEqError: false, pullInsError: false,
     pullEqEmpty: false, pullInsEmpty: false,
-    pushedActionPlanIds: [], deletedActionPlanIds: [],
+    pushApOk: 0, pushApErrors: 0,
+    pullApImported: 0, pullApReconciled: 0,
+    pullApError: false, pullApEmpty: false,
   };
 }
 
@@ -264,56 +272,74 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
   return { ok, errors, deleted };
 }
 
-async function pushActionPlans(
-  plans: LocalActionPlan[],
-  userId?: string,
-): Promise<{ ok: number; errors: number; deleted: number; syncedIds: string[]; deletedIds: string[] }> {
+async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
-  const syncedIds: string[] = [];
-  const deletedIds: string[] = [];
 
-  // 1) pending deletes
-  const toDelete = plans.filter((p) => p.pendingDelete);
+  // 1) pending deletes — soft delete
+  const toDelete = await db.planosAcao.filter((p) => !!p.pendingDelete).toArray();
   for (const plan of toDelete) {
-    const success = await deleteActionPlan(plan.id);
-    if (success) {
+    const result = await softDeleteActionPlanRemote(plan.id, userId);
+    if (result.ok) {
+      await db.planosAcao.update(plan.id, {
+        pendingDelete: false,
+        sincronizado: true,
+        syncAction: undefined,
+        deletedAt: new Date().toISOString(),
+        deletedBy: userId ?? null,
+        updatedAt: new Date().toISOString(),
+      });
       deleted++;
-      deletedIds.push(plan.id);
-      console.log('[sync] Plano de ação %s deletado do Supabase', plan.id);
+      console.log('[sync] Plano %s deletado (soft) do Supabase', plan.id);
     } else {
-      console.error('[sync] Falha ao deletar plano de ação %s no Supabase', plan.id);
+      console.error('[sync.pushActionPlans] Falha ao deletar plano no Supabase', { id: plan.id });
       errors++;
     }
   }
 
-  // 2) pending upserts — only push plans that have explicit sincronizado: false
-  const pending = plans.filter((p) => p.sincronizado === false && !p.pendingDelete);
+  // 2) pending sync — create / update
+  const pending = await db.planosAcao
+    .filter((p) => !p.sincronizado && !p.pendingDelete && !p.syncError)
+    .toArray();
   for (const plan of pending) {
-    const clean: ActionPlan = {
-      id: plan.id,
-      equipmentId: plan.equipmentId,
-      local: plan.local,
-      descricao: plan.descricao,
-      criticidade: plan.criticidade,
-      responsavel: plan.responsavel,
-      prazo: plan.prazo,
-      status: plan.status,
-      createdAt: plan.createdAt,
-      userId: plan.userId ?? userId,
-    };
-    const success = await upsertActionPlan(clean);
-    if (success) {
-      ok++;
-      syncedIds.push(plan.id);
-      console.log('[sync] Plano de ação %s sincronizado com sucesso', plan.id);
+    const toSync = { ...plan, userId: plan.userId ?? userId };
+
+    let result: ServiceResult;
+
+    if (plan.syncAction === 'create') {
+      result = await createActionPlanRemote(toSync);
+    } else if (plan.syncAction === 'update') {
+      result = await updateActionPlanRemote(toSync);
     } else {
-      console.error('[sync] Falha ao sincronizar plano de ação %s — mantendo sincronizado: false', plan.id);
-      errors++;
+      // Legacy — sem syncAction: tenta create; se duplicar, faz update
+      result = await createActionPlanRemote(toSync);
+      if (!result.ok && result.code === 'duplicate') {
+        result = await updateActionPlanRemote(toSync);
+      }
+    }
+
+    if (result.ok) {
+      await db.planosAcao.update(plan.id, {
+        sincronizado: true,
+        syncAction: undefined,
+        syncError: undefined,
+      });
+      ok++;
+      console.log('[sync] Plano %s sincronizado com sucesso', plan.id);
+    } else {
+      if (result.code === 'duplicate') {
+        await db.planosAcao.update(plan.id, {
+          syncError: 'duplicate',
+        });
+        console.warn('[sync] Conflito de duplicidade para plano %s — syncError=duplicate', plan.id);
+      } else {
+        console.error('[sync] Falha ao sincronizar plano %s — mantendo sincronizado: false', plan.id);
+        errors++;
+      }
     }
   }
-  return { ok, errors, deleted, syncedIds, deletedIds };
+  return { ok, errors, deleted };
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +522,87 @@ async function pullInspections(): Promise<PullResult> {
   return { imported, reconciled, error: false, empty: cloud.length === 0 };
 }
 
+async function pullActionPlans(): Promise<PullResult> {
+  if (import.meta.env.DEV) console.log('[sync] pullActionPlans...');
+  const result = await fetchActionPlans();
+
+  if (!result.ok) {
+    console.error('[sync] pullActionPlans erro: preservando dados locais');
+    return { imported: 0, reconciled: 0, error: true, empty: false };
+  }
+
+  const cloud = result.data ?? [];
+  const cloudIds = new Set(cloud.map((p) => p.id));
+  let imported = 0;
+  let reconciled = 0;
+
+  await db.transaction('rw', db.planosAcao, async () => {
+    for (const plan of cloud) {
+      const local = await db.planosAcao.get(plan.id);
+
+      if (!local) {
+        // Não inserir tombstones que este cliente nunca viu
+        if (plan.deletedAt) continue;
+        await db.planosAcao.put({ ...plan, sincronizado: true });
+        imported++;
+        continue;
+      }
+
+      // Preservar alterações locais pendentes
+      if (!local.sincronizado || local.pendingDelete || local.syncAction || local.syncError) {
+        continue;
+      }
+
+      // Cloud tem tombstone → marcar local como deletado
+      if (plan.deletedAt) {
+        await db.planosAcao.put({
+          ...plan,
+          sincronizado: true,
+          pendingDelete: false,
+        });
+        imported++;
+        if (import.meta.env.DEV) console.log('[sync] Plano %s marcado como deletado (tombstone remota)', plan.id);
+        continue;
+      }
+
+      // Linha local totalmente sincronizada → sobrescrever com dados do cloud
+      await db.planosAcao.put({ ...plan, sincronizado: true });
+      imported++;
+    }
+
+    // --- Reconciliação de órfãos locais ---
+    const now = new Date().toISOString();
+    const allLocal = await db.planosAcao.toArray();
+
+    for (const local of allLocal) {
+      if (cloudIds.has(local.id)) continue;
+      if (!local.sincronizado) continue;
+      if (local.pendingDelete) continue;
+      if (local.syncAction) continue;
+      if (local.syncError) continue;
+      if (local.deletedAt) continue;
+
+      await db.planosAcao.update(local.id, {
+        deletedAt: now,
+        deletedBy: null,
+        updatedAt: now,
+        sincronizado: true,
+        pendingDelete: false,
+      });
+      reconciled++;
+      if (import.meta.env.DEV) {
+        console.log('[sync] plan orphan marked deletedAt: %s', local.id);
+      }
+    }
+  });
+
+  if (import.meta.env.DEV) {
+    console.log('[sync] pullActionPlans final: imported=%d reconciled=%d error=false empty=%s',
+      imported, reconciled, cloud.length === 0 ? 'true' : 'false');
+  }
+  return { imported, reconciled, error: false, empty: cloud.length === 0 };
+}
+
 // ---------------------------------------------------------------------------
 // PUBLIC API
 // ---------------------------------------------------------------------------
@@ -510,7 +617,6 @@ export interface SyncOptions {
 }
 
 export async function syncAll(
-  localActionPlans: LocalActionPlan[] = [],
   options: SyncOptions = {},
 ): Promise<SyncReport> {
   if (_syncInProgress) {
@@ -536,6 +642,9 @@ export async function syncAll(
   let deleted = 0;
   let errors = 0;
 
+  let pushApOk = 0;
+  const pushApErrors = 0;
+
   let pullEqImported = 0;
   let pullEqReconciled = 0;
   let pullEqError = false;
@@ -546,26 +655,28 @@ export async function syncAll(
   let pullInsError = false;
   let pullInsEmpty = false;
 
-  let pushedActionPlanIds: string[] = [];
-  let deletedActionPlanIds: string[] = [];
+  let pullApImported = 0;
+  let pullApReconciled = 0;
+  let pullApError = false;
+  let pullApEmpty = false;
 
   try {
     if (!options.pullOnly) {
       const eqR = await pushEquipments(options.userId);
       const insR = await pushInspections(options.userId);
-      const apR = await pushActionPlans(localActionPlans, options.userId);
+      const apR = await pushActionPlans(options.userId);
       pushEqOk = eqR.ok;
       pushInsOk = insR.ok;
+      pushApOk = apR.ok;
       pushErrors = eqR.errors + insR.errors + apR.errors;
       deleted += eqR.deleted + insR.deleted + apR.deleted;
       errors += pushErrors;
-      pushedActionPlanIds = apR.syncedIds;
-      deletedActionPlanIds = apR.deletedIds;
     }
 
     if (!options.pushOnly) {
       const eqP = await pullEquipments();
       const insP = await pullInspections();
+      const apP = await pullActionPlans();
 
       pullEqImported = eqP.imported;
       pullEqReconciled = eqP.reconciled;
@@ -577,8 +688,13 @@ export async function syncAll(
       pullInsError = insP.error;
       pullInsEmpty = insP.empty;
 
-      pulled += eqP.imported + insP.imported;
-      if (eqP.error || insP.error) errors++;
+      pullApImported = apP.imported;
+      pullApReconciled = apP.reconciled;
+      pullApError = apP.error;
+      pullApEmpty = apP.empty;
+
+      pulled += eqP.imported + insP.imported + apP.imported;
+      if (eqP.error || insP.error || apP.error) errors++;
     }
   } catch (err) {
     console.error('[sync] exceção durante syncAll:', err);
@@ -586,15 +702,15 @@ export async function syncAll(
   } finally {
     if (import.meta.env.DEV) {
       console.log('[sync] Sincronização concluída. ' +
-        `Push eq=${pushEqOk} ins=${pushInsOk} errors=${pushErrors} | ` +
-        `Pull eq=${pullEqImported}(${pullEqReconciled} orfãos) ins=${pullInsImported}(${pullInsReconciled} orfãos) | ` +
+        `Push eq=${pushEqOk} ins=${pushInsOk} ap=${pushApOk} errors=${pushErrors} | ` +
+        `Pull eq=${pullEqImported}(${pullEqReconciled}) ins=${pullInsImported}(${pullInsReconciled}) ap=${pullApImported}(${pullApReconciled}) | ` +
         `Delete=${deleted} Erros=${errors}`);
     }
     _syncInProgress = false;
   }
 
   return {
-    pushed: pushEqOk + pushInsOk,
+    pushed: pushEqOk + pushInsOk + pushApOk,
     pulled,
     deleted,
     errors,
@@ -610,8 +726,12 @@ export async function syncAll(
     pullInsError,
     pullEqEmpty,
     pullInsEmpty,
-    pushedActionPlanIds,
-    deletedActionPlanIds,
+    pushApOk,
+    pushApErrors,
+    pullApImported,
+    pullApReconciled,
+    pullApError,
+    pullApEmpty,
   };
 }
 
@@ -619,10 +739,9 @@ export async function syncAll(
 export async function pendingSyncCount(): Promise<number> {
   const eqs = await db.equipamentos.filter((e) => !e.sincronizado || !!e.pendingDelete).count();
   const ins = await db.inspecoes.filter((i) => !i.sincronizado || !!i.pendingDelete).count();
-  // Action plans are not in Dexie; callers should also count those from the
-  // store if they care.
-  return eqs + ins;
+  const aps = await db.planosAcao.filter((p) => !p.sincronizado || !!p.pendingDelete).count();
+  return eqs + ins + aps;
 }
 
 // Re-export the mapper helpers for convenience.
-export { dbToEquipment, dbToInspection, dbToActionPlan, equipmentToDb, inspectionToDb, actionPlanToDb };
+export { dbToEquipment, dbToInspection, equipmentToDb, inspectionToDb };

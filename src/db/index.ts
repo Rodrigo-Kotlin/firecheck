@@ -44,10 +44,17 @@ export type LocalEquipment = Equipment & {
   statusUpdatePending?: boolean;
 };
 
-/** Action plan row as stored in Dexie. */
+/** Action plan row as stored in Dexie (adds sync metadata). */
 export type LocalActionPlan = ActionPlan & {
   sincronizado: boolean;
   pendingDelete?: boolean;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  updatedAt?: string;
+  /** Indica a intenção da operação pendente: 'create' | 'update' | 'delete'. */
+  syncAction?: 'create' | 'update' | 'delete';
+  /** Erro persistente da última tentativa de sync. */
+  syncError?: string;
 };
 
 /** Inspection row as stored in Dexie (already had `sincronizado`). */
@@ -61,6 +68,7 @@ const LEGACY_SESSION_KEY = 'firecheck-auth-session';
 export class FireCheckDatabase extends Dexie {
   equipamentos!: Table<LocalEquipment, string>;
   inspecoes!: Table<LocalInspection, string>;
+  planosAcao!: Table<LocalActionPlan, string>;
   fotos!: Table<PhotoData, string>;
   acoes_pendentes!: Table<PendingAction, number>;
 
@@ -110,19 +118,28 @@ export class FireCheckDatabase extends Dexie {
           localStorage.removeItem(LEGACY_SESSION_KEY);
         }
       });
+
+    // v5 — add planosAcao table to IndexedDB. Previously action plans lived
+    // only in Zustand/localStorage; now they join the offline-first Dexie
+    // model alongside equipments and inspections.
+    this.version(5).stores({
+      equipamentos: 'id, tipo, status, sincronizado',
+      inspecoes: 'id, equipmentId, sincronizado',
+      planosAcao: 'id, equipmentId, status, sincronizado, pendingDelete, syncAction, deletedAt',
+      fotos: 'id, inspectionId',
+      acoes_pendentes: '++id, type, timestamp',
+    });
   }
 
   /** Purge all local data tables. Used when clearing stale cache or
    *  when the user requests "Limpar dados locais deste dispositivo". */
   async clearCache(): Promise<void> {
     await this.transaction('rw',
-      this.equipamentos,
-      this.inspecoes,
-      this.fotos,
-      this.acoes_pendentes,
+      [this.equipamentos, this.inspecoes, this.planosAcao, this.fotos, this.acoes_pendentes],
       async () => {
         await this.equipamentos.clear();
         await this.inspecoes.clear();
+        await this.planosAcao.clear();
         await this.fotos.clear();
         await this.acoes_pendentes.clear();
       },

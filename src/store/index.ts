@@ -1,10 +1,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus } from '../types';
-import { db, type LocalActionPlan, type LocalEquipment, type LocalInspection } from '../db';
+import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan } from '../db';
 import { syncAll, pendingSyncCount } from '../services/sync';
 import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote } from '../services/equipmentService';
 import { carregarInspecoes } from '../services/inspectionService';
+import { carregarPlanosDeAcao } from '../services/actionPlanService';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   loginUser,
@@ -39,6 +40,50 @@ function inferCriticidade(inspectionObs: string, eqTipo: string): import('../typ
   return 'Baixo';
 }
 
+const MIGRATION_FLAG = 'firecheck_action_plans_migrated_to_dexie';
+
+/** Migrate action plans from persisted Zustand/localStorage to Dexie.
+ *  Runs once on first load after this code ships. */
+async function migratePersistedActionPlansToDexie(): Promise<void> {
+  if (typeof localStorage === 'undefined') return;
+  if (localStorage.getItem(MIGRATION_FLAG) === 'true') return;
+
+  try {
+    const raw = localStorage.getItem('firecheck-storage');
+    if (!raw) return;
+
+    const parsed = JSON.parse(raw);
+    const plans: ActionPlan[] = parsed?.state?.actionPlans ?? [];
+    const meta: Record<string, { sincronizado: boolean; pendingDelete: boolean }> =
+      parsed?.state?.actionPlanMeta ?? {};
+
+    if (!Array.isArray(plans) || plans.length === 0) return;
+
+    for (const plan of plans) {
+      const exists = await db.planosAcao.get(plan.id);
+      if (exists) continue;
+
+      const m = meta[plan.id];
+      await db.planosAcao.put({
+        ...plan,
+        sincronizado: m?.sincronizado ?? true,
+        pendingDelete: m?.pendingDelete ?? false,
+        syncAction: undefined,
+        syncError: undefined,
+        deletedAt: undefined,
+        updatedAt: undefined,
+      });
+    }
+
+    localStorage.setItem(MIGRATION_FLAG, 'true');
+    if (import.meta.env.DEV) {
+      console.log(`[store.migration] ${plans.length} planos migrados do localStorage para Dexie`);
+    }
+  } catch (err) {
+    console.error('[store.migration] Erro ao migrar planos:', err);
+  }
+}
+
 function recomputeStats(eqs: Equipment[]): Stats {
   const total = eqs.length;
   const emDia = eqs.filter((e) => e.status === 'regular').length;
@@ -61,8 +106,6 @@ interface AppState {
   inspections: Inspection[];
   stats: Stats;
   actionPlans: ActionPlan[];
-  /** Sync metadata for action plans (sincronizado, pendingDelete). */
-  actionPlanMeta: Record<string, { sincronizado: boolean; pendingDelete: boolean }>;
   config: AppConfig;
   currentTab: Tab;
 
@@ -120,6 +163,16 @@ export const useAppStore = create<AppState>()(
        * Never throws — failures are reflected in `lastSync.errors`.
        * Guards against concurrent sync via the sync module's flag.
        */
+      const loadPlansFromDexie = async (): Promise<ActionPlan[]> => {
+        const rows = await db.planosAcao
+          .filter((p) => !p.pendingDelete && !p.deletedAt)
+          .toArray();
+        return rows.map(({ sincronizado: _s, pendingDelete: _p, syncAction: _a, syncError: _e, ...rest }) => {
+          void _s; void _p; void _a; void _e;
+          return rest as ActionPlan;
+        });
+      };
+
       const runSync = async (): Promise<void> => {
         if (!isSupabaseConfigured) return;
         if (!navigator.onLine) {
@@ -128,73 +181,14 @@ export const useAppStore = create<AppState>()(
         }
         set({ syncing: true });
         try {
-          const meta = get().actionPlanMeta;
-          const plans = get().actionPlans;
-          // Build sync queue from visible plans + pending-delete plans not in visible list
-          const localActionPlans: LocalActionPlan[] = [];
-          const seenIds = new Set<string>();
-          for (const p of plans) {
-            const m = meta[p.id];
-            if (m?.pendingDelete || m?.sincronizado === false || m === undefined) {
-              localActionPlans.push({
-                ...p,
-                sincronizado: m?.sincronizado ?? true,
-                pendingDelete: m?.pendingDelete ?? false,
-              } as LocalActionPlan);
-              seenIds.add(p.id);
-            }
-          }
-          // Include pending-delete entries not present in actionPlans (removed from UI)
-          for (const [id, m] of Object.entries(meta)) {
-            if (m.pendingDelete && !seenIds.has(id)) {
-              localActionPlans.push({
-                id,
-                equipmentId: '',
-                local: '',
-                descricao: '',
-                criticidade: 'Baixo',
-                responsavel: '',
-                prazo: '',
-                status: 'Aberta',
-                createdAt: '',
-                sincronizado: false,
-                pendingDelete: true,
-              } as LocalActionPlan);
-              seenIds.add(id);
-            }
-          }
-          const report = await syncAll(localActionPlans, { userId: get().user?.id });
+          const report = await syncAll({ userId: get().user?.id });
 
           if (!report.skipped) {
-            // Mark action plans as synced after successful push
-            if (report.pushedActionPlanIds.length > 0) {
-              set((state) => {
-                const newMeta = { ...state.actionPlanMeta };
-                for (const id of report.pushedActionPlanIds) {
-                  newMeta[id] = { ...newMeta[id], sincronizado: true };
-                }
-                return { actionPlanMeta: newMeta };
-              });
-            }
-            // Remove action plans that were deleted from cloud
-            if (report.deletedActionPlanIds.length > 0) {
-              set((state) => {
-                const newMeta = { ...state.actionPlanMeta };
-                for (const id of report.deletedActionPlanIds) {
-                  delete newMeta[id];
-                }
-                return {
-                  actionPlans: state.actionPlans.filter((p) => !report.deletedActionPlanIds.includes(p.id)),
-                  actionPlanMeta: newMeta,
-                };
-              });
-            }
-
-            // Reload equipments and inspections from Dexie into Zustand
-            // The pull phase already wrote fresh data to Dexie preserving local pending
-            const [dbEqs, dbInsps] = await Promise.all([
+            // Reload equipments, inspections, and action plans from Dexie
+            const [dbEqs, dbInsps, dbPlans] = await Promise.all([
               db.equipamentos.toArray(),
               db.inspecoes.toArray(),
+              loadPlansFromDexie(),
             ]);
 
             const freshEqs: Equipment[] = [];
@@ -216,6 +210,7 @@ export const useAppStore = create<AppState>()(
             set({
               equipments: freshEqs,
               inspections: freshInsps,
+              actionPlans: dbPlans,
               stats: recomputeStats(freshEqs),
             });
           }
@@ -237,7 +232,6 @@ export const useAppStore = create<AppState>()(
         inspections: [],
         stats: { total: 0, emDia: 0, pendentes: 0, vencidos: 0, conformidade: 0 },
         actionPlans: [],
-        actionPlanMeta: {},
         config: {
           empresa: 'FireCheck Corp',
           unidade: 'Sede São Paulo',
@@ -296,14 +290,19 @@ export const useAppStore = create<AppState>()(
           const allUsers = await listUsers();
           const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
 
-          const [loadedEqs, loadedInsps] = await Promise.all([
+          // Migrar planos legados do localStorage para Dexie (uma única vez)
+          await migratePersistedActionPlansToDexie();
+
+          const [loadedEqs, loadedInsps, loadedPlans] = await Promise.all([
             carregarEquipamentos(),
             carregarInspecoes(),
+            carregarPlanosDeAcao(),
           ]);
 
           set({
             equipments: loadedEqs,
             inspections: loadedInsps,
+            actionPlans: loadedPlans,
             stats: recomputeStats(loadedEqs),
             user: sessionUser ?? get().user,
             users: allUsers,
@@ -320,12 +319,8 @@ export const useAppStore = create<AppState>()(
             set({ pending: 0 });
             return;
           }
-          const cloudPending = await pendingSyncCount();
-          const meta = get().actionPlanMeta;
-          const localPending = Object.values(meta).filter(
-            (m) => !m.sincronizado || m.pendingDelete,
-          ).length;
-          set({ pending: cloudPending + localPending });
+          const count = await pendingSyncCount();
+          set({ pending: count });
         },
 
         triggerSync: async () => {
@@ -358,7 +353,6 @@ export const useAppStore = create<AppState>()(
             inspections: [],
             stats: recomputeStats([]),
             actionPlans: [],
-            actionPlanMeta: {},
           });
         },
 
@@ -585,12 +579,12 @@ export const useAppStore = create<AppState>()(
             );
 
             let updatedActionPlans = [...state.actionPlans];
-            const updatedMeta = { ...state.actionPlanMeta };
 
             if (data.status === 'vencido' || data.status === 'pendente') {
               const eq = updatedEquipments.find((e) => e.id === data.equipmentId);
               const descObs = data.observacoes || 'Não conformidade identificada durante inspeção';
               actionPlanId = `PAC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+              const now = new Date().toISOString();
               const newPlan: ActionPlan = {
                 id: actionPlanId,
                 equipmentId: data.equipmentId,
@@ -600,11 +594,24 @@ export const useAppStore = create<AppState>()(
                 responsavel: '',
                 prazo: '',
                 status: 'Aberta',
-                createdAt: new Date().toISOString().split('T')[0],
+                createdAt: now.split('T')[0],
                 userId,
+                updatedAt: now,
               };
+
+              // Also write to Dexie
+              void db.planosAcao.put({
+                ...newPlan,
+                sincronizado: false,
+                pendingDelete: false,
+                syncAction: 'create',
+                deletedAt: null,
+                deletedBy: null,
+              } as LocalActionPlan).catch((err) => {
+                console.error('[store.addInspection] erro ao persistir plano no Dexie:', err);
+              });
+
               updatedActionPlans = [newPlan, ...state.actionPlans];
-              updatedMeta[actionPlanId] = { sincronizado: false, pendingDelete: false };
             }
 
             return {
@@ -612,7 +619,6 @@ export const useAppStore = create<AppState>()(
               equipments: updatedEquipments,
               stats: recomputeStats(updatedEquipments),
               actionPlans: updatedActionPlans,
-              actionPlanMeta: updatedMeta,
             };
           });
 
@@ -623,56 +629,67 @@ export const useAppStore = create<AppState>()(
         },
 
         addActionPlan: (plan) => {
+          const now = new Date().toISOString();
           const id = `PAC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           const newPlan: ActionPlan = {
             ...plan,
             id,
             status: plan.status ?? 'Aberta',
-            createdAt: new Date().toISOString().split('T')[0],
+            createdAt: now.split('T')[0],
             userId: plan.userId ?? get().user?.id,
+            updatedAt: now,
           };
-          set((state) => ({
-            actionPlans: [newPlan, ...state.actionPlans],
-            actionPlanMeta: { ...state.actionPlanMeta, [id]: { sincronizado: false, pendingDelete: false } },
-          }));
+
+          void db.planosAcao.put({
+            ...newPlan,
+            sincronizado: false,
+            pendingDelete: false,
+            syncAction: 'create',
+            deletedAt: null,
+            deletedBy: null,
+          } as LocalActionPlan).then(() => {
+            set((state) => ({
+              actionPlans: [newPlan, ...state.actionPlans],
+            }));
+          });
           void runSync().then(() => get().refreshPendingCount());
         },
 
         updateActionPlan: (id, updates) => {
-          set((state) => {
-            const meta = state.actionPlanMeta[id];
-            const newMeta = meta ? { ...meta, sincronizado: false } : { sincronizado: false, pendingDelete: false };
-            return {
+          const now = new Date().toISOString();
+          void db.planosAcao.update(id, {
+            ...updates,
+            sincronizado: false,
+            syncAction: 'update',
+            updatedAt: now,
+          } as Partial<LocalActionPlan>).then(() => {
+            set((state) => ({
               actionPlans: state.actionPlans.map((ap) =>
                 ap.id === id ? { ...ap, ...updates } : ap,
               ),
-              actionPlanMeta: { ...state.actionPlanMeta, [id]: newMeta },
-            };
+            }));
           });
           void runSync().then(() => get().refreshPendingCount());
         },
 
         deleteActionPlan: (id) => {
-          const meta = get().actionPlanMeta[id];
-          const isSynced = meta?.sincronizado === true;
-
-          if (isSynced) {
-            // Mark as pending delete — the sync will issue a DELETE to Supabase
-            set((state) => ({
-              actionPlans: state.actionPlans.filter((ap) => ap.id !== id),
-              actionPlanMeta: { ...state.actionPlanMeta, [id]: { sincronizado: false, pendingDelete: true } },
-            }));
-          } else {
-            // Not synced — safe to remove entirely
-            set((state) => {
-              const newMeta = { ...state.actionPlanMeta };
-              delete newMeta[id];
-              return {
-                actionPlans: state.actionPlans.filter((ap) => ap.id !== id),
-                actionPlanMeta: newMeta,
-              };
-            });
-          }
+          const now = new Date().toISOString();
+          void db.planosAcao.get(id).then((plan) => {
+            if (!plan) return;
+            if (plan.sincronizado) {
+              void db.planosAcao.update(id, {
+                pendingDelete: true,
+                sincronizado: false,
+                deletedAt: now,
+                updatedAt: now,
+              } as Partial<LocalActionPlan>);
+            } else {
+              void db.planosAcao.delete(id);
+            }
+          });
+          set((state) => ({
+            actionPlans: state.actionPlans.filter((ap) => ap.id !== id),
+          }));
           void runSync().then(() => get().refreshPendingCount());
         },
 
@@ -709,27 +726,23 @@ export const useAppStore = create<AppState>()(
     },
     {
       name: 'firecheck-storage',
-      version: 2,
-      // Persist only the small/user-scoped data. Equipments & inspections
-      // now live in Dexie and are loaded via `hydrate()`. `user` is no
-      // longer persisted — it is re-derived on each launch from the
-      // Supabase session + the `profiles` table (see `resolveSession`).
+      version: 3,
+      // Persist only the small/user-scoped data. Equipments, inspections &
+      // action plans now live in Dexie and are loaded via `hydrate()`.
+      // `user` is no longer persisted — it is re-derived on each launch from
+      // the Supabase session + the `profiles` table (see `resolveSession`).
       partialize: (state) => ({
-        actionPlans: state.actionPlans,
-        actionPlanMeta: state.actionPlanMeta,
         config: state.config,
         users: state.users,
       }),
       migrate: (persistedState, version) => {
         const base = (persistedState && typeof persistedState === 'object'
           ? persistedState
-          : {}) as { actionPlans?: ActionPlan[]; actionPlanMeta?: Record<string, { sincronizado: boolean; pendingDelete: boolean }>; config?: AppConfig; user?: unknown };
+          : {}) as { config?: AppConfig; user?: unknown };
         if (version < 2) {
           const { user: _drop, ...rest } = base;
           void _drop;
           return {
-            actionPlans: rest.actionPlans ?? [],
-            actionPlanMeta: {},
             config: rest.config ?? {
               empresa: 'FireCheck Corp',
               unidade: 'Sede São Paulo',
@@ -739,8 +752,6 @@ export const useAppStore = create<AppState>()(
           };
         }
         return {
-          actionPlans: base.actionPlans ?? [],
-          actionPlanMeta: base.actionPlanMeta ?? {},
           config: base.config ?? {
             empresa: 'FireCheck Corp',
             unidade: 'Sede São Paulo',

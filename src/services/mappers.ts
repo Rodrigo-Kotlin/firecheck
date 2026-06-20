@@ -1,4 +1,5 @@
 import type { Equipment, Inspection, ActionPlan } from '../types';
+import type { LocalActionPlan } from '../db';
 
 // Campos que NUNCA devem ir para dados_tecnicos
 const SYNC_META_FIELDS = new Set([
@@ -78,6 +79,8 @@ export interface DbPlanoAcao {
   user_id: string | null;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
+  deleted_by: string | null;
 }
 
 const emptyToUndef = (v: string | null | undefined): string | undefined =>
@@ -219,11 +222,14 @@ export function dbToActionPlan(row: DbPlanoAcao): ActionPlan {
     status: row.status,
     createdAt: row.created_at.split('T')[0],
     userId: emptyToUndef(row.user_id),
+    updatedAt: emptyToUndef(row.updated_at),
+    deletedAt: row.deleted_at ?? undefined,
+    deletedBy: row.deleted_by ?? undefined,
   };
 }
 
-export function actionPlanToDb(plan: Partial<ActionPlan>): Partial<DbPlanoAcao> {
-  const row: Partial<DbPlanoAcao> = {};
+export function actionPlanToDb(plan: Partial<ActionPlan>): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
   if (plan.id !== undefined) row.id = plan.id;
   if (plan.equipmentId !== undefined) row.equipment_id = plan.equipmentId;
   if (plan.local !== undefined) row.local = plan.local;
@@ -233,5 +239,20 @@ export function actionPlanToDb(plan: Partial<ActionPlan>): Partial<DbPlanoAcao> 
   if (plan.prazo !== undefined) row.prazo = plan.prazo ?? null;
   if (plan.status !== undefined) row.status = plan.status;
   if (plan.userId !== undefined) row.user_id = plan.userId ?? null;
+  if (plan.updatedAt !== undefined) row.updated_at = plan.updatedAt || null;
+  if (plan.deletedAt !== undefined) row.deleted_at = plan.deletedAt || null;
+  if (plan.deletedBy !== undefined) row.deleted_by = plan.deletedBy || null;
   return row;
+}
+
+/** Strip local-only sync metadata from an action plan row before returning
+ *  to the UI. These fields live in Dexie but must never leak to consumers. */
+export function stripActionPlanSyncMeta(row: Partial<LocalActionPlan>): ActionPlan {
+  const {
+    sincronizado: _s, pendingDelete: _p,
+    syncAction: _a, syncError: _e,
+    ...plan
+  } = row;
+  void _s; void _p; void _a; void _e;
+  return plan as ActionPlan;
 }
