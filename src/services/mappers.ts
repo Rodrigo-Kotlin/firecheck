@@ -7,6 +7,7 @@ const COMMON_FIELDS = new Set([
   'dataProximaInspecao', 'dataUltimaInspecao',
   'dataUltimoTeste', 'dataProximoTeste', 'dataTesteHidrostatico', 'dataValidadeTeste',
   'status', 'qrCode', 'qrcode', 'fotoUrl', 'observacoes', 'createdBy', 'dadosTecnicos',
+  'createdAt', 'updatedAt', 'deletedAt', 'deletedBy',
 ]);
 
 export interface DbEquipamento {
@@ -37,6 +38,8 @@ export interface DbEquipamento {
   dados_tecnicos: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
+  deleted_by: string | null;
 }
 
 export interface DbInspecao {
@@ -99,6 +102,10 @@ export function dbToEquipment(row: DbEquipamento): Equipment {
     fotoUrl: emptyToUndef(row.foto_url),
     observacoes: emptyToUndef(row.observacoes),
     createdBy: emptyToUndef(row.created_by),
+    createdAt: emptyToUndef(row.created_at),
+    updatedAt: emptyToUndef(row.updated_at),
+    deletedAt: row.deleted_at ?? undefined,
+    deletedBy: row.deleted_by ?? undefined,
     dadosTecnicos,
   };
 
@@ -140,6 +147,11 @@ export function equipmentToDb(eq: Partial<Equipment>): Record<string, unknown> {
 
   const createdBy = eq.createdBy ?? null;
   if (eq.createdBy !== undefined) row.created_by = createdBy;
+
+  if (eq.createdAt !== undefined) row.created_at = eq.createdAt || null;
+  if (eq.updatedAt !== undefined) row.updated_at = eq.updatedAt || null;
+  if (eq.deletedAt !== undefined) row.deleted_at = eq.deletedAt || null;
+  if (eq.deletedBy !== undefined) row.deleted_by = eq.deletedBy || null;
 
   const qrCode = eq.qrCode || eq.qrcode || eq.id;
   if (qrCode !== undefined) row.qr_code = qrCode;

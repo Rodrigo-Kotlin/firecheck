@@ -327,9 +327,12 @@ export const useAppStore = create<AppState>()(
         // Mutations
         // -----------------------------------------------------------------
         addEquipment: (newEq) => {
+          const now = new Date().toISOString();
           const stamped: Equipment = {
             ...newEq,
             createdBy: newEq.createdBy ?? get().user?.id,
+            createdAt: now,
+            updatedAt: now,
           };
           set((state) => {
             const updated = [stamped, ...state.equipments];
@@ -338,13 +341,21 @@ export const useAppStore = create<AppState>()(
               stats: recomputeStats(updated),
             };
           });
-          db.equipamentos.put({ ...stamped, sincronizado: false } as LocalEquipment).catch((err) =>
+          db.equipamentos.put({
+            ...stamped,
+            sincronizado: false,
+            pendingDelete: false,
+            deletedAt: null,
+            deletedBy: null,
+          } as LocalEquipment).catch((err) =>
             console.error('[store.addEquipment] erro ao persistir no Dexie:', err),
           );
           void runSync().then(() => get().refreshPendingCount());
         },
 
         deleteEquipment: (id) => {
+          const userId = get().user?.id;
+          const now = new Date().toISOString();
           set((state) => {
             const updated = state.equipments.filter((eq) => eq.id !== id);
             return {
@@ -352,7 +363,13 @@ export const useAppStore = create<AppState>()(
               stats: recomputeStats(updated),
             };
           });
-          void db.equipamentos.update(id, { pendingDelete: true, sincronizado: false });
+          void db.equipamentos.update(id, {
+            pendingDelete: true,
+            sincronizado: false,
+            deletedAt: now,
+            deletedBy: userId ?? null,
+            updatedAt: now,
+          });
           void runSync().then(() => get().refreshPendingCount());
         },
 
@@ -404,6 +421,7 @@ export const useAppStore = create<AppState>()(
             await db.equipamentos.where('id').equals(data.equipmentId).modify((eq) => {
               eq.status = data.status;
               eq.sincronizado = false;
+              eq.updatedAt = new Date().toISOString();
               if (data.dataProximaInspecao) {
                 eq.dataProximaInspecao = data.dataProximaInspecao;
               }

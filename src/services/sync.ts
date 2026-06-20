@@ -23,7 +23,7 @@
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { db, type LocalActionPlan } from '../db';
-import { fetchEquipments, upsertEquipment, deleteEquipment } from './equipmentService';
+import { fetchEquipments, upsertEquipment, softDeleteEquipment } from './equipmentService';
 import { fetchInspections, upsertInspection } from './inspectionService';
 import { upsertActionPlan, deleteActionPlan } from './actionPlanService';
 import {
@@ -34,7 +34,7 @@ import {
   inspectionToDb,
   actionPlanToDb,
 } from './mappers';
-import type { ActionPlan } from '../types';
+import type { ActionPlan, Equipment } from '../types';
 
 /** Concurrency guard — prevents overlapping sync runs. */
 let _syncInProgress = false;
@@ -75,14 +75,21 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
   let errors = 0;
   let deleted = 0;
 
-  // 1) pending deletes
+  // 1) pending deletes — soft delete: send a tombstone (deleted_at) to Supabase
+  //    so other clients can discover the deletion during pull.
   const toDelete = await db.equipamentos.filter((e) => !!e.pendingDelete).toArray();
   for (const eq of toDelete) {
-    const success = await deleteEquipment(eq.id);
+    const success = await softDeleteEquipment(eq.id, userId);
     if (success) {
-      await db.equipamentos.delete(eq.id);
+      await db.equipamentos.update(eq.id, {
+        pendingDelete: false,
+        sincronizado: true,
+        deletedAt: new Date().toISOString(),
+        deletedBy: userId ?? null,
+        updatedAt: new Date().toISOString(),
+      });
       deleted++;
-      console.log('[sync] Equipamento %s deletado do Supabase', eq.id);
+      console.log('[sync] Equipamento %s deletado (soft) do Supabase', eq.id);
     } else {
       console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', {
         id: eq.id,
@@ -94,7 +101,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
   // 2) pending upserts
   const pending = await db.equipamentos.filter((e) => !e.sincronizado && !e.pendingDelete).toArray();
   for (const eq of pending) {
-    let toUpsert = eq;
+    let toUpsert: Equipment = eq;
     if (!eq.createdBy && userId) {
       await db.equipamentos.update(eq.id, { createdBy: userId });
       toUpsert = { ...eq, createdBy: userId };
@@ -232,32 +239,90 @@ async function pullEquipments(): Promise<number> {
 
   const cloudIds = new Set(cloud.map((e) => e.id));
   let pulled = 0;
+  let reconciled = 0;
+  const reconciledIds: string[] = [];
 
   await db.transaction('rw', db.equipamentos, async () => {
-    // Import / update cloud rows
     for (const eq of cloud) {
       const local = await db.equipamentos.get(eq.id);
+
       if (!local) {
+        // Skip inserting tombstones for items this client never had
+        if (eq.deletedAt) continue;
         await db.equipamentos.put({ ...eq, sincronizado: true });
         pulled++;
-      } else if (local.sincronizado && !local.pendingDelete) {
-        await db.equipamentos.put({ ...eq, sincronizado: true });
-        pulled++;
+        continue;
       }
-      // else: local has unsynced changes — preserve them.
+
+      // Preserve local pending changes (both unsynced edits and pending deletes)
+      if (!local.sincronizado || local.pendingDelete) {
+        continue;
+      }
+
+      // Cloud has a tombstone → mark local as deleted
+      if (eq.deletedAt) {
+        await db.equipamentos.put({
+          ...eq,
+          sincronizado: true,
+          pendingDelete: false,
+        });
+        pulled++;
+        console.log('[sync] Equipamento %s marcado como deletado (tombstone remota)', eq.id);
+        continue;
+      }
+
+      // Fully synced local row → overwrite with cloud data
+      await db.equipamentos.put({ ...eq, sincronizado: true });
+      pulled++;
     }
 
-    // Purge stale synced rows that no longer exist in the cloud
-    // Only removes rows that are fully synced AND not pending delete
+    // -------------------------------------------------------------------
+    // Reconciliação de órfãos locais (legado hard-delete)
+    // -------------------------------------------------------------------
+    // Equipamentos que foram removidos fisicamente do Supabase antes da
+    // implantação do tombstone (soft delete) podem continuar existindo no
+    // IndexedDB de clientes que nunca receberam a exclusão.
+    //
+    // Após um pull bem-sucedido, detectamos esses órfãos e marcamos com
+    // deletedAt localmente. A UI já filtra deletedAt, então o item some.
+    //
+    // Regras de segurança:
+    //   • sincronizado === false → preservar (alteração local não enviada)
+    //   • pendingDelete === true  → preservar (exclusão local pendente)
+    //   • deletedAt preenchido    → preservar (já reconciliado)
+    //   • ID existe no cloud      → não é órfão
+    // -------------------------------------------------------------------
+    const now = new Date().toISOString();
     const allLocal = await db.equipamentos.toArray();
+
     for (const local of allLocal) {
-      if (!cloudIds.has(local.id) && local.sincronizado && !local.pendingDelete) {
-        await db.equipamentos.delete(local.id);
+      if (!local.sincronizado) continue;        // alteração local não enviada
+      if (local.pendingDelete) continue;         // exclusão local pendente
+      if (local.deletedAt) continue;              // já reconciliado
+      if (cloudIds.has(local.id)) continue;      // ainda existe no cloud
+
+      await db.equipamentos.update(local.id, {
+        deletedAt: now,
+        deletedBy: null,
+        updatedAt: now,
+        sincronizado: true,
+        pendingDelete: false,
+      });
+      reconciled++;
+      reconciledIds.push(local.id);
+      if (import.meta.env.DEV) {
+        console.log('[sync] Órfão reconciliado: %s', local.id);
       }
+    }
+
+    if (import.meta.env.DEV && reconciled > 0) {
+      console.log('[sync] Pull: %d remotos, %d locais, %d órfãos reconciliados',
+        cloud.length, allLocal.length, reconciled);
+      console.log('[sync] IDs reconciliados: %s', reconciledIds.join(', '));
     }
   });
 
-  console.log(`[sync] Pull de equipamentos concluído: ${pulled} importados`);
+  console.log(`[sync] Pull de equipamentos concluído: ${pulled} importados (${reconciled} órfãos reconciliados)`);
   return pulled;
 }
 

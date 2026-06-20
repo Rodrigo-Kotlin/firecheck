@@ -9,7 +9,7 @@ import {
   equipmentToDb,
   type DbEquipamento,
 } from './mappers';
-import { db } from '../db';
+import { db, type LocalEquipment } from '../db';
 import type { Equipment } from '../types';
 
 const isDev = import.meta.env.DEV;
@@ -42,6 +42,10 @@ export async function upsertEquipment(eq: Equipment): Promise<boolean> {
     return false;
   }
   const payload = equipmentToDb(eq);
+  payload.updated_at = new Date().toISOString();
+  if (!payload.created_at) {
+    payload.created_at = new Date().toISOString();
+  }
   const { error } = await supabase
     .from('equipamentos')
     .upsert(payload, { onConflict: 'id' });
@@ -74,6 +78,39 @@ export async function deleteEquipment(id: string): Promise<boolean> {
     });
     return false;
   }
+  return true;
+}
+
+/** Soft-delete: sets deleted_at and keeps the tombstone in Supabase
+ *  so other clients can discover the deletion during pull. */
+export async function softDeleteEquipment(id: string, userId?: string): Promise<boolean> {
+  if (!isSupabaseConfigured || !supabase) {
+    notConfigured<boolean>('softDeleteEquipment');
+    return false;
+  }
+  const now = new Date().toISOString();
+  const update: Record<string, unknown> = {
+    deleted_at: now,
+    updated_at: now,
+  };
+  if (userId) {
+    update.deleted_by = userId;
+  }
+  const { error } = await supabase
+    .from('equipamentos')
+    .update(update)
+    .eq('id', id);
+  if (error) {
+    console.error('[equipment.softDeleteEquipment] Falha ao marcar deleted_at', {
+      id,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+    return false;
+  }
+  console.log('[equipment] Equipamento %s marcado como deleted_at=%s', id, now);
   return true;
 }
 
@@ -110,9 +147,9 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
         if (isDev) console.log('[loader] Supabase vazio — preservando dados locais');
       }
 
-      // Return merged data
+      // Return merged data (exclude pending deletes and remote tombstones)
       const localEqs = await db.equipamentos
-        .filter((e) => !e.pendingDelete)
+        .filter((e) => !e.pendingDelete && !e.deletedAt)
         .toArray();
       return localEqs.map(stripSyncMeta);
     }
@@ -122,7 +159,7 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
 
   // Offline / fallback: load from IndexedDB
   const localEqs = await db.equipamentos
-    .filter((e) => !e.pendingDelete)
+    .filter((e) => !e.pendingDelete && !e.deletedAt)
     .toArray();
 
   if (isDev) {
@@ -133,10 +170,10 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
 }
 
 /** Strip Dexie-only sync metadata from an equipment row. */
-function stripSyncMeta(row: { sincronizado: boolean; pendingDelete?: boolean } & Equipment): Equipment {
-  const { sincronizado: _s, pendingDelete: _p, ...eq } = row;
-  void _s; void _p;
-  return eq;
+function stripSyncMeta(row: Partial<LocalEquipment>): Equipment {
+  const { sincronizado: _s, pendingDelete: _p, deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u, ...eq } = row;
+  void _s; void _p; void _d; void _db; void _c; void _u;
+  return eq as Equipment;
 }
 
 // ---------------------------------------------------------------------------
