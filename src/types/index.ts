@@ -152,6 +152,10 @@ export interface Equipment {
   deletedAt?: string | null;
   /** ID of the user who deleted this equipment. */
   deletedBy?: string | null;
+  /** Flag local de exclusão pendente de sincronização. Não persiste no Supabase. */
+  pendingDelete?: boolean;
+  /** Erro persistente da última tentativa de sync (ex.: 'duplicate'). Não persiste no Supabase. */
+  syncError?: string;
 }
 
 export interface Inspection {

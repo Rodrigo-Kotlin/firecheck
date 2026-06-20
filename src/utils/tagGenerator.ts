@@ -46,3 +46,15 @@ export function isValidTagForType(tag: string, tipo: string): boolean {
   const pattern = new RegExp(`^${prefix}-\\d{3,}$`, 'i');
   return pattern.test(tag);
 }
+
+/**
+ * Normaliza uma TAG: trim, uppercase, espaços internos viram hífen.
+ * Exemplo: ' ext-001 ' → 'EXT-001', 'Ext 001' → 'EXT-001'
+ */
+export function normalizeTag(tag: string): string {
+  return tag
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, ' ')
+    .replace(/ /g, '-');
+}

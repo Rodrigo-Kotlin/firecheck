@@ -20,6 +20,16 @@ function notConfigured<T>(op: string): T | null {
 }
 
 // ---------------------------------------------------------------------------
+// Tipos compartilhados
+// ---------------------------------------------------------------------------
+
+export interface ServiceResult {
+  ok: boolean;
+  code?: 'duplicate' | 'permission_denied' | 'not_found' | 'network' | 'unknown';
+  message?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Supabase CRUD
 // ---------------------------------------------------------------------------
 
@@ -36,6 +46,86 @@ export async function fetchEquipments(): Promise<Equipment[] | null> {
   return (data as DbEquipamento[]).map(dbToEquipment);
 }
 
+export async function findEquipmentById(id: string): Promise<Equipment | null> {
+  if (!isSupabaseConfigured || !supabase) return null;
+  const { data, error } = await supabase
+    .from('equipamentos')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) {
+    console.error('[equipment.findEquipmentById]', error);
+    return null;
+  }
+  if (!data) return null;
+  return dbToEquipment(data as DbEquipamento);
+}
+
+export async function createEquipmentRemote(eq: Equipment): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+  const payload = equipmentToDb(eq);
+  payload.created_at = new Date().toISOString();
+  payload.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from('equipamentos')
+    .insert(payload)
+    .select('id')
+    .single();
+
+  if (error) {
+    if (error.code === '23505') {
+      return { ok: false, code: 'duplicate', message: 'Já existe um equipamento com esta TAG no servidor.' };
+    }
+    if (error.code === '42501') {
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para criar equipamento.' };
+    }
+    console.error('[equipment.createEquipmentRemote]', error);
+    return { ok: false, code: 'unknown', message: error.message };
+  }
+
+  if (!data || !data.id) {
+    return { ok: false, code: 'unknown', message: 'Nenhuma linha criada — erro inesperado.' };
+  }
+
+  return { ok: true };
+}
+
+export async function updateEquipmentRemote(eq: Equipment): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+  const payload = equipmentToDb(eq);
+  payload.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from('equipamentos')
+    .update(payload)
+    .eq('id', eq.id)
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    if (error.code === '42501') {
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para atualizar equipamento.' };
+    }
+    console.error('[equipment.updateEquipmentRemote]', error);
+    return { ok: false, code: 'unknown', message: error.message };
+  }
+
+  if (!data) {
+    return { ok: false, code: 'not_found', message: 'Atualização não aplicada. Verifique permissão/RLS ou conflito de sincronização.' };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * @deprecated Use createEquipmentRemote() para criação e updateEquipmentRemote() para edição.
+ * upsertEquipment permanece apenas para compatibilidade com código legado.
+ */
 export async function upsertEquipment(eq: Equipment): Promise<boolean> {
   if (!isSupabaseConfigured || !supabase) {
     notConfigured<boolean>('upsertEquipment');

@@ -15,6 +15,7 @@ import {
   Beaker,
 } from 'lucide-react';
 import type { Equipment } from '../../types';
+import { normalizeTag } from '../../utils/tagGenerator';
 
 type ScanResult =
   | { kind: 'success'; eq: Equipment }
@@ -49,7 +50,10 @@ export default function ScanQr() {
     const current = scanResultRef.current;
     if (current?.kind === 'not-found' && current.code === code) return;
 
-    const eq = equipments.find((e) => e.id.toUpperCase() === code.trim().toUpperCase());
+    const normalizedCode = normalizeTag(code);
+    const eq = equipments.find(
+      (e) => !e.pendingDelete && !e.deletedAt && (e.id === normalizedCode || e.qrCode === normalizedCode || e.qrcode === normalizedCode),
+    );
     if (eq) {
       setScanResult({ kind: 'success', eq });
       if (scannerRef.current && scannerRef.current.isScanning) {

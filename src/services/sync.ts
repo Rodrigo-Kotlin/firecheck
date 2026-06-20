@@ -23,7 +23,7 @@
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { db, type LocalActionPlan } from '../db';
-import { fetchEquipments, upsertEquipment, softDeleteEquipment } from './equipmentService';
+import { fetchEquipments, createEquipmentRemote, updateEquipmentRemote, findEquipmentById, softDeleteEquipment, type ServiceResult } from './equipmentService';
 import { fetchInspections, upsertInspection } from './inspectionService';
 import { upsertActionPlan, deleteActionPlan } from './actionPlanService';
 import {
@@ -75,8 +75,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
   let errors = 0;
   let deleted = 0;
 
-  // 1) pending deletes — soft delete: send a tombstone (deleted_at) to Supabase
-  //    so other clients can discover the deletion during pull.
+  // 1) pending deletes — soft delete
   const toDelete = await db.equipamentos.filter((e) => !!e.pendingDelete).toArray();
   for (const eq of toDelete) {
     const success = await softDeleteEquipment(eq.id, userId);
@@ -84,6 +83,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
       await db.equipamentos.update(eq.id, {
         pendingDelete: false,
         sincronizado: true,
+        syncAction: undefined,
         deletedAt: new Date().toISOString(),
         deletedBy: userId ?? null,
         updatedAt: new Date().toISOString(),
@@ -98,22 +98,56 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
     }
   }
 
-  // 2) pending upserts
-  const pending = await db.equipamentos.filter((e) => !e.sincronizado && !e.pendingDelete).toArray();
+  // 2) pending sync — create / update (exclui itens com syncError para evitar retry infinito)
+  const pending = await db.equipamentos
+    .filter((e) => !e.sincronizado && !e.pendingDelete && !e.syncError)
+    .toArray();
   for (const eq of pending) {
-    let toUpsert: Equipment = eq;
+    let toSync: Equipment = eq;
     if (!eq.createdBy && userId) {
       await db.equipamentos.update(eq.id, { createdBy: userId });
-      toUpsert = { ...eq, createdBy: userId };
+      toSync = { ...eq, createdBy: userId };
     }
-    const success = await upsertEquipment(toUpsert);
-    if (success) {
-      await db.equipamentos.update(eq.id, { sincronizado: true });
+
+    let result: ServiceResult;
+
+    if (eq.syncAction === 'create') {
+      result = await createEquipmentRemote(toSync);
+    } else if (eq.syncAction === 'update') {
+      result = await updateEquipmentRemote(toSync);
+    } else {
+      // Legacy — sem syncAction: tenta detectar se é create ou update
+      const remote = await findEquipmentById(eq.id);
+      if (remote) {
+        result = await updateEquipmentRemote(toSync);
+      } else {
+        result = await createEquipmentRemote(toSync);
+      }
+    }
+
+    if (result.ok) {
+      await db.equipamentos.update(eq.id, {
+        sincronizado: true,
+        syncAction: undefined,
+        syncError: undefined,
+      });
       ok++;
       console.log('[sync] Equipamento %s sincronizado com sucesso', eq.id);
     } else {
-      console.error('[sync] Falha ao sincronizar equipamento %s — mantendo sincronizado: false', eq.id);
-      errors++;
+      if (result.code === 'duplicate') {
+        // Conflito — marca syncError e mantém dados intactos (sem rollback)
+        await db.equipamentos.update(eq.id, {
+          syncError: 'duplicate',
+        });
+        console.warn(
+          '[sync] Conflito de duplicidade para %s — syncError=duplicate. ' +
+          'O usuário precisa alterar a TAG para sincronizar.', eq.id,
+        );
+        // Não incrementa errors — conflito não é erro transitório
+      } else {
+        console.error('[sync] Falha ao sincronizar equipamento %s — mantendo sincronizado: false', eq.id);
+        errors++;
+      }
     }
   }
   return { ok, errors, deleted };

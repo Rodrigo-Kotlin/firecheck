@@ -27,7 +27,10 @@ import {
   type FieldSection,
 } from '../../constants/equipmentFormConfig';
 import type { Equipment, EquipmentStatus } from '../../types';
-import { generateNextTag, isValidTagForType, TAG_PREFIXES } from '../../utils/tagGenerator';
+import { generateNextTag, isValidTagForType, TAG_PREFIXES, normalizeTag } from '../../utils/tagGenerator';
+import { db } from '../../db';
+import { findEquipmentById } from '../../services/equipmentService';
+import { isSupabaseConfigured } from '../../lib/supabase';
 
 const schema = z.object({
   id: z.string().min(3, { message: 'Código deve conter no mínimo 3 caracteres' }).toUpperCase(),
@@ -255,6 +258,8 @@ export default function NovoEquipamento() {
   const [duplicateError, setDuplicateError] = useState('');
   const [tagEditadaManualmente, setTagEditadaManualmente] = useState(false);
   const [tagAviso, setTagAviso] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | undefined>();
 
   const {
     register,
@@ -273,7 +278,8 @@ export default function NovoEquipamento() {
   const tipoSelecionado = watch('tipo');
   const idAtual = watch('id');
 
-  const existingIds = useMemo(() => equipments.map((e) => e.id), [equipments]);
+  const activeEquipments = useMemo(() => equipments.filter((e) => !e.pendingDelete && !e.deletedAt), [equipments]);
+  const existingIds = useMemo(() => activeEquipments.map((e) => e.id), [activeEquipments]);
 
   const gerarTag = useCallback((tipo: string) => {
     if (!tipo || !TAG_PREFIXES[tipo]) return;
@@ -324,18 +330,64 @@ export default function NovoEquipamento() {
     'qrcode', 'observacoes',
   ]);
 
-  const onSubmit = (data: FormData) => {
-    const isDuplicate = equipments.some((e) => e.id.toUpperCase() === data.id.toUpperCase());
-    if (isDuplicate) {
-      setDuplicateError('Este código de equipamento já está cadastrado.');
+  const verificarDuplicidadeLocal = useCallback(async (tag: string): Promise<string | null> => {
+    const ativos = equipments.filter((e) => !e.pendingDelete && !e.deletedAt);
+    const existeNoZustand = ativos.some((e) => e.id === tag || e.qrCode === tag || e.qrcode === tag);
+    if (existeNoZustand) {
+      return 'Já existe um equipamento ativo com esta TAG/código. Informe uma TAG única para evitar conflito no QR Code e nas inspeções.';
+    }
+    try {
+      const countDexie = await db.equipamentos
+        .filter((e) => e.id === tag && !e.pendingDelete && !e.deletedAt)
+        .count();
+      if (countDexie > 0) {
+        return 'Já existe um equipamento ativo com esta TAG/código. Informe uma TAG única para evitar conflito no QR Code e nas inspeções.';
+      }
+    } catch {
+      /* Dexie indisponível — confia apenas no Zustand */
+    }
+    return null;
+  }, [equipments]);
+
+  const onSubmit = async (data: FormData) => {
+    const tag = normalizeTag(data.id);
+
+    if (tag.length < 3) {
+      setDuplicateError('Código deve conter no mínimo 3 caracteres.');
+      return;
+    }
+
+    // Validação local (Zustand + Dexie)
+    const erroLocal = await verificarDuplicidadeLocal(tag);
+    if (erroLocal) {
+      setDuplicateError(erroLocal);
       return;
     }
     setDuplicateError('');
 
-    const qrCode = data.qrcode || data.id;
+    // Validação remota se online
+    if (navigator.onLine && isSupabaseConfigured) {
+      try {
+        const remoto = await findEquipmentById(tag);
+        if (remoto) {
+          if (!remoto.deletedAt) {
+            setDuplicateError('Já existe um equipamento ativo com esta TAG/código no servidor.');
+            return;
+          }
+          setDuplicateError(
+            'Esta TAG já foi utilizada anteriormente e não pode ser reutilizada para preservar rastreabilidade.',
+          );
+          return;
+        }
+      } catch {
+        /* Falha na consulta remota — prossegue apenas local */
+      }
+    }
+
+    const qrCode = tag;
 
     const newEquipment: Equipment = {
-      id: data.id,
+      id: tag,
       tipo: data.tipo,
       local: data.local,
       setor: data.setor,
@@ -370,8 +422,19 @@ export default function NovoEquipamento() {
       }
     }
 
-    addEquipment(newEquipment);
+    setSubmitting(true);
+    const result = await addEquipment(newEquipment);
+    setSubmitting(false);
+
+    if (!result.ok) {
+      setDuplicateError(result.message || 'Erro ao cadastrar equipamento.');
+      return;
+    }
+
     setCreatedEquipment(newEquipment);
+    if (result.mode === 'local') {
+      setSaveMessage(result.message);
+    }
   };
 
   const handleCloseSuccess = () => {
@@ -399,7 +462,15 @@ export default function NovoEquipamento() {
       </header>
 
       {createdEquipment ? (
-        <QrCodePrintCard equipment={createdEquipment} onClose={handleCloseSuccess} />
+        <div className="space-y-4">
+          {saveMessage && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm font-bold text-amber-700 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              {saveMessage}
+            </div>
+          )}
+          <QrCodePrintCard equipment={createdEquipment} onClose={handleCloseSuccess} />
+        </div>
       ) : (
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 sm:space-y-6">
           {duplicateError && (
@@ -598,9 +669,11 @@ export default function NovoEquipamento() {
                     <input
                       id="qrcode"
                       type="text"
-                      {...register('qrcode')}
-                      placeholder="Código QR escaneado"
-                      className="field-input"
+                      value={idAtual ? normalizeTag(idAtual) : ''}
+                      readOnly
+                      className="field-input bg-gray-50 cursor-not-allowed text-gray-500"
+                      tabIndex={-1}
+                      title="QR Code é gerado automaticamente a partir da TAG"
                     />
                   </FormField>
                 </FormSection>
@@ -624,9 +697,13 @@ export default function NovoEquipamento() {
           {/* Submit button — sticky on mobile */}
           {tipoSelecionado && (
             <div className="sticky bottom-20 lg:bottom-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-neutralBg lg:bg-transparent lg:px-0 lg:py-0 lg:mx-0">
-              <button type="submit" className="btn-primary">
-                <Save className="w-5 h-5" />
-                Salvar Equipamento
+              <button type="submit" className="btn-primary" disabled={submitting}>
+                {submitting ? (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Save className="w-5 h-5" />
+                )}
+                {submitting ? 'Salvando...' : 'Salvar Equipamento'}
               </button>
             </div>
           )}

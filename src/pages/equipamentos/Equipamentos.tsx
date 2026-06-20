@@ -24,7 +24,8 @@ export default function Equipamentos() {
   const [search, setSearch] = useState('');
   const [activeChip, setActiveChip] = useState('Tudo');
 
-  const filtered = equipments.filter((eq) => {
+  const ativos = equipments.filter((eq) => !eq.pendingDelete && !eq.deletedAt);
+  const filtered = ativos.filter((eq) => {
     const matchesSearch =
       eq.id.toLowerCase().includes(search.toLowerCase()) ||
       eq.tipo.toLowerCase().includes(search.toLowerCase()) ||

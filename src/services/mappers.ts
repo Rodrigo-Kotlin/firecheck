@@ -1,5 +1,13 @@
 import type { Equipment, Inspection, ActionPlan } from '../types';
 
+// Campos que NUNCA devem ir para dados_tecnicos
+const SYNC_META_FIELDS = new Set([
+  'sincronizado',
+  'pendingDelete',
+  'syncAction',
+  'syncError',
+]);
+
 const COMMON_FIELDS = new Set([
   'id', 'tipo', 'subtipo', 'local', 'setor', 'pavimento', 'fabricante', 'numSerie',
   'capacidade', 'tipoCarga',
@@ -8,6 +16,7 @@ const COMMON_FIELDS = new Set([
   'dataUltimoTeste', 'dataProximoTeste', 'dataTesteHidrostatico', 'dataValidadeTeste',
   'status', 'qrCode', 'qrcode', 'fotoUrl', 'observacoes', 'createdBy', 'dadosTecnicos',
   'createdAt', 'updatedAt', 'deletedAt', 'deletedBy',
+  ...SYNC_META_FIELDS,
 ]);
 
 export interface DbEquipamento {

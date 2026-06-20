@@ -35,6 +35,10 @@ export type LocalEquipment = Equipment & {
   deletedBy?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  /** Indica a intenção da operação pendente: 'create' | 'update' | 'delete'. */
+  syncAction?: 'create' | 'update' | 'delete';
+  /** Erro persistente da última tentativa de sync (ex.: 'duplicate'). Não apaga o registro. */
+  syncError?: string;
 };
 
 /** Action plan row as stored in Dexie. */

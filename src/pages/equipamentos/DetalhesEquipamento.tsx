@@ -99,7 +99,7 @@ export default function DetalhesEquipamento() {
   const navigate = useNavigate();
   const { equipments, inspections, setCurrentTab, user, deleteEquipment, users } = useAppStore();
 
-  const eq = equipments.find((e) => e.id === id);
+  const eq = equipments.find((e) => e.id === id && !e.pendingDelete && !e.deletedAt);
 
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
@@ -107,7 +107,7 @@ export default function DetalhesEquipamento() {
 
   useEffect(() => {
     if (!qrModalOpen || !eq) return;
-    const value = eq.qrcode || eq.qrCode || eq.id;
+    const value = eq.id;
     let cancelled = false;
     QRCode.toDataURL(value, {
       errorCorrectionLevel: 'H',
@@ -124,7 +124,7 @@ export default function DetalhesEquipamento() {
 
   const handleDownloadQr = async () => {
     if (!eq) return;
-    const value = eq.qrcode || eq.qrCode || eq.id;
+    const value = eq.id;
     try {
       const url = await QRCode.toDataURL(value, {
         errorCorrectionLevel: 'H',
@@ -382,8 +382,8 @@ export default function DetalhesEquipamento() {
         />
       </DetailSection>
 
-      {/* QR Code Actions */}
-      {(eq.qrcode || eq.qrCode) && (
+      {/* QR Code Actions — sempre exibido pois id é a identidade oficial */}
+      {eq.id && (
         <DetailSection title="QR Code" icon={QrCode} cols={3}>
           <div className="col-span-full flex flex-wrap gap-2">
             <button

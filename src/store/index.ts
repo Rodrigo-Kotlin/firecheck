@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus } from '../types';
 import { db, type LocalActionPlan, type LocalEquipment, type LocalInspection } from '../db';
 import { syncAll, pendingSyncCount } from '../services/sync';
-import { carregarEquipamentos, limparCacheLocalDoApp } from '../services/equipmentService';
+import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote } from '../services/equipmentService';
 import { carregarInspecoes } from '../services/inspectionService';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
@@ -19,6 +19,12 @@ import {
 } from '../services/authService';
 
 export type Tab = 'dashboard' | 'equipamentos' | 'qrcodes' | 'inspecionar' | 'relatorios';
+
+export interface EquipmentResult {
+  ok: boolean;
+  mode: 'local' | 'cloud';
+  message?: string;
+}
 
 function inferCriticidade(inspectionObs: string, eqTipo: string): import('../types').Criticidade {
   const obs = inspectionObs.toLowerCase();
@@ -85,7 +91,8 @@ interface AppState {
     photoBase64?: string | null;
     dataProximaInspecao?: string;
   }) => Promise<string>;
-  addEquipment: (eq: Equipment) => void;
+  addEquipment: (eq: Equipment) => Promise<EquipmentResult>;
+  updateEquipment: (id: string, updates: Partial<Equipment>) => Promise<EquipmentResult>;
   addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'> & { status?: ActionPlanStatus }) => void;
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
   deleteActionPlan: (id: string) => void;
@@ -358,7 +365,7 @@ export const useAppStore = create<AppState>()(
         // -----------------------------------------------------------------
         // Mutations
         // -----------------------------------------------------------------
-        addEquipment: (newEq) => {
+        addEquipment: async (newEq): Promise<EquipmentResult> => {
           const now = new Date().toISOString();
           const stamped: Equipment = {
             ...newEq,
@@ -366,6 +373,22 @@ export const useAppStore = create<AppState>()(
             createdAt: now,
             updatedAt: now,
           };
+
+          // Persistir localmente com metadados de sync
+          try {
+            await db.equipamentos.put({
+              ...stamped,
+              sincronizado: false,
+              pendingDelete: false,
+              syncAction: 'create',
+              deletedAt: null,
+              deletedBy: null,
+            } as LocalEquipment);
+          } catch (err) {
+            console.error('[store.addEquipment] erro ao persistir no Dexie:', err);
+            return { ok: false, mode: 'local', message: 'Erro ao salvar no banco local.' };
+          }
+
           set((state) => {
             const updated = [stamped, ...state.equipments];
             return {
@@ -373,16 +396,103 @@ export const useAppStore = create<AppState>()(
               stats: recomputeStats(updated),
             };
           });
-          db.equipamentos.put({
-            ...stamped,
-            sincronizado: false,
-            pendingDelete: false,
-            deletedAt: null,
-            deletedBy: null,
-          } as LocalEquipment).catch((err) =>
-            console.error('[store.addEquipment] erro ao persistir no Dexie:', err),
-          );
-          void runSync().then(() => get().refreshPendingCount());
+
+          // Tentar push imediato se online
+          let mode: EquipmentResult['mode'] = 'local';
+          let message: string | undefined;
+
+          if (isSupabaseConfigured && supabase && navigator.onLine) {
+            const result = await createEquipmentRemote(stamped);
+            if (result.ok) {
+              await db.equipamentos.update(stamped.id, {
+                sincronizado: true,
+                syncAction: undefined,
+                syncError: undefined,
+              });
+              mode = 'cloud';
+            } else if (result.code === 'duplicate') {
+              // Reverter criação local — TAG já existe no servidor
+              await db.equipamentos.delete(stamped.id).catch(() => {});
+              set((state) => ({
+                equipments: state.equipments.filter((e) => e.id !== stamped.id),
+                stats: recomputeStats(state.equipments.filter((e) => e.id !== stamped.id)),
+              }));
+              return { ok: false, mode: 'local', message: result.message || 'Já existe um equipamento ativo com esta TAG.' };
+            } else {
+              message = 'Equipamento salvo localmente. A TAG será validada na sincronização.';
+            }
+          } else {
+            message = 'Equipamento salvo localmente e pendente de sincronização.';
+          }
+
+          // Sync de background para outros itens pendentes
+          if (isSupabaseConfigured) {
+            void runSync().then(() => get().refreshPendingCount());
+          }
+
+          return { ok: true, mode, message };
+        },
+
+        updateEquipment: async (id, updates): Promise<EquipmentResult> => {
+          const current = get().equipments.find((e) => e.id === id);
+          if (!current) {
+            return { ok: false, mode: 'local', message: 'Equipamento não encontrado.' };
+          }
+
+          const updated: Equipment = {
+            ...current,
+            ...updates,
+            updatedAt: new Date().toISOString(),
+          };
+
+          // Persistir localmente
+          try {
+            await db.equipamentos.update(id, {
+              ...updated,
+              sincronizado: false,
+              syncAction: 'update',
+            } as Partial<LocalEquipment>);
+          } catch (err) {
+            console.error('[store.updateEquipment] erro ao atualizar no Dexie:', err);
+            return { ok: false, mode: 'local', message: 'Erro ao salvar localmente.' };
+          }
+
+          set((state) => {
+            const updatedEqs = state.equipments.map((e) =>
+              e.id === id ? updated : e,
+            );
+            return {
+              equipments: updatedEqs,
+              stats: recomputeStats(updatedEqs),
+            };
+          });
+
+          // Tentar push imediato se online
+          if (isSupabaseConfigured && supabase && navigator.onLine) {
+            const result = await updateEquipmentRemote(updated);
+            if (result.ok) {
+              await db.equipamentos.update(id, {
+                sincronizado: true,
+                syncAction: undefined,
+                syncError: undefined,
+              });
+              return { ok: true, mode: 'cloud' };
+            }
+            return {
+              ok: true,
+              mode: 'local',
+              message: 'Atualização salva localmente. Pendente de sincronização.',
+            };
+          }
+
+          if (isSupabaseConfigured) {
+            void runSync().then(() => get().refreshPendingCount());
+          }
+          return {
+            ok: true,
+            mode: 'local',
+            message: 'Atualização salva localmente. Pendente de sincronização.',
+          };
         },
 
         deleteEquipment: (id) => {
@@ -398,6 +508,7 @@ export const useAppStore = create<AppState>()(
           void db.equipamentos.update(id, {
             pendingDelete: true,
             sincronizado: false,
+            syncAction: 'delete',
             deletedAt: now,
             deletedBy: userId ?? null,
             updatedAt: now,
