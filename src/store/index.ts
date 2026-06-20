@@ -564,6 +564,7 @@ export const useAppStore = create<AppState>()(
             await db.equipamentos.where('id').equals(data.equipmentId).modify((eq) => {
               eq.status = data.status;
               eq.sincronizado = false;
+              eq.statusUpdatePending = true;
               eq.updatedAt = new Date().toISOString();
               if (data.dataProximaInspecao) {
                 eq.dataProximaInspecao = data.dataProximaInspecao;

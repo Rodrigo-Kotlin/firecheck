@@ -39,6 +39,9 @@ export type LocalEquipment = Equipment & {
   syncAction?: 'create' | 'update' | 'delete';
   /** Erro persistente da última tentativa de sync (ex.: 'duplicate'). Não apaga o registro. */
   syncError?: string;
+  /** Indica que o status foi alterado por uma inspeção e deve ser sincronizado
+   *  via RPC em pushInspections(), não via pushEquipments(). */
+  statusUpdatePending?: boolean;
 };
 
 /** Action plan row as stored in Dexie. */

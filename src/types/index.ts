@@ -156,6 +156,8 @@ export interface Equipment {
   pendingDelete?: boolean;
   /** Erro persistente da última tentativa de sync (ex.: 'duplicate'). Não persiste no Supabase. */
   syncError?: string;
+  /** Indica que o status foi alterado por inspeção. Sync via pushInspections(). */
+  statusUpdatePending?: boolean;
 }
 
 export interface Inspection {

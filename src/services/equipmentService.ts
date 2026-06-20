@@ -25,8 +25,9 @@ function notConfigured<T>(op: string): T | null {
 
 export interface ServiceResult {
   ok: boolean;
-  code?: 'duplicate' | 'permission_denied' | 'not_found' | 'network' | 'unknown';
+  code?: 'duplicate' | 'permission_denied' | 'not_found' | 'network' | 'unknown' | 'not_applied' | 'invalid_status' | 'not_authenticated' | 'rpc_error';
   message?: string;
+  data?: Equipment;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +203,51 @@ export async function softDeleteEquipment(id: string, userId?: string): Promise<
   }
   console.log('[equipment] Equipamento %s marcado como deleted_at=%s', id, now);
   return true;
+}
+
+export async function applyEquipmentInspectionStatusRemote(
+  equipmentId: string,
+  status: string,
+  inspectionDate?: string,
+  nextInspectionDate?: string,
+): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+
+  const { data, error } = await supabase.rpc('apply_equipment_inspection_status', {
+    p_equipment_id: equipmentId,
+    p_status: status,
+    p_inspection_date: inspectionDate ?? null,
+    p_next_inspection_date: nextInspectionDate ?? null,
+  });
+
+  if (error) {
+    if (error.code === 'UNAUTH') {
+      return { ok: false, code: 'not_authenticated', message: 'Usuário não autenticado.' };
+    }
+    if (error.code === 'INVSTT') {
+      return { ok: false, code: 'invalid_status', message: 'Status inválido.' };
+    }
+    if (error.code === 'NFOUND') {
+      return { ok: false, code: 'not_found', message: 'Equipamento não encontrado ou excluído.' };
+    }
+    if (error.code === '42501') {
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para executar esta operação.' };
+    }
+    console.error('[equipment.applyEquipmentInspectionStatus]', error);
+    return { ok: false, code: 'rpc_error', message: error.message ?? 'Não foi possível atualizar o status do equipamento no servidor.' };
+  }
+
+  if (!data) {
+    return { ok: false, code: 'not_applied', message: 'Nenhuma alteração aplicada — equipamento não encontrado ou excluído.' };
+  }
+
+  if (isDev) {
+    console.log('[equipment.applyEquipmentInspectionStatus] Status do equipamento %s atualizado para %s', equipmentId, status);
+  }
+
+  return { ok: true, data: data as unknown as Equipment };
 }
 
 // ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { db, type LocalActionPlan } from '../db';
-import { fetchEquipments, createEquipmentRemote, updateEquipmentRemote, findEquipmentById, softDeleteEquipment, type ServiceResult } from './equipmentService';
+import { fetchEquipments, createEquipmentRemote, updateEquipmentRemote, findEquipmentById, softDeleteEquipment, applyEquipmentInspectionStatusRemote, type ServiceResult } from './equipmentService';
 import { fetchInspections, upsertInspection } from './inspectionService';
 import { upsertActionPlan, deleteActionPlan } from './actionPlanService';
 import {
@@ -98,9 +98,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
     }
   }
 
-  // 2) pending sync — create / update (exclui itens com syncError para evitar retry infinito)
+  // 2) pending sync — create / update (exclui syncError e itens com statusUpdatePending
+  //    sem syncAction — são sincronizados via RPC em pushInspections)
   const pending = await db.equipamentos
-    .filter((e) => !e.sincronizado && !e.pendingDelete && !e.syncError)
+    .filter((e) => !e.sincronizado && !e.pendingDelete && !e.syncError && !(e.statusUpdatePending && !e.syncAction))
     .toArray();
   for (const eq of pending) {
     let toSync: Equipment = eq;
@@ -187,12 +188,54 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       await db.inspecoes.update(insp.id, { userId });
       toUpsert = { ...insp, userId };
     }
+
+    // 1. Enviar inspeção para o Supabase
     const success = await upsertInspection(toUpsert);
-    if (success) {
-      await db.inspecoes.update(insp.id, { sincronizado: true });
-      ok++;
-    } else {
+    if (!success) {
       console.error('[sync] Falha ao sincronizar inspeção %s — mantendo sincronizado: false', insp.id);
+      errors++;
+      continue;
+    }
+
+    // 2. Aplicar status do equipamento via RPC segura (SECURITY DEFINER)
+    const localEq = await db.equipamentos.get(insp.equipmentId);
+    const rpcResult = await applyEquipmentInspectionStatusRemote(
+      insp.equipmentId,
+      insp.status,
+      insp.data,
+      localEq?.dataProximaInspecao ?? undefined,
+    );
+
+    if (rpcResult.ok) {
+      // 3. Sucesso completo: marcar inspeção como sincronizada e atualizar equipamento local
+      await db.inspecoes.update(insp.id, { sincronizado: true });
+
+      // Atualizar equipamento local com os dados retornados pela RPC
+      if (rpcResult.data) {
+        const rpcData = rpcResult.data as unknown as Record<string, unknown>;
+        await db.equipamentos.update(insp.equipmentId, {
+          sincronizado: true,
+          statusUpdatePending: undefined,
+          updatedAt: (typeof rpcData.updated_at === 'string' ? rpcData.updated_at : undefined) as string | undefined,
+          status: typeof rpcData.status === 'string' ? (rpcData.status as Equipment['status']) : undefined,
+          dataUltimaInspecao: typeof rpcData.data_ultima_inspecao === 'string' ? rpcData.data_ultima_inspecao : undefined,
+          dataProximaInspecao: typeof rpcData.data_proxima_inspecao === 'string' ? rpcData.data_proxima_inspecao : undefined,
+        });
+      } else {
+        // RPC retornou ok sem data — apenas limpar flags
+        await db.equipamentos.update(insp.equipmentId, {
+          sincronizado: true,
+          statusUpdatePending: undefined,
+        });
+      }
+
+      ok++;
+      console.log('[sync] Inspeção %s e status do equipamento %s sincronizados com sucesso',
+        insp.id, insp.equipmentId);
+    } else {
+      // RPC falhou — NÃO marcar inspeção como sincronizada para retentar
+      console.error('[sync] Inspeção %s enviada, mas RPC de status falhou: %s',
+        insp.id, rpcResult.message ?? rpcResult.code);
       errors++;
     }
   }

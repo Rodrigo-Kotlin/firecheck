@@ -6,6 +6,7 @@ const SYNC_META_FIELDS = new Set([
   'pendingDelete',
   'syncAction',
   'syncError',
+  'statusUpdatePending',
 ]);
 
 const COMMON_FIELDS = new Set([
