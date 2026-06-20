@@ -9,13 +9,13 @@ import {
 } from './mappers';
 import { db } from '../db';
 import type { Inspection } from '../types';
+import type { FetchResult } from './equipmentService';
 
 const isDev = import.meta.env.DEV;
 
-export async function fetchInspections(): Promise<Inspection[] | null> {
+export async function fetchInspections(): Promise<FetchResult<Inspection>> {
   if (!isSupabaseConfigured || !supabase) {
-    console.warn('[inspection.fetch] Supabase não configurado — ignorando.');
-    return null;
+    return { ok: false, data: null };
   }
   const { data, error } = await supabase
     .from('inspecoes')
@@ -23,9 +23,9 @@ export async function fetchInspections(): Promise<Inspection[] | null> {
     .order('data', { ascending: false });
   if (error) {
     console.error('[inspection.fetch]', error);
-    return null;
+    return { ok: false, data: null };
   }
-  return (data as DbInspecao[]).map(dbToInspection);
+  return { ok: true, data: (data as DbInspecao[]).map(dbToInspection) };
 }
 
 export async function upsertInspection(insp: Inspection): Promise<boolean> {
@@ -56,9 +56,10 @@ export async function carregarInspecoes(): Promise<Inspection[]> {
   }
 
   if (isOnline && isSupabaseConfigured && supabase) {
-    const cloudData = await fetchInspections();
+    const result = await fetchInspections();
 
-    if (cloudData !== null) {
+    if (result.ok && result.data) {
+      const cloudData = result.data;
       if (cloudData.length > 0) {
         // Merge: import cloud rows without overwriting local pending data
         for (const insp of cloudData) {

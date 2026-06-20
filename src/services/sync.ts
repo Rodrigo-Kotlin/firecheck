@@ -46,6 +46,20 @@ export interface SyncReport {
   errors: number;
   skipped: boolean;
   reason?: string;
+
+  // -- Detalhamento por domínio --
+  pushEqOk: number;
+  pushInsOk: number;
+  pushErrors: number;
+  pullEqImported: number;
+  pullEqReconciled: number;
+  pullInsImported: number;
+  pullInsReconciled: number;
+  pullEqError: boolean;
+  pullInsError: boolean;
+  pullEqEmpty: boolean;
+  pullInsEmpty: boolean;
+
   /** IDs of action plans that were successfully pushed. */
   pushedActionPlanIds: string[];
   /** IDs of action plans that were successfully deleted from cloud. */
@@ -53,7 +67,15 @@ export interface SyncReport {
 }
 
 function skip(reason: string): SyncReport {
-  return { pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason, pushedActionPlanIds: [], deletedActionPlanIds: [] };
+  return {
+    pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason,
+    pushEqOk: 0, pushInsOk: 0, pushErrors: 0,
+    pullEqImported: 0, pullEqReconciled: 0,
+    pullInsImported: 0, pullInsReconciled: 0,
+    pullEqError: false, pullInsError: false,
+    pullEqEmpty: false, pullInsEmpty: false,
+    pushedActionPlanIds: [], deletedActionPlanIds: [],
+  };
 }
 
 function canSync(): boolean {
@@ -298,85 +320,97 @@ async function pushActionPlans(
 // PULL
 // ---------------------------------------------------------------------------
 
-/** Replace equipment rows from cloud, but never overwrite local unsynced edits.
- *  After importing, remove any local rows that are fully synced (`sincronizado: true`)
- *  but no longer exist in the cloud — the cloud is the source of truth for synced
- *  data. */
-async function pullEquipments(): Promise<number> {
-  console.log('[sync] Pull de equipamentos...');
-  const cloud = await fetchEquipments();
-  if (!cloud) {
-    console.log('[sync] Supabase retornou null para equipamentos — preservando dados locais');
-    return 0;
-  }
-  if (cloud.length === 0) {
-    console.log('[sync] Supabase retornou lista vazia de equipamentos — preservando dados locais');
-    return 0;
+interface PullResult {
+  imported: number;
+  reconciled: number;
+  error: boolean;
+  /** true quando o Supabase retornou resposta válida vazia (não erro). */
+  empty: boolean;
+}
+
+/** Import cloud equipment rows, reconcile orphans, preserve pending changes.
+ *  Regras:
+ *   • Se fetch falhar (rede/RLS/Supabase) → preserva tudo, não reconcilia.
+ *   • Se fetch retornar lista vazia → reconcilia órfãos (pode ser a exclusão
+ *     do último item no servidor).
+ *   • Itens locais sincronizados sem pendência que não existem no cloud
+ *     são marcados com deletedAt (soft delete local).
+ *   • Itens locais pendentes (sincronizado: false, pendingDelete, syncAction,
+ *     statusUpdatePending, syncError) são sempre preservados. */
+async function pullEquipments(): Promise<PullResult> {
+  if (import.meta.env.DEV) console.log('[sync] pullEquipments...');
+  const result = await fetchEquipments();
+
+  // --- Erro remoto: preservar tudo ---
+  if (!result.ok) {
+    console.error('[sync] pullEquipments erro: preservando dados locais');
+    return { imported: 0, reconciled: 0, error: true, empty: false };
   }
 
+  const cloud = result.data ?? [];
   const cloudIds = new Set(cloud.map((e) => e.id));
-  let pulled = 0;
+  let imported = 0;
   let reconciled = 0;
   const reconciledIds: string[] = [];
 
   await db.transaction('rw', db.equipamentos, async () => {
+    // --- Importar / atualizar registros do cloud ---
     for (const eq of cloud) {
       const local = await db.equipamentos.get(eq.id);
 
       if (!local) {
-        // Skip inserting tombstones for items this client never had
+        // Não inserir tombstones de equipamentos que este cliente nunca viu
         if (eq.deletedAt) continue;
         await db.equipamentos.put({ ...eq, sincronizado: true });
-        pulled++;
+        imported++;
         continue;
       }
 
-      // Preserve local pending changes (both unsynced edits and pending deletes)
-      if (!local.sincronizado || local.pendingDelete) {
+      // Preservar alterações locais pendentes
+      if (!local.sincronizado || local.pendingDelete || local.syncAction || local.statusUpdatePending || local.syncError) {
         continue;
       }
 
-      // Cloud has a tombstone → mark local as deleted
+      // Cloud tem tombstone → marcar local como deletado
       if (eq.deletedAt) {
         await db.equipamentos.put({
           ...eq,
           sincronizado: true,
           pendingDelete: false,
         });
-        pulled++;
-        console.log('[sync] Equipamento %s marcado como deletado (tombstone remota)', eq.id);
+        imported++;
+        if (import.meta.env.DEV) console.log('[sync] Equipamento %s marcado como deletado (tombstone remota)', eq.id);
         continue;
       }
 
-      // Fully synced local row → overwrite with cloud data
+      // Linha local totalmente sincronizada → sobrescrever com dados do cloud
       await db.equipamentos.put({ ...eq, sincronizado: true });
-      pulled++;
+      imported++;
     }
 
-    // -------------------------------------------------------------------
-    // Reconciliação de órfãos locais (legado hard-delete)
-    // -------------------------------------------------------------------
-    // Equipamentos que foram removidos fisicamente do Supabase antes da
-    // implantação do tombstone (soft delete) podem continuar existindo no
-    // IndexedDB de clientes que nunca receberam a exclusão.
+    // --- Reconciliação de órfãos locais ---
+    // Registros que existem no IndexedDB mas não no cloud (hard-delete remoto
+    // ou pull vazio válido). Marcamos com deletedAt para ocultar da UI.
     //
-    // Após um pull bem-sucedido, detectamos esses órfãos e marcamos com
-    // deletedAt localmente. A UI já filtra deletedAt, então o item some.
-    //
-    // Regras de segurança:
-    //   • sincronizado === false → preservar (alteração local não enviada)
-    //   • pendingDelete === true  → preservar (exclusão local pendente)
-    //   • deletedAt preenchido    → preservar (já reconciliado)
-    //   • ID existe no cloud      → não é órfão
-    // -------------------------------------------------------------------
+    // Preservamos itens com:
+    //   sincronizado === false    → alteração local não enviada
+    //   pendingDelete === true    → exclusão local pendente
+    //   syncAction                → operação local pendente (create/update/delete)
+    //   statusUpdatePending       → status local aguardando RPC
+    //   syncError                 → conflito conhecido
+    //   deletedAt preenchido      → já reconciliado
+    // ---
     const now = new Date().toISOString();
     const allLocal = await db.equipamentos.toArray();
 
     for (const local of allLocal) {
-      if (!local.sincronizado) continue;        // alteração local não enviada
-      if (local.pendingDelete) continue;         // exclusão local pendente
-      if (local.deletedAt) continue;              // já reconciliado
-      if (cloudIds.has(local.id)) continue;      // ainda existe no cloud
+      if (cloudIds.has(local.id)) continue;
+      if (!local.sincronizado) continue;
+      if (local.pendingDelete) continue;
+      if (local.syncAction) continue;
+      if (local.statusUpdatePending) continue;
+      if (local.syncError) continue;
+      if (local.deletedAt) continue;
 
       await db.equipamentos.update(local.id, {
         deletedAt: now,
@@ -388,59 +422,78 @@ async function pullEquipments(): Promise<number> {
       reconciled++;
       reconciledIds.push(local.id);
       if (import.meta.env.DEV) {
-        console.log('[sync] Órfão reconciliado: %s', local.id);
+        console.log('[sync] equipment orphan marked deletedAt: %s', local.id);
       }
     }
 
     if (import.meta.env.DEV && reconciled > 0) {
-      console.log('[sync] Pull: %d remotos, %d locais, %d órfãos reconciliados',
-        cloud.length, allLocal.length, reconciled);
-      console.log('[sync] IDs reconciliados: %s', reconciledIds.join(', '));
+      console.log('[sync] Pull equipamentos: %d cloud, %d importados, %d órfãos reconciliados',
+        cloud.length, imported, reconciled);
     }
   });
 
-  console.log(`[sync] Pull de equipamentos concluído: ${pulled} importados (${reconciled} órfãos reconciliados)`);
-  return pulled;
+  if (import.meta.env.DEV) {
+    console.log('[sync] pullEquipments final: imported=%d reconciled=%d error=false empty=%s',
+      imported, reconciled, cloud.length === 0 ? 'true' : 'false');
+  }
+  return { imported, reconciled, error: false, empty: cloud.length === 0 };
 }
 
-async function pullInspections(): Promise<number> {
-  console.log('[sync] Pull de inspeções...');
-  const cloud = await fetchInspections();
-  if (!cloud) {
-    console.log('[sync] Supabase retornou null para inspeções — preservando dados locais');
-    return 0;
-  }
-  if (cloud.length === 0) {
-    console.log('[sync] Supabase retornou lista vazia de inspeções — preservando dados locais');
-    return 0;
+async function pullInspections(): Promise<PullResult> {
+  if (import.meta.env.DEV) console.log('[sync] pullInspections...');
+  const result = await fetchInspections();
+
+  // --- Erro remoto: preservar tudo ---
+  if (!result.ok) {
+    console.error('[sync] pullInspections erro: preservando dados locais');
+    return { imported: 0, reconciled: 0, error: true, empty: false };
   }
 
+  const cloud = result.data ?? [];
   const cloudIds = new Set(cloud.map((i) => i.id));
-  let pulled = 0;
+  let imported = 0;
+  let reconciled = 0;
 
   await db.transaction('rw', db.inspecoes, async () => {
+    // --- Importar / atualizar registros do cloud ---
     for (const insp of cloud) {
       const local = await db.inspecoes.get(insp.id);
       if (!local) {
         await db.inspecoes.put({ ...insp, sincronizado: true });
-        pulled++;
+        imported++;
       } else if (local.sincronizado && !local.pendingDelete) {
         await db.inspecoes.put({ ...insp, sincronizado: true });
-        pulled++;
+        imported++;
       }
       // else: local has unsynced changes — preserve them.
     }
 
+    // --- Reconciliação de órfãos locais ---
     const allLocal = await db.inspecoes.toArray();
     for (const local of allLocal) {
-      if (!cloudIds.has(local.id) && local.sincronizado && !local.pendingDelete) {
-        await db.inspecoes.delete(local.id);
+      if (cloudIds.has(local.id)) continue;
+      if (!local.sincronizado) continue;
+      if (local.pendingDelete) continue;
+
+      // Inspeção sincronizada sem pendência que não existe no cloud → remover
+      await db.inspecoes.delete(local.id);
+      reconciled++;
+      if (import.meta.env.DEV) {
+        console.log('[sync] inspection orphan removed: %s', local.id);
       }
+    }
+
+    if (import.meta.env.DEV && reconciled > 0) {
+      console.log('[sync] Pull inspeções: %d cloud, %d importadas, %d órfãos removidos',
+        cloud.length, imported, reconciled);
     }
   });
 
-  console.log(`[sync] Pull de inspeções concluído: ${pulled} importados`);
-  return pulled;
+  if (import.meta.env.DEV) {
+    console.log('[sync] pullInspections final: imported=%d reconciled=%d error=false empty=%s',
+      imported, reconciled, cloud.length === 0 ? 'true' : 'false');
+  }
+  return { imported, reconciled, error: false, empty: cloud.length === 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -474,12 +527,25 @@ export async function syncAll(
   }
 
   _syncInProgress = true;
-  console.log('[sync] Iniciando sincronização...');
+  if (import.meta.env.DEV) console.log('[sync] Iniciando sincronização...');
 
-  let pushed = 0;
+  let pushEqOk = 0;
+  let pushInsOk = 0;
+  let pushErrors = 0;
   let pulled = 0;
   let deleted = 0;
   let errors = 0;
+
+  let pullEqImported = 0;
+  let pullEqReconciled = 0;
+  let pullEqError = false;
+  let pullEqEmpty = false;
+
+  let pullInsImported = 0;
+  let pullInsReconciled = 0;
+  let pullInsError = false;
+  let pullInsEmpty = false;
+
   let pushedActionPlanIds: string[] = [];
   let deletedActionPlanIds: string[] = [];
 
@@ -488,9 +554,11 @@ export async function syncAll(
       const eqR = await pushEquipments(options.userId);
       const insR = await pushInspections(options.userId);
       const apR = await pushActionPlans(localActionPlans, options.userId);
-      pushed += eqR.ok + insR.ok + apR.ok;
+      pushEqOk = eqR.ok;
+      pushInsOk = insR.ok;
+      pushErrors = eqR.errors + insR.errors + apR.errors;
       deleted += eqR.deleted + insR.deleted + apR.deleted;
-      errors += eqR.errors + insR.errors + apR.errors;
+      errors += pushErrors;
       pushedActionPlanIds = apR.syncedIds;
       deletedActionPlanIds = apR.deletedIds;
     }
@@ -498,17 +566,53 @@ export async function syncAll(
     if (!options.pushOnly) {
       const eqP = await pullEquipments();
       const insP = await pullInspections();
-      pulled += eqP + insP;
+
+      pullEqImported = eqP.imported;
+      pullEqReconciled = eqP.reconciled;
+      pullEqError = eqP.error;
+      pullEqEmpty = eqP.empty;
+
+      pullInsImported = insP.imported;
+      pullInsReconciled = insP.reconciled;
+      pullInsError = insP.error;
+      pullInsEmpty = insP.empty;
+
+      pulled += eqP.imported + insP.imported;
+      if (eqP.error || insP.error) errors++;
     }
   } catch (err) {
     console.error('[sync] exceção durante syncAll:', err);
     errors++;
   } finally {
-    console.log(`[sync] Sincronização concluída. Push: ${pushed}, Pull: ${pulled}, Delete: ${deleted}, Erros: ${errors}`);
+    if (import.meta.env.DEV) {
+      console.log('[sync] Sincronização concluída. ' +
+        `Push eq=${pushEqOk} ins=${pushInsOk} errors=${pushErrors} | ` +
+        `Pull eq=${pullEqImported}(${pullEqReconciled} orfãos) ins=${pullInsImported}(${pullInsReconciled} orfãos) | ` +
+        `Delete=${deleted} Erros=${errors}`);
+    }
     _syncInProgress = false;
   }
 
-  return { pushed, pulled, deleted, errors, skipped: false, pushedActionPlanIds, deletedActionPlanIds };
+  return {
+    pushed: pushEqOk + pushInsOk,
+    pulled,
+    deleted,
+    errors,
+    skipped: false,
+    pushEqOk,
+    pushInsOk,
+    pushErrors,
+    pullEqImported,
+    pullEqReconciled,
+    pullInsImported,
+    pullInsReconciled,
+    pullEqError,
+    pullInsError,
+    pullEqEmpty,
+    pullInsEmpty,
+    pushedActionPlanIds,
+    deletedActionPlanIds,
+  };
 }
 
 /** Counts the rows that still need to be pushed — surfaced in the UI. */

@@ -30,21 +30,32 @@ export interface ServiceResult {
   data?: Equipment;
 }
 
+/** Resultado de uma operação de busca (listagem) no Supabase.
+ *  `ok: false` significa erro de rede/RLS/Supabase — dados locais devem ser
+ *  preservados sem reconciliação.
+ *  `ok: true` + `data: []` é resposta válida vazia — reconciliação DEVE rodar. */
+export interface FetchResult<T> {
+  ok: boolean;
+  data: T[] | null;
+}
+
 // ---------------------------------------------------------------------------
 // Supabase CRUD
 // ---------------------------------------------------------------------------
 
-export async function fetchEquipments(): Promise<Equipment[] | null> {
-  if (!isSupabaseConfigured || !supabase) return notConfigured('fetchEquipments');
+export async function fetchEquipments(): Promise<FetchResult<Equipment>> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, data: null };
+  }
   const { data, error } = await supabase
     .from('equipamentos')
     .select('*')
     .order('id');
   if (error) {
     console.error('[equipment.fetchEquipments]', error);
-    return null;
+    return { ok: false, data: null };
   }
-  return (data as DbEquipamento[]).map(dbToEquipment);
+  return { ok: true, data: (data as DbEquipamento[]).map(dbToEquipment) };
 }
 
 export async function findEquipmentById(id: string): Promise<Equipment | null> {
@@ -264,9 +275,10 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
 
   // Online path: fetch from Supabase
   if (isOnline && isSupabaseConfigured && supabase) {
-    const cloudData = await fetchEquipments();
+    const result = await fetchEquipments();
 
-    if (cloudData !== null) {
+    if (result.ok && result.data) {
+      const cloudData = result.data;
       if (cloudData.length > 0) {
         // Merge: import cloud rows without overwriting local pending data
         for (const eq of cloudData) {
@@ -305,10 +317,17 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
   return localEqs.map(stripSyncMeta);
 }
 
-/** Strip Dexie-only sync metadata from an equipment row. */
+/** Strip Dexie-only sync metadata from an equipment row.
+ *  Campos locais de sync não devem sair do IndexedDB nem ir para Supabase. */
 function stripSyncMeta(row: Partial<LocalEquipment>): Equipment {
-  const { sincronizado: _s, pendingDelete: _p, deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u, ...eq } = row;
-  void _s; void _p; void _d; void _db; void _c; void _u;
+  const {
+    sincronizado: _s, pendingDelete: _p,
+    syncAction: _a, syncError: _e, statusUpdatePending: _su,
+    deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u,
+    ...eq
+  } = row;
+  void _s; void _p; void _a; void _e; void _su;
+  void _d; void _db; void _c; void _u;
   return eq as Equipment;
 }
 
