@@ -140,7 +140,6 @@ export const useAppStore = create<AppState>()(
           // Include pending-delete entries not present in actionPlans (removed from UI)
           for (const [id, m] of Object.entries(meta)) {
             if (m.pendingDelete && !seenIds.has(id)) {
-              // We don't have the full plan data, but we only need id + flags for delete
               localActionPlans.push({
                 id,
                 equipmentId: '',
@@ -158,29 +157,62 @@ export const useAppStore = create<AppState>()(
             }
           }
           const report = await syncAll(localActionPlans, { userId: get().user?.id });
-          // Mark action plans as synced after successful push
-          if (report.pushedActionPlanIds.length > 0) {
-            set((state) => {
-              const newMeta = { ...state.actionPlanMeta };
-              for (const id of report.pushedActionPlanIds) {
-                newMeta[id] = { ...newMeta[id], sincronizado: true };
-              }
-              return { actionPlanMeta: newMeta };
+
+          if (!report.skipped) {
+            // Mark action plans as synced after successful push
+            if (report.pushedActionPlanIds.length > 0) {
+              set((state) => {
+                const newMeta = { ...state.actionPlanMeta };
+                for (const id of report.pushedActionPlanIds) {
+                  newMeta[id] = { ...newMeta[id], sincronizado: true };
+                }
+                return { actionPlanMeta: newMeta };
+              });
+            }
+            // Remove action plans that were deleted from cloud
+            if (report.deletedActionPlanIds.length > 0) {
+              set((state) => {
+                const newMeta = { ...state.actionPlanMeta };
+                for (const id of report.deletedActionPlanIds) {
+                  delete newMeta[id];
+                }
+                return {
+                  actionPlans: state.actionPlans.filter((p) => !report.deletedActionPlanIds.includes(p.id)),
+                  actionPlanMeta: newMeta,
+                };
+              });
+            }
+
+            // Reload equipments and inspections from Dexie into Zustand
+            // The pull phase already wrote fresh data to Dexie preserving local pending
+            const [dbEqs, dbInsps] = await Promise.all([
+              db.equipamentos.toArray(),
+              db.inspecoes.toArray(),
+            ]);
+
+            const freshEqs: Equipment[] = [];
+            for (const e of dbEqs) {
+              if (e.pendingDelete || e.deletedAt) continue;
+              const { sincronizado: _s, pendingDelete: _p, ...clean } = e;
+              void _s; void _p;
+              freshEqs.push(clean as unknown as Equipment);
+            }
+
+            const freshInsps: Inspection[] = [];
+            for (const i of dbInsps) {
+              if (i.pendingDelete) continue;
+              const { sincronizado: _s2, pendingDelete: _p2, ...clean } = i;
+              void _s2; void _p2;
+              freshInsps.push(clean as unknown as Inspection);
+            }
+
+            set({
+              equipments: freshEqs,
+              inspections: freshInsps,
+              stats: recomputeStats(freshEqs),
             });
           }
-          // Remove action plans that were deleted from cloud
-          if (report.deletedActionPlanIds.length > 0) {
-            set((state) => {
-              const newMeta = { ...state.actionPlanMeta };
-              for (const id of report.deletedActionPlanIds) {
-                delete newMeta[id];
-              }
-              return {
-                actionPlans: state.actionPlans.filter((p) => !report.deletedActionPlanIds.includes(p.id)),
-                actionPlanMeta: newMeta,
-              };
-            });
-          }
+
           set({ lastSyncAt: Date.now() });
           await get().refreshPendingCount();
         } catch (err) {

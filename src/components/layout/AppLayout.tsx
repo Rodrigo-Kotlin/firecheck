@@ -4,12 +4,14 @@ import { useAppStore } from '../../store';
 import { Menu, User, Download, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import { showToast } from '../../hooks/useToasts';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
+import { useAutoSync } from '../../hooks/useAutoSync';
 import { OfflineBanner } from './OfflineBanner';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import { BottomNav } from './BottomNav';
 import { Sidebar } from './Sidebar';
 
 export default function AppLayout() {
+  useAutoSync();
   const { user, authReady, setCurrentTab, pending, syncing, syncEnabled, triggerSync } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
