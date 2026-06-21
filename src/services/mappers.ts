@@ -166,8 +166,9 @@ export function equipmentToDb(eq: Partial<Equipment>): Record<string, unknown> {
   if (eq.deletedAt !== undefined) row.deleted_at = eq.deletedAt || null;
   if (eq.deletedBy !== undefined) row.deleted_by = eq.deletedBy || null;
 
-  const qrCode = eq.qrCode || eq.qrcode || eq.id;
-  if (qrCode !== undefined) row.qr_code = qrCode;
+  // A identidade oficial é o campo id (TAG). qr_code no banco deve sempre
+  // refletir a TAG, independente de divergência em qrCode/qrcode.
+  if (eq.id !== undefined) row.qr_code = eq.id;
 
   const dadosTecnicos: Record<string, unknown> = {};
   if (eq.dadosTecnicos) {

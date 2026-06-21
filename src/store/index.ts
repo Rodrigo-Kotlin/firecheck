@@ -793,16 +793,5 @@ if (typeof window !== 'undefined' && supabase) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Auto-sync listeners (browser only)
-// ---------------------------------------------------------------------------
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('online', () => {
-    console.log('[firecheck] online — triggering sync');
-    void useAppStore.getState().triggerSync();
-  });
-  window.addEventListener('offline', () => {
-    console.log('[firecheck] offline — sync disabled until reconnect');
-  });
-}
+// Auto-sync é gerenciado centralmente pelo hook useAutoSync em AppLayout.
+// Os listeners duplicados foram removidos para evitar chamadas sem throttle.

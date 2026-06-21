@@ -11,6 +11,7 @@ import {
 } from './mappers';
 import { db, type LocalEquipment } from '../db';
 import type { Equipment } from '../types';
+import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
 
 const isDev = import.meta.env.DEV;
 
@@ -282,11 +283,12 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
       if (cloudData.length > 0) {
         // Merge: import cloud rows without overwriting local pending data
         for (const eq of cloudData) {
+          const normalEq = syncEquipmentQrFields(eq);
           const local = await db.equipamentos.get(eq.id);
           if (!local) {
-            await db.equipamentos.put({ ...eq, sincronizado: true });
+            await db.equipamentos.put({ ...normalEq, sincronizado: true });
           } else if (local.sincronizado && !local.pendingDelete) {
-            await db.equipamentos.put({ ...eq, sincronizado: true });
+            await db.equipamentos.put({ ...normalEq, sincronizado: true });
           }
           // else: preserve local pending changes
         }

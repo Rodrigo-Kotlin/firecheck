@@ -38,6 +38,7 @@ import {
   inspectionToDb,
 } from './mappers';
 import type { Equipment } from '../types';
+import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
 
 /** Concurrency guard — prevents overlapping sync runs. */
 let _syncInProgress = false;
@@ -107,6 +108,9 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
 
   // 1) pending deletes — soft delete
   const toDelete = await db.equipamentos.filter((e) => !!e.pendingDelete).toArray();
+  if (import.meta.env.DEV && toDelete.length > 0) {
+    console.log(`[sync] pushEquipments: ${toDelete.length} exclusões pendentes (${toDelete.map(e => e.id).join(', ')})`);
+  }
   for (const eq of toDelete) {
     const success = await softDeleteEquipment(eq.id, userId);
     if (success) {
@@ -133,6 +137,9 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
   const pending = await db.equipamentos
     .filter((e) => !e.sincronizado && !e.pendingDelete && !e.syncError && !(e.statusUpdatePending && !e.syncAction))
     .toArray();
+  if (import.meta.env.DEV && pending.length > 0) {
+    console.log(`[sync] pushEquipments: ${pending.length} pendentes (${pending.map(e => e.id).join(', ')})`);
+  }
   for (const eq of pending) {
     let toSync: Equipment = eq;
     if (!eq.createdBy && userId) {
@@ -180,6 +187,9 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         errors++;
       }
     }
+  }
+  if (import.meta.env.DEV) {
+    console.log(`[sync] pushEquipments final: ok=${ok} errors=${errors} deleted=${deleted}`);
   }
   return { ok, errors, deleted };
 }
@@ -302,6 +312,9 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
   const pending = await db.planosAcao
     .filter((p) => !p.sincronizado && !p.pendingDelete && !p.syncError)
     .toArray();
+  if (import.meta.env.DEV && pending.length > 0) {
+    console.log(`[sync] pushActionPlans: ${pending.length} pendentes (${pending.map(p => p.id).join(', ')})`);
+  }
   for (const plan of pending) {
     const toSync = { ...plan, userId: plan.userId ?? userId };
 
@@ -338,6 +351,9 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         errors++;
       }
     }
+  }
+  if (import.meta.env.DEV) {
+    console.log(`[sync] pushActionPlans final: ok=${ok} errors=${errors} deleted=${deleted}`);
   }
   return { ok, errors, deleted };
 }
@@ -382,12 +398,13 @@ async function pullEquipments(): Promise<PullResult> {
   await db.transaction('rw', db.equipamentos, async () => {
     // --- Importar / atualizar registros do cloud ---
     for (const eq of cloud) {
-      const local = await db.equipamentos.get(eq.id);
+      const normalEq = syncEquipmentQrFields(eq);
+      const local = await db.equipamentos.get(normalEq.id);
 
       if (!local) {
         // Não inserir tombstones de equipamentos que este cliente nunca viu
-        if (eq.deletedAt) continue;
-        await db.equipamentos.put({ ...eq, sincronizado: true });
+        if (normalEq.deletedAt) continue;
+        await db.equipamentos.put({ ...normalEq, sincronizado: true });
         imported++;
         continue;
       }
@@ -398,19 +415,19 @@ async function pullEquipments(): Promise<PullResult> {
       }
 
       // Cloud tem tombstone → marcar local como deletado
-      if (eq.deletedAt) {
+      if (normalEq.deletedAt) {
         await db.equipamentos.put({
-          ...eq,
+          ...normalEq,
           sincronizado: true,
           pendingDelete: false,
         });
         imported++;
-        if (import.meta.env.DEV) console.log('[sync] Equipamento %s marcado como deletado (tombstone remota)', eq.id);
+        if (import.meta.env.DEV) console.log('[sync] Equipamento %s marcado como deletado (tombstone remota)', normalEq.id);
         continue;
       }
 
       // Linha local totalmente sincronizada → sobrescrever com dados do cloud
-      await db.equipamentos.put({ ...eq, sincronizado: true });
+      await db.equipamentos.put({ ...normalEq, sincronizado: true });
       imported++;
     }
 
@@ -459,8 +476,8 @@ async function pullEquipments(): Promise<PullResult> {
   });
 
   if (import.meta.env.DEV) {
-    console.log('[sync] pullEquipments final: imported=%d reconciled=%d error=false empty=%s',
-      imported, reconciled, cloud.length === 0 ? 'true' : 'false');
+    console.log('[sync] pullEquipments final: cloud=%d imported=%d reconciled=%d empty=%s',
+      cloud.length, imported, reconciled, cloud.length === 0 ? 'true' : 'false');
   }
   return { imported, reconciled, error: false, empty: cloud.length === 0 };
 }
@@ -597,8 +614,8 @@ async function pullActionPlans(): Promise<PullResult> {
   });
 
   if (import.meta.env.DEV) {
-    console.log('[sync] pullActionPlans final: imported=%d reconciled=%d error=false empty=%s',
-      imported, reconciled, cloud.length === 0 ? 'true' : 'false');
+    console.log('[sync] pullActionPlans final: cloud=%d imported=%d reconciled=%d empty=%s',
+      cloud.length, imported, reconciled, cloud.length === 0 ? 'true' : 'false');
   }
   return { imported, reconciled, error: false, empty: cloud.length === 0 };
 }
@@ -633,7 +650,12 @@ export async function syncAll(
   }
 
   _syncInProgress = true;
-  if (import.meta.env.DEV) console.log('[sync] Iniciando sincronização...');
+  if (import.meta.env.DEV) {
+    console.log('[sync] ===== INÍCIO =====');
+    console.log('[sync] Iniciando sincronização...');
+    const userId = options.userId;
+    if (userId) console.log(`[sync] userId=${userId}`);
+  }
 
   let pushEqOk = 0;
   let pushInsOk = 0;
@@ -643,7 +665,7 @@ export async function syncAll(
   let errors = 0;
 
   let pushApOk = 0;
-  const pushApErrors = 0;
+  let pushApErrors = 0;
 
   let pullEqImported = 0;
   let pullEqReconciled = 0;
@@ -668,6 +690,7 @@ export async function syncAll(
       pushEqOk = eqR.ok;
       pushInsOk = insR.ok;
       pushApOk = apR.ok;
+      pushApErrors = apR.errors;
       pushErrors = eqR.errors + insR.errors + apR.errors;
       deleted += eqR.deleted + insR.deleted + apR.deleted;
       errors += pushErrors;
@@ -701,12 +724,14 @@ export async function syncAll(
     errors++;
   } finally {
     if (import.meta.env.DEV) {
-      console.log('[sync] Sincronização concluída. ' +
-        `Push eq=${pushEqOk} ins=${pushInsOk} ap=${pushApOk} errors=${pushErrors} | ` +
-        `Pull eq=${pullEqImported}(${pullEqReconciled}) ins=${pullInsImported}(${pullInsReconciled}) ap=${pullApImported}(${pullApReconciled}) | ` +
+      console.log('[sync] ===== RESUMO =====');
+      console.log('[sync] ' +
+        `Push: eq=${pushEqOk} ins=${pushInsOk} ap=${pushApOk} errors=${pushErrors} | ` +
+        `Pull: eq=${pullEqImported}(${pullEqReconciled}) ins=${pullInsImported}(${pullInsReconciled}) ap=${pullApImported}(${pullApReconciled}) | ` +
         `Delete=${deleted} Erros=${errors}`);
     }
     _syncInProgress = false;
+    if (import.meta.env.DEV) console.log('[sync] ===== FIM =====');
   }
 
   return {

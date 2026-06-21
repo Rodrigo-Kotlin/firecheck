@@ -2,7 +2,7 @@
 
 > Documento de referência para IAs e desenvolvedores.
 > Leia antes de sugerir mudanças ou iniciar novas sessões.
-> Última atualização: 2026-06-21 · Prompt 05 (QR Code, scanner, rastreabilidade) em andamento.
+> Última atualização: 2026-06-21 · Prompt 06 (Auto-sync confiável, atualização de Zustand, logs de diagnóstico) concluído.
 
 ---
 
@@ -374,11 +374,38 @@ As migrations ficam em `supabase/migrations/`. **Nunca editar migrations antigas
 - Scanner (`ScanQr.tsx`) busca em 3 camadas (Zustand → Dexie → Supabase), rejeita excluídos
 - Migration `0014_normalize_equipment_qrcode_fields.sql`
 
-### Prompt 06 — Auto-sync confiável e teste multiusuário (planejado)
+### Prompt 06 — Auto-sync confiável, atualização de Zustand e logs de diagnóstico
 
-**Branch**: `fix/firecheck-06-auto-sync-confiavel` (planejada)  
-**Status**: próximo passo  
+**Branch**: `fix/firecheck-06-auto-sync-confiavel`  
+**Status**: concluído  
 **Objetivo**: validar auto-sync real entre dispositivos; confirmar atualização de Zustand sem F5; logs DEV; possivelmente Supabase Realtime.
+
+**Problema identificado**:  
+O auto-sync não disparava na montagem do hook `useAutoSync` — apenas registrava listeners de foco/visibilidade/online/intervalo, mas nunca chamava sync na inicialização. Além disso:
+- A constante `isOnline` era congelada em tempo de render (não reativa), fazendo o hook ignorar mudanças de conectividade.
+- Havia listener `online` duplicado no store (sem throttle), competindo com o hook.
+- A variável `pushApErrors` em `syncAll` era `const = 0` (nunca recebia erros reais).
+
+**Correções aplicadas**:
+
+1. **`useAutoSync.ts`** — reescrito com:
+   - `triggerAutoSync('mount')` na montagem do hook.
+   - `useSyncExternalStore` para `isOnline` reativo.
+   - Throttle de 8s entre execuções.
+   - Logs DEV detalhados por trigger, skip, início e conclusão.
+   - Limpeza completa no unmount.
+
+2. **`store/index.ts`** — removido listener `online`/`offline` duplicado (linhas 800-808). O hook centraliza todos os gatilhos automáticos.
+
+3. **`sync.ts`** — corrigido bug: `pushApErrors` agora é `let` e recebe `apR.errors`. Adicionados logs DEV detalhados por fase (push equipamentos/inspeções/planos, pull equipamentos/inspeções/planos) com contagem e identificação dos itens.
+
+4. **Gatilhos do auto-sync**: mount, focus, visibility, online, interval (30s).  
+   **Throttle**: 8s mínimo entre execuções.  
+   **Trava de concorrência**: `_syncInProgress` no módulo sync (já existente).  
+   **Atualização de Zustand**: `runSync()` no store recarrega equipamentos/inspeções/planos do Dexie após `syncAll()` e chama `set()` com os dados frescos.
+
+**Limitações sem Realtime**:  
+O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/online/intervalo. Supabase Realtime pode ser avaliado como evolução futura para propagação imediata.
 
 ---
 
@@ -394,7 +421,7 @@ As migrations ficam em `supabase/migrations/`. **Nunca editar migrations antigas
 | `fix/firecheck-03-pull-reconciliacao-metadados` | Concluída |
 | `fix/firecheck-04-planos-acao-dexie-sync` | Concluída |
 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Ativa |
-| `fix/firecheck-06-auto-sync-confiavel` | Planejada |
+| `fix/firecheck-06-auto-sync-confiavel` | Ativa |
 
 ---
 
@@ -654,26 +681,25 @@ Máquina de estados: `unavailable` → `available` → `installed`. Detecta iOS 
 
 ## 19. Próximos Passos Recomendados
 
-1. **Concluir Prompt 05** — finalizar testes de scanner com fallback Dexie/Supabase; aplicar migration `0014` no Supabase remoto.
-2. **Executar testes manuais** de QR e scanner em múltiplos dispositivos.
-3. **Prompt 06 — Auto-sync confiável**:
-   - Validar auto-sync real entre dispositivos sem F5.
-   - Confirmar que Zustand atualiza após pull.
-   - Melhorar logs DEV.
-   - Avaliar Supabase Realtime como evolução.
-4. **Testar multiusuário**:
-   - Admin cria equipamento.
-   - Usuário comum inspeciona.
-   - Status persiste entre dispositivos via RPC.
-   - Exclusão propaga corretamente.
-5. **Revisar RLS** de `planos_acao`.
-6. **Revisar service worker** para garantir que chamadas Supabase são NetworkOnly (não cache-first).
-7. **Avaliar migração estrutural**:
+1. **Prompt 07 — Controle básico de conflito por `updated_at`/versão**:
+   - Implementar comparação de `updated_at` entre local e remoto durante o pull.
+   - Resolver conflito: o mais recente vence, ou exibir UI de merge.
+2. **Prompt 08 — Testes finais, listeners duplicados, cache/PWA, PR e checklist de deploy**:
+   - Revisar Service Worker para garantir chamadas Supabase são NetworkOnly.
+   - Validar PWA/cache não serve bundle obsoleto.
+   - Testar multiusuário completo:
+     - Admin cria equipamento.
+     - Usuário comum inspeciona.
+     - Status persiste entre dispositivos via RPC.
+     - Exclusão propaga corretamente.
+3. **Revisar RLS** de `planos_acao`.
+4. **Avaliar Supabase Realtime** como evolução para propagação imediata.
+5. **Avaliar migração estrutural**:
    - `id UUID` como PK.
    - `tag TEXT UNIQUE` para identificação.
    - FKs por UUID.
    - Scanner por tag.
-8. **Criar release estável** (tag + changelog).
+6. **Criar release estável** (tag + changelog).
 
 ---
 
@@ -822,6 +848,7 @@ Sempre que iniciar nova sessão neste projeto:
 | Data | Branch | Etapa | Alteração | Status | Próximo passo |
 |------|--------|-------|-----------|--------|---------------|
 | 2026-06-21 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Criação/atualização do `PROJECT.md` | Documentação completa do projeto com histórico de correções, riscos, próximos passos | Concluído | Prompt 06 — auto-sync confiável |
+| 2026-06-21 | `fix/firecheck-06-auto-sync-confiavel` | Auto-sync confiável | `useAutoSync` com mount trigger, `isOnline` reativo, listeners centralizados, logs DEV, bug `pushApErrors` corrigido | Concluído | Prompt 07 — controle básico de conflito por updated_at/versão |
 
 ---
 
