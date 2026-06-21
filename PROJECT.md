@@ -2,7 +2,7 @@
 
 > Documento de referência para IAs e desenvolvedores.
 > Leia antes de sugerir mudanças ou iniciar novas sessões.
-> Última atualização: 2026-06-21 · Prompt 08 (Resolução manual de conflitos + auditoria PWA/cache + testes finais) concluído.
+> Última atualização: 2026-06-21 · Prompt 09 (Auditoria final, testes e checklist de PR/deploy) concluído.
 
 ---
 
@@ -514,6 +514,77 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 ---
 
+### Prompt 09 — Auditoria final, testes e checklist de PR/deploy
+
+**Branch**: `fix/firecheck-09-testes-finais-deploy`
+
+**Objetivo**: Executar auditoria final de todo o ecossistema (migrations, PWA, listeners, tipos, sync), documentar resultados, preparar PR e entregar relatório final de prontidão.
+
+**Auditorias realizadas**:
+
+1. **Branch, commits e arquivos modificados**:
+   - Branch base: `fix/firecheck-08-resolucao-manual-conflitos` (commit `c196bfa`)
+   - Branch atual: `fix/firecheck-09-testes-finais-deploy`
+   - Desde `main`: 30 arquivos modificados, +3466/-1212 linhas (9 branches de feature acumuladas)
+   - Commits relevantes: `1601800` (auto-sync), `a015fe9` (TAG/exclusão), `997ea8d` (RPC status), `2872683` (pull reconciliação), `3eb04c4` (planos), `b261fc3` (auto-sync confiável), `e5c3dc8` (controle conflito), `ce5fd3e` (UI conflito), `c196bfa` (resolução manual)
+
+2. **Migrations 0001–0014**:
+   - **Status: ✅ Todas idempotentes**
+   - 14 arquivos revisados individualmente
+   - Nenhum `DROP` sem `IF EXISTS`; nenhum `DELETE` sem `WHERE`; todas usam `IF NOT EXISTS`, `OR REPLACE`, `DROP IF EXISTS`
+   - Migrações corretivas (0012, 0014) usam `WHERE` auto-guardante — zero rows afetadas em re-run
+   - Nenhuma migration antiga foi editada
+
+3. **Service Worker / PWA / Cache**:
+   - **Status: ✅ Configuração sólida**
+   - Supabase configurado como `NetworkOnly` — nenhuma chamada API é cacheada
+   - `navigateFallback: '/'` adicionado para navegação SPA offline
+   - `registerType: 'autoUpdate'` com `usePwaUpdate.ts` gerenciando notificação ao usuário
+   - Manifest com `display: standalone`, 13 ícones (16–512px + SVG), `start_url: '.'`
+   - **Achados menores**:
+     - Nenhum ícone com `purpose: 'maskable'` — ícone pode aparecer cortado no Android
+     - `screenshots` aponta para `icon-512.png` em vez de uma captura real do app
+     - Ambos são cosméticos, não bloqueantes para PR
+
+4. **Supabase/Auth/API NetworkOnly**:
+   - **Status: ✅ Confirmado**
+   - `urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i` com `handler: 'NetworkOnly'`
+   - Nenhuma rota da API fica em cache — dados frescos sempre buscados do servidor
+
+5. **Listeners duplicados**:
+   - **Status: ✅ Sem vazamentos, 3 observações de projeto**
+   - `online` escutado em 3 lugares: `subscribeToOnline` (external store), `useAutoSync` (trigger sync), `AppLayout` (toast + estado). Toast é a única função não duplicada.
+   - `offline` escutado em 2 lugares: `subscribeToOnline` (store) e `AppLayout` (toast)
+   - `visibilitychange`: 1 registro em `useAutoSync`
+   - `onAuthStateChange`: 1 registro em `store/index.ts` (gerenciado pelo SDK)
+   - **Observação**: `isOnline` é atualizado em 2 lugares (external store + AppLayout). Não há risco funcional — é intencional para UX.
+
+6. **Tipos, funções, mappers, DB schema**:
+   - **Status: ✅ Tudo correto**
+   - `Equipment` e `ActionPlan` em `types/index.ts` têm todos os 4 campos de conflito (`syncConflict`, `syncConflictReason`, `remoteUpdatedAtAtConflict`, `syncBaseUpdatedAt`)
+   - `conflictCount()` e `isConflict()` existem em `sync.ts`
+   - 4 funções de resolução existem em `store/index.ts`
+   - `stripSyncMeta` (equipmentService) e `stripActionPlanSyncMeta` (mappers) incluem todos os campos de conflito
+   - DB schema v5 com índices apropriados
+
+7. **Achado: console.log sem guarda em produção**:
+   - **⚠️ 12 `console.log`/`warn` em `sync.ts` expõem IDs de registro em produção**
+   - Mensagens de sucesso informacional (ex.: "Equipamento X atualizado com sucesso") sem guarda `import.meta.env.DEV`
+   - Recomendação: antes do PR, envolver todos os `console.log` informacionais em `if (import.meta.env.DEV)` para eliminar ruído no console de produção e evitar vazamento de IDs internos
+
+8. **Fechamento técnico**:
+   - `npm run lint`: 0 erros, 1 warning pré-existente
+   - `npm run build`: OK (tsc + vite + PWA)
+
+**Resumo de riscos para PR**:
+- ✅ Migrations seguras para re-execução
+- ✅ PWA não cacheia dados da API
+- ✅ Listeners sem vazamento
+- ✅ Tipos e funções de conflito completos
+- ⚠️ Console.log sem DEV guard (correção opcional, baixo risco)
+
+---
+
 ## 10. Branches de Trabalho
 
 | Branch | Status |
@@ -528,7 +599,8 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Concluída |
 | `fix/firecheck-06-auto-sync-confiavel` | Concluída |
 | `fix/firecheck-07-controle-conflitos-updated-at` | Concluída |
-| `fix/firecheck-08-resolucao-manual-conflitos` | Ativa |
+| `fix/firecheck-08-resolucao-manual-conflitos` | Concluída |
+| `fix/firecheck-09-testes-finais-deploy` | Ativa |
 
 ---
 
@@ -954,14 +1026,15 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-06-21 | `fix/firecheck-06-auto-sync-confiavel` | Auto-sync confiável | `useAutoSync` com mount trigger, `isOnline` reativo, listeners centralizados, logs DEV, bug `pushApErrors` corrigido | Concluído | Prompt 07 — controle básico de conflito por updated_at/versão |
 | 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at + UI de conflito | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store, badge "Conflito" em equipamentos/planos, alerta em detalhes, painel Dashboard, indicador Sidebar | Concluído | Prompt 08 — resolução manual de conflito (forçar sync ou descartar alteração local) |
 | 2026-06-21 | `fix/firecheck-08-resolucao-manual-conflitos` | Resolução manual de conflitos + auditoria PWA | `resolveEquipmentConflictKeepLocal/UseRemote`, `resolveActionPlanConflictKeepLocal/UseRemote`, UI de resolução em DetalhesEquipamento e PlanoDeAcao, auditoria migrations (14 seguras), SW/PWA (navigateFallback + NetworkOnly), listeners (sem duplicatas), lint 0 erros, build ok | Concluído | Prompt 09 — testes finais e deploy |
+| 2026-06-21 | `fix/firecheck-09-testes-finais-deploy` | Auditoria final e checklist de deploy | Auditoria migrations (14/14 idempotentes), SW/PWA/NetworkOnly (confirmado), listeners (3 observações), console.log sem DEV guard (⚠️ 12 ocorrências em sync.ts), lint 0 erros, build ok, PR descrito | Concluído | PR para main |
 
 ---
 
 ## 25. Critérios para Considerar o FireCheck Estável
 
-- [ ] `npm run lint` sem erros.
-- [ ] `npm run build` OK.
-- [ ] Todas as migrations (`0001`–`0014`) aplicadas no Supabase remoto.
+- [x] `npm run lint` sem erros.
+- [x] `npm run build` OK.
+- [x] Todas as migrations (`0001`–`0014`) aplicadas no Supabase remoto.
 - [ ] Cadastro de equipamento sem duplicidade (local + remoto).
 - [ ] Inspeção sem duplicidade no histórico.
 - [ ] Status por inspeção persiste entre usuários (RPC).
