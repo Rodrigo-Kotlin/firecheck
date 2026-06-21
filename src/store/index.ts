@@ -3,9 +3,9 @@ import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus } from '../types';
 import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan } from '../db';
 import { syncAll, pendingSyncCount, conflictCount } from '../services/sync';
-import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote } from '../services/equipmentService';
+import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById } from '../services/equipmentService';
 import { carregarInspecoes } from '../services/inspectionService';
-import { carregarPlanosDeAcao } from '../services/actionPlanService';
+import { carregarPlanosDeAcao, fetchActionPlanById, updateActionPlanRemote } from '../services/actionPlanService';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   loginUser,
@@ -124,6 +124,10 @@ interface AppState {
 
   // ---- actions ----
   refreshConflictCount: () => Promise<void>;
+  resolveEquipmentConflictKeepLocal: (id: string) => Promise<void>;
+  resolveEquipmentConflictUseRemote: (id: string) => Promise<void>;
+  resolveActionPlanConflictKeepLocal: (id: string) => Promise<void>;
+  resolveActionPlanConflictUseRemote: (id: string) => Promise<void>;
   login: (email: string, pass: string) => Promise<void>;
   register: (input: { email: string; password: string; nome: string; cargo: string }) => Promise<void>;
   logout: () => Promise<void>;
@@ -347,6 +351,170 @@ export const useAppStore = create<AppState>()(
 
         triggerSync: async () => {
           await runSync();
+        },
+
+        // -----------------------------------------------------------------
+        // Conflict resolution
+        // -----------------------------------------------------------------
+
+        resolveEquipmentConflictKeepLocal: async (id: string) => {
+          if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment keep local started: ${id}`);
+          const local = await db.equipamentos.get(id);
+          if (!local || !local.syncConflict) {
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment ${id} not found or not in conflict`);
+            return;
+          }
+          const { sincronizado: _s, pendingDelete: _p, syncAction: _sa, statusUpdatePending: _su, syncConflict: _sc, syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru, syncError: _se, syncBaseUpdatedAt: _sb, deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u, ...clean } = local;
+          void _s; void _p; void _sa; void _su; void _sc; void _cr; void _ru; void _se; void _sb; void _d; void _db; void _c; void _u;
+          const result = await updateEquipmentRemote(clean as Equipment);
+          if (result.ok) {
+            const now = new Date().toISOString();
+            const fetchResult = await fetchEquipmentById(id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : now;
+            await db.equipamentos.update(id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              remoteUpdatedAtAtConflict: null,
+              syncBaseUpdatedAt: remoteUpdatedAt ?? now,
+              updatedAt: remoteUpdatedAt ?? now,
+            });
+            set((state) => ({
+              equipments: state.equipments.map((e) =>
+                e.id === id ? { ...e, ...clean, sincronizado: undefined, pendingDelete: undefined, syncAction: undefined, statusUpdatePending: undefined } : e,
+              ),
+            }));
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment keep local success: ${id}`);
+          } else {
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment keep local failed: ${id}`, result.message);
+            throw new Error(result.message || 'Falha ao enviar versão local para o servidor.');
+          }
+          await get().refreshConflictCount();
+          await get().refreshPendingCount();
+        },
+
+        resolveEquipmentConflictUseRemote: async (id: string) => {
+          if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment use remote started: ${id}`);
+          const local = await db.equipamentos.get(id);
+          if (!local || !local.syncConflict) {
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment ${id} not found or not in conflict`);
+            return;
+          }
+          const remoteResult = await fetchEquipmentById(id);
+          if (!remoteResult.ok) {
+            if (remoteResult.code === 'not_found') {
+              if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment use remote failed: ${id} — remote was deleted`);
+              throw new Error('Este equipamento foi excluído no servidor. Não é possível usar a versão remota.');
+            }
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment use remote failed: ${id}`);
+            throw new Error(remoteResult.message || 'Falha ao buscar versão remota.');
+          }
+          const remote = remoteResult.data!;
+          const now = new Date().toISOString();
+          await db.equipamentos.put({
+            ...remote,
+            sincronizado: true,
+            pendingDelete: false,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            remoteUpdatedAtAtConflict: null,
+            syncBaseUpdatedAt: remote.updatedAt ?? now,
+            updatedAt: remote.updatedAt ?? now,
+            deletedAt: remote.deletedAt ?? null,
+            deletedBy: remote.deletedBy ?? null,
+          } as LocalEquipment);
+          set((state) => ({
+            equipments: state.equipments.map((e) =>
+              e.id === id ? { ...remote } : e,
+            ),
+          }));
+          if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment use remote success: ${id}`);
+          await get().refreshConflictCount();
+          await get().refreshPendingCount();
+        },
+
+        resolveActionPlanConflictKeepLocal: async (id: string) => {
+          if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan keep local started: ${id}`);
+          const local = await db.planosAcao.get(id);
+          if (!local || !local.syncConflict) {
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan ${id} not found or not in conflict`);
+            return;
+          }
+          const { sincronizado: _s, pendingDelete: _p, syncAction: _sa, syncConflict: _sc, syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru, syncError: _se, syncBaseUpdatedAt: _sb, deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u, ...clean } = local;
+          void _s; void _p; void _sa; void _sc; void _cr; void _ru; void _se; void _sb; void _d; void _db; void _c; void _u;
+          const result = await updateActionPlanRemote(clean as ActionPlan);
+          if (result.ok) {
+            const now = new Date().toISOString();
+            const fetchResult = await fetchActionPlanById(id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : now;
+            await db.planosAcao.update(id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              remoteUpdatedAtAtConflict: null,
+              syncBaseUpdatedAt: remoteUpdatedAt ?? now,
+              updatedAt: remoteUpdatedAt ?? now,
+            });
+            set((state) => ({
+              actionPlans: state.actionPlans.map((p) =>
+                p.id === id ? { ...p, ...clean, sincronizado: undefined, pendingDelete: undefined, syncAction: undefined } : p,
+              ),
+            }));
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan keep local success: ${id}`);
+          } else {
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan keep local failed: ${id}`, result.message);
+            throw new Error(result.message || 'Falha ao enviar versão local para o servidor.');
+          }
+          await get().refreshConflictCount();
+          await get().refreshPendingCount();
+        },
+
+        resolveActionPlanConflictUseRemote: async (id: string) => {
+          if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan use remote started: ${id}`);
+          const local = await db.planosAcao.get(id);
+          if (!local || !local.syncConflict) {
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan ${id} not found or not in conflict`);
+            return;
+          }
+          const remoteResult = await fetchActionPlanById(id);
+          if (!remoteResult.ok) {
+            if (remoteResult.code === 'not_found') {
+              if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan use remote failed: ${id} — remote was deleted`);
+              throw new Error('Este plano de ação foi excluído no servidor. Não é possível usar a versão remota.');
+            }
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan use remote failed: ${id}`);
+            throw new Error(remoteResult.message || 'Falha ao buscar versão remota.');
+          }
+          const remote = remoteResult.data!;
+          const now = new Date().toISOString();
+          await db.planosAcao.put({
+            ...remote,
+            sincronizado: true,
+            pendingDelete: false,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            remoteUpdatedAtAtConflict: null,
+            syncBaseUpdatedAt: remote.updatedAt ?? now,
+            updatedAt: remote.updatedAt ?? now,
+            deletedAt: remote.deletedAt ?? null,
+            deletedBy: remote.deletedBy ?? null,
+          } as LocalActionPlan);
+          set((state) => ({
+            actionPlans: state.actionPlans.map((p) =>
+              p.id === id ? { ...remote } : p,
+            ),
+          }));
+          if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan use remote success: ${id}`);
+          await get().refreshConflictCount();
+          await get().refreshPendingCount();
         },
 
         clearLocalData: async () => {

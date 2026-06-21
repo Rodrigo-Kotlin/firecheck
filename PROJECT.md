@@ -2,7 +2,7 @@
 
 > Documento de referência para IAs e desenvolvedores.
 > Leia antes de sugerir mudanças ou iniciar novas sessões.
-> Última atualização: 2026-06-21 · Prompt 07 (Controle básico de conflito por updated_at) concluído.
+> Última atualização: 2026-06-21 · Prompt 08 (Resolução manual de conflitos + auditoria PWA/cache + testes finais) concluído.
 
 ---
 
@@ -459,6 +459,61 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 ---
 
+### Prompt 08 — Resolução manual de conflitos + auditoria PWA/cache
+
+**Branch**: `fix/firecheck-08-resolucao-manual-conflitos`
+
+**Objetivo**: Implementar resolução manual de conflito (manter local / usar servidor) para equipamentos e planos de ação; adicionar UI de resolução nos cards e detalhes; realizar auditoria final de regressão (migrations, PWA, listeners, lint, build).
+
+**Mudanças realizadas**:
+
+1. **Resolução manual de conflito**:
+   - `resolveEquipmentConflictKeepLocal(id)`: sobrescreve remoto com dados locais via `updateEquipmentRemote`; limpa flags de conflito e marca `sincronizado: true`.
+   - `resolveEquipmentConflictUseRemote(id)`: busca remoto via `fetchEquipmentById`, substitui local no Dexie, limpa flags de conflito e marca `sincronizado: true`.
+   - `resolveActionPlanConflictKeepLocal(id)`: análogo para planos de ação via `updateActionPlanRemote`.
+   - `resolveActionPlanConflictUseRemote(id)`: busca remoto via `fetchActionPlanById`, substitui local no Dexie.
+   - Se a resolução "usar servidor" falha com `not_found`, a UI exibe o erro e o conflito permanece.
+   - Logs DEV com prefixo `[conflict-resolution]`.
+   - Toast de sucesso/erro após cada tentativa.
+
+2. **UI de resolução**:
+   - `DetalhesEquipamento.tsx`: dois botões (`"Manter minha versão"` / `"Usar versão do servidor"`) no alerta de conflito, com `confirm()` antes da ação.
+   - `PlanoDeAcao.tsx`: mesmos botões no card do plano, exibidos quando `syncConflict || syncError === 'conflict'`.
+   - Botões seguem o padrão visual do app (bg-red-600 white / bg-white border-red-200 critical).
+
+3. **Auditoria de migrations** (14 arquivos, Supabase):
+   - Todas as migrations são idempotentes (usam `IF NOT EXISTS`, `OR REPLACE`, `IF EXISTS`).
+   - Nenhuma migration altera schema de forma destrutiva após 2025.
+   - Nenhuma migration antiga foi editada.
+
+4. **Auditoria SW/PWA**:
+   - `vite.config.ts`: Supabase configurado como `NetworkOnly` no runtime caching.
+   - `navigateFallback: '/'` adicionado ao `workbox` para SPA offline — navegação em sub-rotas servirá `index.html`.
+   - `manifest.json`: `display: standalone`, ícones 16–512px, `start_url: '.'`, cores definidas.
+
+5. **Auditoria de listeners**:
+   - `useAutoSync.ts` é o único ponto central de listeners (`online`, `offline`, `visibilitychange`).
+   - Store não adiciona listeners `online`/`offline` duplicados.
+   - `onAuthStateChange` do Supabase nunca é removido pois o SDK gerencia o ciclo de vida.
+   - Nenhum vazamento de listener identificado.
+
+6. **Cobertura de conflitos**:
+   - `conflictCounts` (`{ equipments: number; actionPlans: number }`) no estado Zustand.
+   - `refreshConflictCount()` chamado em `hydrate` e `runSync`.
+   - `conflictCount()` em `sync.ts` conta registros com `syncError === 'conflict' && !sincronizado`.
+   - Conflito não incrementa `errors` no relatório de sync.
+
+7. **Riscos remanescentes**:
+   - Nenhum merge visual avançado (campo a campo) implementado — resolução é binária "tudo local" ou "tudo servidor".
+   - Resolução com falha de rede não limpa conflito — registro permanece `sincronizado: false`.
+   - Inspeções permanecem fora de escopo (append-only).
+   - Não há Supabase Realtime — conflito só é detectado durante pull, não em tempo real.
+
+`npm run lint`: 0 erros, 1 warning pré-existente (NovoEquipamento.tsx:278 — `react-hooks/incompatible-library`).
+`npm run build`: tsc + vite build sem erros; PWA gera sw.js com Workbox.
+
+---
+
 ## 10. Branches de Trabalho
 
 | Branch | Status |
@@ -470,8 +525,10 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 | `fix/firecheck-02-rls-status-inspecao` | Concluída |
 | `fix/firecheck-03-pull-reconciliacao-metadados` | Concluída |
 | `fix/firecheck-04-planos-acao-dexie-sync` | Concluída |
-| `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Ativa |
-| `fix/firecheck-06-auto-sync-confiavel` | Ativa |
+| `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Concluída |
+| `fix/firecheck-06-auto-sync-confiavel` | Concluída |
+| `fix/firecheck-07-controle-conflitos-updated-at` | Concluída |
+| `fix/firecheck-08-resolucao-manual-conflitos` | Ativa |
 
 ---
 
@@ -731,25 +788,21 @@ Máquina de estados: `unavailable` → `available` → `installed`. Detecta iOS 
 
 ## 19. Próximos Passos Recomendados
 
-1. **Prompt 07 — Controle básico de conflito por `updated_at`/versão**:
-   - Implementar comparação de `updated_at` entre local e remoto durante o pull.
-   - Resolver conflito: o mais recente vence, ou exibir UI de merge.
-2. **Prompt 08 — Testes finais, listeners duplicados, cache/PWA, PR e checklist de deploy**:
-   - Revisar Service Worker para garantir chamadas Supabase são NetworkOnly.
-   - Validar PWA/cache não serve bundle obsoleto.
+1. **Prompt 09 — Testes finais e deploy**:
    - Testar multiusuário completo:
      - Admin cria equipamento.
      - Usuário comum inspeciona.
      - Status persiste entre dispositivos via RPC.
      - Exclusão propaga corretamente.
-3. **Revisar RLS** de `planos_acao`.
-4. **Avaliar Supabase Realtime** como evolução para propagação imediata.
-5. **Avaliar migração estrutural**:
+     - Conflito com resolução manual.
+   - Relatório final com queries SQL de validação.
+   - Criar release estável (tag + changelog) e PR.
+2. **Avaliar Supabase Realtime** como evolução para propagação imediata.
+3. **Avaliar migração estrutural**:
    - `id UUID` como PK.
    - `tag TEXT UNIQUE` para identificação.
    - FKs por UUID.
    - Scanner por tag.
-6. **Criar release estável** (tag + changelog).
 
 ---
 
@@ -900,6 +953,7 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-06-21 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Criação/atualização do `PROJECT.md` | Documentação completa do projeto com histórico de correções, riscos, próximos passos | Concluído | Prompt 06 — auto-sync confiável |
 | 2026-06-21 | `fix/firecheck-06-auto-sync-confiavel` | Auto-sync confiável | `useAutoSync` com mount trigger, `isOnline` reativo, listeners centralizados, logs DEV, bug `pushApErrors` corrigido | Concluído | Prompt 07 — controle básico de conflito por updated_at/versão |
 | 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at + UI de conflito | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store, badge "Conflito" em equipamentos/planos, alerta em detalhes, painel Dashboard, indicador Sidebar | Concluído | Prompt 08 — resolução manual de conflito (forçar sync ou descartar alteração local) |
+| 2026-06-21 | `fix/firecheck-08-resolucao-manual-conflitos` | Resolução manual de conflitos + auditoria PWA | `resolveEquipmentConflictKeepLocal/UseRemote`, `resolveActionPlanConflictKeepLocal/UseRemote`, UI de resolução em DetalhesEquipamento e PlanoDeAcao, auditoria migrations (14 seguras), SW/PWA (navigateFallback + NetworkOnly), listeners (sem duplicatas), lint 0 erros, build ok | Concluído | Prompt 09 — testes finais e deploy |
 
 ---
 

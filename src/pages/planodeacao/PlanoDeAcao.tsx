@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useAppStore } from '../../store';
 import { useNavigate } from 'react-router-dom';
 import type { ActionPlanStatus, Criticidade } from '../../types';
+import { showToast } from '../../hooks/useToasts';
 import {
   ChevronLeft,
   AlertOctagon,
@@ -109,7 +110,7 @@ function getEquipLabel(eqId: string, equipments: { id: string; tipo?: string; lo
 }
 
 export default function PlanoDeAcao() {
-  const { actionPlans, addActionPlan, updateActionPlan, deleteActionPlan, equipments, user, users } = useAppStore();
+  const { actionPlans, addActionPlan, updateActionPlan, deleteActionPlan, equipments, user, users, resolveActionPlanConflictKeepLocal, resolveActionPlanConflictUseRemote } = useAppStore();
   const navigate = useNavigate();
 
   const [statusFilter, setStatusFilter] = useState<'Todos' | ActionPlanStatus>('Todos');
@@ -317,6 +318,40 @@ export default function PlanoDeAcao() {
                       </span>
                     )}
                   </div>
+                  {(plan.syncConflict || plan.syncError === 'conflict') && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!confirm('Tem certeza que deseja manter sua versão local? Isso irá sobrescrever a versão mais recente do servidor.')) return;
+                          try {
+                            await resolveActionPlanConflictKeepLocal(plan.id);
+                            showToast({ kind: 'success', title: 'Conflito resolvido', description: 'Sua versão foi enviada ao servidor.' });
+                          } catch {
+                            showToast({ kind: 'error', title: 'Erro', description: 'Falha ao resolver conflito. Tente novamente.' });
+                          }
+                        }}
+                        className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-lg bg-red-600 text-white hover:bg-red-700 border-none cursor-pointer"
+                      >
+                        Manter minha versão
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!confirm('Tem certeza que deseja usar a versão do servidor? Sua alteração local será descartada.')) return;
+                          try {
+                            await resolveActionPlanConflictUseRemote(plan.id);
+                            showToast({ kind: 'success', title: 'Conflito resolvido', description: 'Versão do servidor restaurada.' });
+                          } catch (err) {
+                            showToast({ kind: 'error', title: 'Erro', description: err instanceof Error ? err.message : 'Falha ao resolver conflito.' });
+                          }
+                        }}
+                        className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-lg bg-white border border-red-200 text-critical hover:bg-red-50 cursor-pointer"
+                      >
+                        Usar versão do servidor
+                      </button>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 text-xs text-gray-500 font-semibold mt-1 flex-wrap">
                     <span className="inline-flex items-center gap-1">
                       <MapPin className="w-3 h-3 flex-shrink-0" />

@@ -97,7 +97,7 @@ function DetailSection({ title, icon: Icon, cols = 3, children }: DetailSectionP
 export default function DetalhesEquipamento() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { equipments, inspections, setCurrentTab, user, deleteEquipment, users } = useAppStore();
+  const { equipments, inspections, setCurrentTab, user, deleteEquipment, users, resolveEquipmentConflictKeepLocal, resolveEquipmentConflictUseRemote } = useAppStore();
 
   const eq = equipments.find((e) => e.id === id && !e.pendingDelete && !e.deletedAt);
 
@@ -325,6 +325,38 @@ export default function DetalhesEquipamento() {
           <p className="text-[11px] text-red-600 font-semibold">
             O sync automático não enviará este registro até que o conflito seja resolvido.
           </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm('Tem certeza que deseja manter sua versão local? Isso irá sobrescrever a versão mais recente do servidor.')) return;
+                try {
+                  await resolveEquipmentConflictKeepLocal(eq.id);
+                  showToast({ kind: 'success', title: 'Conflito resolvido', description: 'Sua versão foi enviada ao servidor.' });
+                } catch {
+                  showToast({ kind: 'error', title: 'Erro', description: 'Falha ao resolver conflito. Tente novamente.' });
+                }
+              }}
+              className="btn-sm bg-red-600 text-white font-bold hover:bg-red-700 border-none"
+            >
+              Manter minha versão
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm('Tem certeza que deseja usar a versão do servidor? Sua alteração local será descartada.')) return;
+                try {
+                  await resolveEquipmentConflictUseRemote(eq.id);
+                  showToast({ kind: 'success', title: 'Conflito resolvido', description: 'Versão do servidor restaurada.' });
+                } catch (err) {
+                  showToast({ kind: 'error', title: 'Erro', description: err instanceof Error ? err.message : 'Falha ao resolver conflito.' });
+                }
+              }}
+              className="btn-sm bg-white border border-red-200 text-critical font-bold hover:bg-red-50"
+            >
+              Usar versão do servidor
+            </button>
+          </div>
         </div>
       )}
 
