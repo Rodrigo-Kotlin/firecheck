@@ -443,9 +443,16 @@ O push não verificava se o registro remoto foi alterado desde a última sincron
    - `refreshConflictCount` expõe contagem de conflitos por entidade.
    - `conflictCounts` no estado Zustand.
 
-7. **UI (próxima etapa)**:
-   - Badge de conflito nas telas de equipamentos e planos de ação.
-   - Contagem de conflitos no índice de pendências.
+7. **UI de conflito**:
+   - Badge "Conflito" (ícone `AlertOctagon`) nos cards de equipamentos e planos de ação quando `syncConflict === true` ou `syncError === 'conflict'`.
+   - Alerta expandido na tela de detalhes do equipamento com motivo, timestamps (local base, remoto no conflito, local atual) e orientação.
+   - Painel de conflitos no Dashboard com botões de atalho para equipamentos/planos em conflito.
+   - Indicador de conflitos no Sidebar (área de status do Supabase) com contagem total.
+   - `conflictCounts` (`{ equipments: number; actionPlans: number }`) no estado Zustand, populado por `refreshConflictCount()`.
+8. **Riscos remanescentes**:
+   - Nenhum merge visual avançado implementado — conflito apenas detectado e bloqueado.
+   - Resolução manual requer que o usuário faça o equipamento "vencer" o conflito (ex.: editar e forçar sync, ou usar o botão "Resolver" — ainda não implementado).
+   - Inspeções estão fora de escopo para conflito (append-only).
 
 **Limitações sem Realtime**:  
 O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/online/intervalo. Supabase Realtime pode ser avaliado como evolução futura para propagação imediata.
@@ -892,7 +899,7 @@ Sempre que iniciar nova sessão neste projeto:
 |------|--------|-------|-----------|--------|---------------|
 | 2026-06-21 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Criação/atualização do `PROJECT.md` | Documentação completa do projeto com histórico de correções, riscos, próximos passos | Concluído | Prompt 06 — auto-sync confiável |
 | 2026-06-21 | `fix/firecheck-06-auto-sync-confiavel` | Auto-sync confiável | `useAutoSync` com mount trigger, `isOnline` reativo, listeners centralizados, logs DEV, bug `pushApErrors` corrigido | Concluído | Prompt 07 — controle básico de conflito por updated_at/versão |
-| 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store | Concluído | Prompt 07 — Partes 10-11: badge de conflito + contagem integrada na UI |
+| 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at + UI de conflito | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store, badge "Conflito" em equipamentos/planos, alerta em detalhes, painel Dashboard, indicador Sidebar | Concluído | Prompt 08 — resolução manual de conflito (forçar sync ou descartar alteração local) |
 
 ---
 

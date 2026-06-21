@@ -307,6 +307,15 @@ export default function PlanoDeAcao() {
                       <StatusIcon className="w-3 h-3" />
                       {plan.status}
                     </span>
+                    {(plan.syncConflict || plan.syncError === 'conflict') && (
+                      <span
+                        className="pill bg-red-100 text-critical border border-red-200"
+                        title="Este plano de ação foi alterado em outro dispositivo antes da sincronização."
+                      >
+                        <AlertOctagon className="w-3 h-3" />
+                        Conflito
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 text-xs text-gray-500 font-semibold mt-1 flex-wrap">
                     <span className="inline-flex items-center gap-1">

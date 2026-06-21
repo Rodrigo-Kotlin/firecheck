@@ -299,6 +299,35 @@ export default function DetalhesEquipamento() {
         </div>
       </div>
 
+      {/* Conflict alert */}
+      {(eq.syncConflict || eq.syncError === 'conflict') && (
+        <div className="bg-red-50 border border-red-200 border-l-[4px] border-l-critical rounded-lg p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-critical flex-shrink-0" />
+            <span className="text-sm font-black text-critical uppercase tracking-wider">
+              Conflito de sincronização
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-red-800 font-medium leading-relaxed">
+            {eq.syncConflictReason ?? 'Há uma alteração local pendente que conflita com uma versão mais recente no servidor.'}
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] font-mono text-red-700 bg-red-100/50 rounded-lg px-3 py-2">
+            {eq.syncBaseUpdatedAt && (
+              <div><span className="font-bold uppercase text-[10px] text-red-500">Base local: </span>{eq.syncBaseUpdatedAt}</div>
+            )}
+            {eq.remoteUpdatedAtAtConflict && (
+              <div><span className="font-bold uppercase text-[10px] text-red-500">Remoto: </span>{eq.remoteUpdatedAtAtConflict}</div>
+            )}
+            {eq.updatedAt && (
+              <div><span className="font-bold uppercase text-[10px] text-red-500">Local atual: </span>{eq.updatedAt}</div>
+            )}
+          </div>
+          <p className="text-[11px] text-red-600 font-semibold">
+            O sync automático não enviará este registro até que o conflito seja resolvido.
+          </p>
+        </div>
+      )}
+
       {/* Read-only banner */}
       {!editable && (
         <div className="flex items-center gap-3 bg-gray-50 border border-gray-200 px-3 py-2.5 rounded-lg">

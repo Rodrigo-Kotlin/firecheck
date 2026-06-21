@@ -172,14 +172,9 @@ export const useAppStore = create<AppState>()(
           .filter((p) => !p.pendingDelete && !p.deletedAt)
           .toArray();
         return rows.map(({
-          sincronizado: _s, pendingDelete: _p,
-          syncAction: _a, syncError: _e,
-          syncBaseUpdatedAt: _b, syncConflict: _c,
-          syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru,
-          ...rest
+          sincronizado: _s, pendingDelete: _p, syncAction: _a, ...rest
         }) => {
-          void _s; void _p; void _a; void _e;
-          void _b; void _c; void _cr; void _ru;
+          void _s; void _p; void _a;
           return rest as ActionPlan;
         });
       };
@@ -207,13 +202,10 @@ export const useAppStore = create<AppState>()(
               if (e.pendingDelete || e.deletedAt) continue;
               const {
                 sincronizado: _s, pendingDelete: _p,
-                syncAction: _sa, syncError: _se, statusUpdatePending: _su,
-                syncBaseUpdatedAt: _b, syncConflict: _c,
-                syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru,
+                syncAction: _sa, statusUpdatePending: _su,
                 ...clean
               } = e;
-              void _s; void _p; void _sa; void _se; void _su;
-              void _b; void _c; void _cr; void _ru;
+              void _s; void _p; void _sa; void _su;
               freshEqs.push(clean as unknown as Equipment);
             }
 
@@ -330,6 +322,7 @@ export const useAppStore = create<AppState>()(
           });
 
           await get().refreshPendingCount();
+          await get().refreshConflictCount();
 
           if (sessionUser && isOnline) void runSync();
         },

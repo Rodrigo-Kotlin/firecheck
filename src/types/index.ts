@@ -20,6 +20,16 @@ export interface ActionPlan {
   deletedAt?: string | null;
   /** ID of the user who deleted this action plan. */
   deletedBy?: string | null;
+  /** Erro persistente da última tentativa de sync. */
+  syncError?: string;
+  /** Registro em conflito — push bloqueado até revisão. */
+  syncConflict?: boolean;
+  /** Motivo legível do conflito. */
+  syncConflictReason?: string;
+  /** updated_at remoto no momento da detecção do conflito. */
+  remoteUpdatedAtAtConflict?: string | null;
+  /** updated_at remoto registrado na última sincronização bem-sucedida. */
+  syncBaseUpdatedAt?: string | null;
 }
 
 export interface AppConfig {
@@ -160,8 +170,16 @@ export interface Equipment {
   deletedBy?: string | null;
   /** Flag local de exclusão pendente de sincronização. Não persiste no Supabase. */
   pendingDelete?: boolean;
-  /** Erro persistente da última tentativa de sync (ex.: 'duplicate'). Não persiste no Supabase. */
+  /** Erro persistente da última tentativa de sync (ex.: 'duplicate', 'conflict'). Não persiste no Supabase. */
   syncError?: string;
+  /** Registro em conflito — push bloqueado até revisão. */
+  syncConflict?: boolean;
+  /** Motivo legível do conflito. */
+  syncConflictReason?: string;
+  /** updated_at remoto no momento da detecção do conflito. */
+  remoteUpdatedAtAtConflict?: string | null;
+  /** updated_at remoto registrado na última sincronização bem-sucedida. */
+  syncBaseUpdatedAt?: string | null;
   /** Indica que o status foi alterado por inspeção. Sync via pushInspections(). */
   statusUpdatePending?: boolean;
 }

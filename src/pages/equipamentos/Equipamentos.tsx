@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight, Trash2 } from 'lucide-react';
+import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight, Trash2, AlertOctagon } from 'lucide-react';
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 import ConfirmDialog from '../../components/ConfirmDialog';
@@ -156,6 +156,15 @@ export default function Equipamentos() {
                     {eq.id}
                   </span>
                   <span className={`pill ${status.pill}`}>{status.label}</span>
+                  {(eq.syncConflict || eq.syncError === 'conflict') && (
+                    <span
+                      className="pill bg-red-100 text-critical border border-red-200"
+                      title="Este equipamento foi alterado em outro dispositivo antes da sincronização. Revise antes de continuar."
+                    >
+                      <AlertOctagon className="w-3 h-3" />
+                      Conflito
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   {!editable && (
