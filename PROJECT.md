@@ -2,7 +2,7 @@
 
 > Documento de referência para IAs e desenvolvedores.
 > Leia antes de sugerir mudanças ou iniciar novas sessões.
-> Última atualização: 2026-06-21 · Prompt 06 (Auto-sync confiável, atualização de Zustand, logs de diagnóstico) concluído.
+> Última atualização: 2026-06-21 · Prompt 07 (Controle básico de conflito por updated_at) concluído.
 
 ---
 
@@ -403,6 +403,49 @@ O auto-sync não disparava na montagem do hook `useAutoSync` — apenas registra
    **Throttle**: 8s mínimo entre execuções.  
    **Trava de concorrência**: `_syncInProgress` no módulo sync (já existente).  
    **Atualização de Zustand**: `runSync()` no store recarrega equipamentos/inspeções/planos do Dexie após `syncAll()` e chama `set()` com os dados frescos.
+
+---
+
+### Prompt 07 — Controle básico de conflito por updated_at
+
+**Branch**: `fix/firecheck-07-controle-conflitos-updated-at`  
+**Status**: concluído  
+**Objetivo**: impedir que alterações offline sejam enviadas cegamente ao servidor quando outro dispositivo já modificou o mesmo registro; preservar alterações locais em conflito; notificar usuário via badge.
+
+**Problema identificado**:  
+O push não verificava se o registro remoto foi alterado desde a última sincronização. Um dispositivo A podia editar offline, dispositivo B editava online, e ao sincronizar A, seu cambio sobrescrevia o de B sem aviso. Pull também não registrava a versão base dos registros importados.
+
+**Solução implementada**:
+
+1. **Modelo de dados (`db/index.ts`)**:
+   - `LocalEquipment` e `LocalActionPlan` ganharam campos: `syncBaseUpdatedAt`, `syncConflict`, `syncConflictReason`, `remoteUpdatedAtAtConflict`.
+
+2. **Mappers (`services/mappers.ts`)**:
+   - `SYNC_META_FIELDS` e `stripActionPlanSyncMeta` incluem os novos campos.
+
+3. **Serviço remoto (`equipmentService.ts`, `actionPlanService.ts`)**:
+   - `ServiceResult` tornou-se genérico `ServiceResult<T = Equipment>`.
+   - `fetchEquipmentById` e `fetchActionPlanById` retornam `ServiceResult` com `code: 'not_found'` quando o registro não existe no servidor.
+
+4. **Push (`sync.ts`)**
+   - `pushEquipments` e `pushActionPlans`: antes de update/delete, buscam o registro remoto e comparam `syncBaseUpdatedAt` com `updated_at` remoto.
+   - Se diferente: marca `syncConflict: true`, `syncError: 'conflict'`, `sincronizado: false`, não envia a alteração, não incrementa `errors` (conflito é condição controlada).
+   - Se remoto não existe: converte update em create.
+   - Create: registra `syncBaseUpdatedAt` após sucesso.
+   - Delete: reconcilia se já deletado remotamente.
+
+5. **Pull (`sync.ts`)**
+   - `pullEquipments` e `pullActionPlans`: pulam registros com `syncConflict: true` (não sobrescrevem conflito local).
+   - Registram `syncBaseUpdatedAt` no momento da importação.
+
+6. **Store (`store/index.ts`)**:
+   - `stripSyncMeta` no `runSync` inclui novos campos.
+   - `refreshConflictCount` expõe contagem de conflitos por entidade.
+   - `conflictCounts` no estado Zustand.
+
+7. **UI (próxima etapa)**:
+   - Badge de conflito nas telas de equipamentos e planos de ação.
+   - Contagem de conflitos no índice de pendências.
 
 **Limitações sem Realtime**:  
 O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/online/intervalo. Supabase Realtime pode ser avaliado como evolução futura para propagação imediata.
@@ -849,6 +892,7 @@ Sempre que iniciar nova sessão neste projeto:
 |------|--------|-------|-----------|--------|---------------|
 | 2026-06-21 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Criação/atualização do `PROJECT.md` | Documentação completa do projeto com histórico de correções, riscos, próximos passos | Concluído | Prompt 06 — auto-sync confiável |
 | 2026-06-21 | `fix/firecheck-06-auto-sync-confiavel` | Auto-sync confiável | `useAutoSync` com mount trigger, `isOnline` reativo, listeners centralizados, logs DEV, bug `pushApErrors` corrigido | Concluído | Prompt 07 — controle básico de conflito por updated_at/versão |
+| 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store | Concluído | Prompt 07 — Partes 10-11: badge de conflito + contagem integrada na UI |
 
 ---
 

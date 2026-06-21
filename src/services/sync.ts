@@ -23,10 +23,11 @@
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { db } from '../db';
-import { fetchEquipments, createEquipmentRemote, updateEquipmentRemote, findEquipmentById, softDeleteEquipment, applyEquipmentInspectionStatusRemote, type ServiceResult } from './equipmentService';
+import { fetchEquipments, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById, softDeleteEquipment, applyEquipmentInspectionStatusRemote, type ServiceResult } from './equipmentService';
 import { fetchInspections, upsertInspection } from './inspectionService';
 import {
   fetchActionPlans,
+  fetchActionPlanById,
   createActionPlanRemote,
   updateActionPlanRemote,
   softDeleteActionPlanRemote,
@@ -97,6 +98,13 @@ export function isSyncInProgress(): boolean {
   return _syncInProgress;
 }
 
+/** Compare two ISO date strings by their numeric timestamp.
+ *  Returns true when the remote timestamp differs from the local base. */
+function isConflict(localBase: string | null | undefined, remoteUpdatedAt: string | undefined): boolean {
+  if (!localBase || !remoteUpdatedAt) return false;
+  return new Date(remoteUpdatedAt).getTime() !== new Date(localBase).getTime();
+}
+
 // ---------------------------------------------------------------------------
 // PUSH
 // ---------------------------------------------------------------------------
@@ -106,18 +114,67 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
   let errors = 0;
   let deleted = 0;
 
-  // 1) pending deletes — soft delete
+  const markConflict = async (id: string, remoteUpdatedAt: string, reason: string) => {
+    if (import.meta.env.DEV) {
+      console.log(`[conflict] detected for equipment ${id}: ${reason}`);
+    }
+    await db.equipamentos.update(id, {
+      syncConflict: true,
+      syncConflictReason: reason,
+      remoteUpdatedAtAtConflict: remoteUpdatedAt,
+      syncError: 'conflict',
+      sincronizado: false,
+    });
+  };
+
+  // 1) pending deletes — soft delete com verificação de conflito
   const toDelete = await db.equipamentos.filter((e) => !!e.pendingDelete).toArray();
   if (import.meta.env.DEV && toDelete.length > 0) {
     console.log(`[sync] pushEquipments: ${toDelete.length} exclusões pendentes (${toDelete.map(e => e.id).join(', ')})`);
   }
   for (const eq of toDelete) {
+    // Verificar conflito antes de deletar
+    const remoteResult = await fetchEquipmentById(eq.id);
+    if (remoteResult.ok && remoteResult.data) {
+      const remote = remoteResult.data;
+      if (remote.deletedAt) {
+        // Já deletado remotamente — reconciliar
+        await db.equipamentos.update(eq.id, {
+          pendingDelete: false,
+          sincronizado: true,
+          syncAction: undefined,
+          syncConflict: false,
+          syncConflictReason: undefined,
+          syncError: undefined,
+          deletedAt: remote.deletedAt,
+          deletedBy: remote.deletedBy ?? userId ?? null,
+          updatedAt: remote.updatedAt ?? new Date().toISOString(),
+        });
+        deleted++;
+        if (import.meta.env.DEV) console.log('[sync] Equipamento %s já deletado remotamente — reconciliado', eq.id);
+        continue;
+      }
+      if (isConflict(eq.syncBaseUpdatedAt, remote.updatedAt)) {
+        await markConflict(eq.id, remote.updatedAt ?? '', 'Este equipamento foi alterado em outro dispositivo antes da exclusão. Revise antes de excluir.');
+        errors++;
+        continue;
+      }
+    } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+      // Erro de rede — preservar pendência
+      console.error('[sync.pushEquipments] Erro ao verificar conflito para exclusão', { id: eq.id });
+      errors++;
+      continue;
+    }
+    // Sem conflito ou não encontrado — prosseguir com soft delete
     const success = await softDeleteEquipment(eq.id, userId);
     if (success) {
       await db.equipamentos.update(eq.id, {
         pendingDelete: false,
         sincronizado: true,
         syncAction: undefined,
+        syncConflict: false,
+        syncConflictReason: undefined,
+        syncError: undefined,
         deletedAt: new Date().toISOString(),
         deletedBy: userId ?? null,
         updatedAt: new Date().toISOString(),
@@ -125,9 +182,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
       deleted++;
       console.log('[sync] Equipamento %s deletado (soft) do Supabase', eq.id);
     } else {
-      console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', {
-        id: eq.id,
-      });
+      console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', { id: eq.id });
       errors++;
     }
   }
@@ -150,41 +205,140 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
     let result: ServiceResult;
 
     if (eq.syncAction === 'create') {
+      // Create não precisa verificar conflito — é inserção nova
       result = await createEquipmentRemote(toSync);
+      if (result.ok) {
+        // Buscar updated_at remoto após criação para salvar como base
+        const fetchResult = await fetchEquipmentById(eq.id);
+        const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+        await db.equipamentos.update(eq.id, {
+          sincronizado: true,
+          syncAction: undefined,
+          syncError: undefined,
+          syncConflict: false,
+          syncConflictReason: undefined,
+          syncBaseUpdatedAt: remoteUpdatedAt,
+          updatedAt: remoteUpdatedAt,
+        });
+        ok++;
+        console.log('[sync] Equipamento %s criado com sucesso', eq.id);
+      }
     } else if (eq.syncAction === 'update') {
-      result = await updateEquipmentRemote(toSync);
+      // Verificar conflito antes de atualizar
+      if (import.meta.env.DEV) {
+        console.log(`[conflict] checking equipment ${eq.id}: base=${eq.syncBaseUpdatedAt}`);
+      }
+      const remoteResult = await fetchEquipmentById(eq.id);
+      if (!remoteResult.ok) {
+        if (remoteResult.code === 'not_found') {
+          // Remoto não existe — tratar como criação
+          result = await createEquipmentRemote(toSync);
+          if (result.ok) {
+            const fetchResult = await fetchEquipmentById(eq.id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+            await db.equipamentos.update(eq.id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              syncBaseUpdatedAt: remoteUpdatedAt,
+              updatedAt: remoteUpdatedAt,
+            });
+            ok++;
+            console.log('[sync] Equipamento %s recriado no servidor (não existia)', eq.id);
+          }
+        } else {
+          // Erro de rede — preservar pendência
+          console.error('[sync.pushEquipments] Erro ao verificar conflito para update', { id: eq.id });
+          errors++;
+          continue;
+        }
+      } else {
+        const remote = remoteResult.data!;
+        if (import.meta.env.DEV) {
+          console.log(`[conflict] remote updated_at=${remote.updatedAt}, local base=${eq.syncBaseUpdatedAt}`);
+        }
+        if (isConflict(eq.syncBaseUpdatedAt, remote.updatedAt)) {
+          await markConflict(eq.id, remote.updatedAt ?? '', 'Este registro foi alterado em outro dispositivo antes da sincronização. Revise antes de continuar.');
+          if (import.meta.env.DEV) console.log(`[conflict] update blocked for equipment ${eq.id}`);
+          // Não conta como erro — é conflito controlado
+        } else {
+          if (import.meta.env.DEV) console.log(`[conflict] update allowed for equipment ${eq.id}`);
+          result = await updateEquipmentRemote(toSync);
+          if (result.ok) {
+            // Buscar updated_at remoto após update
+            const fetchResult = await fetchEquipmentById(eq.id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+            await db.equipamentos.update(eq.id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              syncBaseUpdatedAt: remoteUpdatedAt,
+              updatedAt: remoteUpdatedAt,
+            });
+            ok++;
+            console.log('[sync] Equipamento %s atualizado com sucesso', eq.id);
+          } else {
+            console.error('[sync] Falha ao atualizar equipamento %s — mantendo sincronizado: false', eq.id);
+            errors++;
+          }
+        }
+      }
     } else {
       // Legacy — sem syncAction: tenta detectar se é create ou update
-      const remote = await findEquipmentById(eq.id);
-      if (remote) {
+      const remoteResult = await fetchEquipmentById(eq.id);
+      if (remoteResult.ok && remoteResult.data) {
+        const remote = remoteResult.data;
+        if (isConflict(eq.syncBaseUpdatedAt, remote.updatedAt)) {
+          await markConflict(eq.id, remote.updatedAt ?? '', 'Conflito detectado em registro legado. Revise antes de continuar.');
+          continue;
+        }
         result = await updateEquipmentRemote(toSync);
+        if (result.ok) {
+          const fetchResult = await fetchEquipmentById(eq.id);
+          const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+          await db.equipamentos.update(eq.id, {
+            sincronizado: true,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            syncBaseUpdatedAt: remoteUpdatedAt,
+            updatedAt: remoteUpdatedAt,
+          });
+          ok++;
+        } else {
+          console.error('[sync] Falha ao sincronizar equipamento %s — mantendo sincronizado: false', eq.id);
+          errors++;
+        }
+      } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+        console.error('[sync] Erro ao verificar equipamento remoto %s', eq.id);
+        errors++;
       } else {
         result = await createEquipmentRemote(toSync);
-      }
-    }
-
-    if (result.ok) {
-      await db.equipamentos.update(eq.id, {
-        sincronizado: true,
-        syncAction: undefined,
-        syncError: undefined,
-      });
-      ok++;
-      console.log('[sync] Equipamento %s sincronizado com sucesso', eq.id);
-    } else {
-      if (result.code === 'duplicate') {
-        // Conflito — marca syncError e mantém dados intactos (sem rollback)
-        await db.equipamentos.update(eq.id, {
-          syncError: 'duplicate',
-        });
-        console.warn(
-          '[sync] Conflito de duplicidade para %s — syncError=duplicate. ' +
-          'O usuário precisa alterar a TAG para sincronizar.', eq.id,
-        );
-        // Não incrementa errors — conflito não é erro transitório
-      } else {
-        console.error('[sync] Falha ao sincronizar equipamento %s — mantendo sincronizado: false', eq.id);
-        errors++;
+        if (result.ok) {
+          const fetchResult = await fetchEquipmentById(eq.id);
+          const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+          await db.equipamentos.update(eq.id, {
+            sincronizado: true,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            syncBaseUpdatedAt: remoteUpdatedAt,
+            updatedAt: remoteUpdatedAt,
+          });
+          ok++;
+        } else if (result.code === 'duplicate') {
+          await db.equipamentos.update(eq.id, { syncError: 'duplicate' });
+          console.warn('[sync] Conflito de duplicidade para %s — syncError=duplicate', eq.id);
+        } else {
+          console.error('[sync] Falha ao sincronizar equipamento %s', eq.id);
+          errors++;
+        }
       }
     }
   }
@@ -287,15 +441,62 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
   let errors = 0;
   let deleted = 0;
 
-  // 1) pending deletes — soft delete
+  const markConflict = async (id: string, remoteUpdatedAt: string, reason: string) => {
+    if (import.meta.env.DEV) {
+      console.log(`[conflict] detected for action plan ${id}: ${reason}`);
+    }
+    await db.planosAcao.update(id, {
+      syncConflict: true,
+      syncConflictReason: reason,
+      remoteUpdatedAtAtConflict: remoteUpdatedAt,
+      syncError: 'conflict',
+      sincronizado: false,
+    });
+  };
+
+  // 1) pending deletes — soft delete com verificação de conflito
   const toDelete = await db.planosAcao.filter((p) => !!p.pendingDelete).toArray();
   for (const plan of toDelete) {
+    // Verificar conflito antes de deletar
+    const remoteResult = await fetchActionPlanById(plan.id);
+    if (remoteResult.ok && remoteResult.data) {
+      const remote = remoteResult.data;
+      if (remote.deletedAt) {
+        // Já deletado remotamente — reconciliar
+        await db.planosAcao.update(plan.id, {
+          pendingDelete: false,
+          sincronizado: true,
+          syncAction: undefined,
+          syncConflict: false,
+          syncConflictReason: undefined,
+          syncError: undefined,
+          deletedAt: remote.deletedAt,
+          deletedBy: remote.deletedBy ?? userId ?? null,
+          updatedAt: remote.updatedAt ?? new Date().toISOString(),
+        });
+        deleted++;
+        if (import.meta.env.DEV) console.log('[sync] Plano %s já deletado remotamente — reconciliado', plan.id);
+        continue;
+      }
+      if (isConflict(plan.syncBaseUpdatedAt, remote.updatedAt)) {
+        await markConflict(plan.id, remote.updatedAt ?? '', 'Este plano foi alterado em outro dispositivo antes da exclusão. Revise antes de excluir.');
+        errors++;
+        continue;
+      }
+    } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+      console.error('[sync.pushActionPlans] Erro ao verificar conflito para exclusão', { id: plan.id });
+      errors++;
+      continue;
+    }
     const result = await softDeleteActionPlanRemote(plan.id, userId);
     if (result.ok) {
       await db.planosAcao.update(plan.id, {
         pendingDelete: false,
         sincronizado: true,
         syncAction: undefined,
+        syncConflict: false,
+        syncConflictReason: undefined,
+        syncError: undefined,
         deletedAt: new Date().toISOString(),
         deletedBy: userId ?? null,
         updatedAt: new Date().toISOString(),
@@ -322,33 +523,130 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
 
     if (plan.syncAction === 'create') {
       result = await createActionPlanRemote(toSync);
+      if (result.ok) {
+        const fetchResult = await fetchActionPlanById(plan.id);
+        const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+        await db.planosAcao.update(plan.id, {
+          sincronizado: true,
+          syncAction: undefined,
+          syncError: undefined,
+          syncConflict: false,
+          syncConflictReason: undefined,
+          syncBaseUpdatedAt: remoteUpdatedAt,
+          updatedAt: remoteUpdatedAt,
+        });
+        ok++;
+        console.log('[sync] Plano %s criado com sucesso', plan.id);
+      }
     } else if (plan.syncAction === 'update') {
-      result = await updateActionPlanRemote(toSync);
+      if (import.meta.env.DEV) {
+        console.log(`[conflict] checking action plan ${plan.id}: base=${plan.syncBaseUpdatedAt}`);
+      }
+      const remoteResult = await fetchActionPlanById(plan.id);
+      if (!remoteResult.ok) {
+        if (remoteResult.code === 'not_found') {
+          result = await createActionPlanRemote(toSync);
+          if (result.ok) {
+            const fetchResult = await fetchActionPlanById(plan.id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+            await db.planosAcao.update(plan.id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              syncBaseUpdatedAt: remoteUpdatedAt,
+              updatedAt: remoteUpdatedAt,
+            });
+            ok++;
+            console.log('[sync] Plano %s recriado no servidor (não existia)', plan.id);
+          }
+        } else {
+          console.error('[sync.pushActionPlans] Erro ao verificar conflito para update', { id: plan.id });
+          errors++;
+          continue;
+        }
+      } else {
+        const remote = remoteResult.data!;
+        if (import.meta.env.DEV) {
+          console.log(`[conflict] remote updated_at=${remote.updatedAt}, local base=${plan.syncBaseUpdatedAt}`);
+        }
+        if (isConflict(plan.syncBaseUpdatedAt, remote.updatedAt)) {
+          await markConflict(plan.id, remote.updatedAt ?? '', 'Este registro foi alterado em outro dispositivo antes da sincronização. Revise antes de continuar.');
+          if (import.meta.env.DEV) console.log(`[conflict] update blocked for action plan ${plan.id}`);
+        } else {
+          if (import.meta.env.DEV) console.log(`[conflict] update allowed for action plan ${plan.id}`);
+          result = await updateActionPlanRemote(toSync);
+          if (result.ok) {
+            const fetchResult = await fetchActionPlanById(plan.id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+            await db.planosAcao.update(plan.id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              syncBaseUpdatedAt: remoteUpdatedAt,
+              updatedAt: remoteUpdatedAt,
+            });
+            ok++;
+            console.log('[sync] Plano %s atualizado com sucesso', plan.id);
+          } else {
+            console.error('[sync] Falha ao atualizar plano %s — mantendo sincronizado: false', plan.id);
+            errors++;
+          }
+        }
+      }
     } else {
       // Legacy — sem syncAction: tenta create; se duplicar, faz update
-      result = await createActionPlanRemote(toSync);
-      if (!result.ok && result.code === 'duplicate') {
+      const remoteResult = await fetchActionPlanById(plan.id);
+      if (remoteResult.ok && remoteResult.data) {
+        const remote = remoteResult.data;
+        if (isConflict(plan.syncBaseUpdatedAt, remote.updatedAt)) {
+          await markConflict(plan.id, remote.updatedAt ?? '', 'Conflito detectado em registro legado. Revise antes de continuar.');
+          continue;
+        }
         result = await updateActionPlanRemote(toSync);
-      }
-    }
-
-    if (result.ok) {
-      await db.planosAcao.update(plan.id, {
-        sincronizado: true,
-        syncAction: undefined,
-        syncError: undefined,
-      });
-      ok++;
-      console.log('[sync] Plano %s sincronizado com sucesso', plan.id);
-    } else {
-      if (result.code === 'duplicate') {
-        await db.planosAcao.update(plan.id, {
-          syncError: 'duplicate',
-        });
-        console.warn('[sync] Conflito de duplicidade para plano %s — syncError=duplicate', plan.id);
-      } else {
-        console.error('[sync] Falha ao sincronizar plano %s — mantendo sincronizado: false', plan.id);
+        if (result.ok) {
+          const fetchResult = await fetchActionPlanById(plan.id);
+          const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+          await db.planosAcao.update(plan.id, {
+            sincronizado: true,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            syncBaseUpdatedAt: remoteUpdatedAt,
+            updatedAt: remoteUpdatedAt,
+          });
+          ok++;
+        }
+      } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+        console.error('[sync] Erro ao verificar plano remoto %s', plan.id);
         errors++;
+        continue;
+      } else {
+        result = await createActionPlanRemote(toSync);
+        if (result.ok) {
+          const fetchResult = await fetchActionPlanById(plan.id);
+          const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+          await db.planosAcao.update(plan.id, {
+            sincronizado: true,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            syncBaseUpdatedAt: remoteUpdatedAt,
+            updatedAt: remoteUpdatedAt,
+          });
+          ok++;
+        } else if (result.code === 'duplicate') {
+          await db.planosAcao.update(plan.id, { syncError: 'duplicate' });
+          console.warn('[sync] Conflito de duplicidade para plano %s — syncError=duplicate', plan.id);
+        } else {
+          console.error('[sync] Falha ao sincronizar plano %s', plan.id);
+          errors++;
+        }
       }
     }
   }
@@ -404,13 +702,17 @@ async function pullEquipments(): Promise<PullResult> {
       if (!local) {
         // Não inserir tombstones de equipamentos que este cliente nunca viu
         if (normalEq.deletedAt) continue;
-        await db.equipamentos.put({ ...normalEq, sincronizado: true });
+        await db.equipamentos.put({
+          ...normalEq,
+          sincronizado: true,
+          syncBaseUpdatedAt: normalEq.updatedAt ?? null,
+        });
         imported++;
         continue;
       }
 
-      // Preservar alterações locais pendentes
-      if (!local.sincronizado || local.pendingDelete || local.syncAction || local.statusUpdatePending || local.syncError) {
+      // Preservar alterações locais pendentes (incluindo conflitos)
+      if (!local.sincronizado || local.pendingDelete || local.syncAction || local.statusUpdatePending || local.syncError || local.syncConflict) {
         continue;
       }
 
@@ -420,6 +722,7 @@ async function pullEquipments(): Promise<PullResult> {
           ...normalEq,
           sincronizado: true,
           pendingDelete: false,
+          syncBaseUpdatedAt: normalEq.updatedAt ?? null,
         });
         imported++;
         if (import.meta.env.DEV) console.log('[sync] Equipamento %s marcado como deletado (tombstone remota)', normalEq.id);
@@ -427,7 +730,11 @@ async function pullEquipments(): Promise<PullResult> {
       }
 
       // Linha local totalmente sincronizada → sobrescrever com dados do cloud
-      await db.equipamentos.put({ ...normalEq, sincronizado: true });
+      await db.equipamentos.put({
+        ...normalEq,
+        sincronizado: true,
+        syncBaseUpdatedAt: normalEq.updatedAt ?? null,
+      });
       imported++;
     }
 
@@ -560,13 +867,17 @@ async function pullActionPlans(): Promise<PullResult> {
       if (!local) {
         // Não inserir tombstones que este cliente nunca viu
         if (plan.deletedAt) continue;
-        await db.planosAcao.put({ ...plan, sincronizado: true });
+        await db.planosAcao.put({
+          ...plan,
+          sincronizado: true,
+          syncBaseUpdatedAt: plan.updatedAt ?? null,
+        });
         imported++;
         continue;
       }
 
-      // Preservar alterações locais pendentes
-      if (!local.sincronizado || local.pendingDelete || local.syncAction || local.syncError) {
+      // Preservar alterações locais pendentes (incluindo conflitos)
+      if (!local.sincronizado || local.pendingDelete || local.syncAction || local.syncError || local.syncConflict) {
         continue;
       }
 
@@ -576,6 +887,7 @@ async function pullActionPlans(): Promise<PullResult> {
           ...plan,
           sincronizado: true,
           pendingDelete: false,
+          syncBaseUpdatedAt: plan.updatedAt ?? null,
         });
         imported++;
         if (import.meta.env.DEV) console.log('[sync] Plano %s marcado como deletado (tombstone remota)', plan.id);
@@ -583,7 +895,11 @@ async function pullActionPlans(): Promise<PullResult> {
       }
 
       // Linha local totalmente sincronizada → sobrescrever com dados do cloud
-      await db.planosAcao.put({ ...plan, sincronizado: true });
+      await db.planosAcao.put({
+        ...plan,
+        sincronizado: true,
+        syncBaseUpdatedAt: plan.updatedAt ?? null,
+      });
       imported++;
     }
 
@@ -760,12 +1076,20 @@ export async function syncAll(
   };
 }
 
-/** Counts the rows that still need to be pushed — surfaced in the UI. */
+/** Counts the rows that still need to be pushed — surfaced in the UI.
+ *  Includes conflict rows (syncConflict === true) since they block sync. */
 export async function pendingSyncCount(): Promise<number> {
   const eqs = await db.equipamentos.filter((e) => !e.sincronizado || !!e.pendingDelete).count();
   const ins = await db.inspecoes.filter((i) => !i.sincronizado || !!i.pendingDelete).count();
   const aps = await db.planosAcao.filter((p) => !p.sincronizado || !!p.pendingDelete).count();
   return eqs + ins + aps;
+}
+
+/** Counts rows in conflict (syncConflict === true) for UI badges. */
+export async function conflictCount(): Promise<{ equipments: number; actionPlans: number }> {
+  const equipments = await db.equipamentos.filter((e) => !!e.syncConflict).count();
+  const actionPlans = await db.planosAcao.filter((p) => !!p.syncConflict).count();
+  return { equipments, actionPlans };
 }
 
 // Re-export the mapper helpers for convenience.

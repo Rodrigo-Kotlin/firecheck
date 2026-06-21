@@ -42,6 +42,16 @@ export type LocalEquipment = Equipment & {
   /** Indica que o status foi alterado por uma inspeção e deve ser sincronizado
    *  via RPC em pushInspections(), não via pushEquipments(). */
   statusUpdatePending?: boolean;
+  /** Valor de updatedAt remoto conhecido no momento em que o registro foi
+   *  carregado ou sincronizado pela última vez. Usado para detectar conflito. */
+  syncBaseUpdatedAt?: string | null;
+  /** Indica que o registro local tentou sincronizar, mas o remoto mudou
+   *  desde a última versão base conhecida. */
+  syncConflict?: boolean;
+  /** Mensagem técnica/amigável do conflito. */
+  syncConflictReason?: string | null;
+  /** Valor remoto de updatedAt no momento em que o conflito foi detectado. */
+  remoteUpdatedAtAtConflict?: string | null;
 };
 
 /** Action plan row as stored in Dexie (adds sync metadata). */
@@ -55,6 +65,16 @@ export type LocalActionPlan = ActionPlan & {
   syncAction?: 'create' | 'update' | 'delete';
   /** Erro persistente da última tentativa de sync. */
   syncError?: string;
+  /** Valor de updatedAt remoto conhecido no momento em que o registro foi
+   *  carregado ou sincronizado pela última vez. Usado para detectar conflito. */
+  syncBaseUpdatedAt?: string | null;
+  /** Indica que o registro local tentou sincronizar, mas o remoto mudou
+   *  desde a última versão base conhecida. */
+  syncConflict?: boolean;
+  /** Mensagem técnica/amigável do conflito. */
+  syncConflictReason?: string | null;
+  /** Valor remoto de updatedAt no momento em que o conflito foi detectado. */
+  remoteUpdatedAtAtConflict?: string | null;
 };
 
 /** Inspection row as stored in Dexie (already had `sincronizado`). */

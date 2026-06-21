@@ -87,6 +87,27 @@ export async function updateActionPlanRemote(plan: ActionPlan): Promise<ServiceR
   return { ok: true };
 }
 
+/** Fetch a single action plan by ID, returning a ServiceResult that
+ *  distinguishes "not found" from network errors. */
+export async function fetchActionPlanById(id: string): Promise<ServiceResult<ActionPlan>> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+  const { data, error } = await supabase
+    .from('planos_acao')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) {
+    console.error('[actionPlan.fetchById]', error);
+    return { ok: false, code: 'network', message: error.message };
+  }
+  if (!data) {
+    return { ok: false, code: 'not_found', message: 'Plano de ação não encontrado no servidor.' };
+  }
+  return { ok: true, data: dbToActionPlan(data as DbPlanoAcao) };
+}
+
 export async function softDeleteActionPlanRemote(id: string, userId?: string): Promise<ServiceResult> {
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.' };

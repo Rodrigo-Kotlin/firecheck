@@ -8,6 +8,10 @@ const SYNC_META_FIELDS = new Set([
   'syncAction',
   'syncError',
   'statusUpdatePending',
+  'syncBaseUpdatedAt',
+  'syncConflict',
+  'syncConflictReason',
+  'remoteUpdatedAtAtConflict',
 ]);
 
 const COMMON_FIELDS = new Set([
@@ -252,8 +256,11 @@ export function stripActionPlanSyncMeta(row: Partial<LocalActionPlan>): ActionPl
   const {
     sincronizado: _s, pendingDelete: _p,
     syncAction: _a, syncError: _e,
+    syncBaseUpdatedAt: _b, syncConflict: _c,
+    syncConflictReason: _r, remoteUpdatedAtAtConflict: _u,
     ...plan
   } = row;
   void _s; void _p; void _a; void _e;
+  void _b; void _c; void _r; void _u;
   return plan as ActionPlan;
 }

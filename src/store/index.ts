@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus } from '../types';
 import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan } from '../db';
-import { syncAll, pendingSyncCount } from '../services/sync';
+import { syncAll, pendingSyncCount, conflictCount } from '../services/sync';
 import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote } from '../services/equipmentService';
 import { carregarInspecoes } from '../services/inspectionService';
 import { carregarPlanosDeAcao } from '../services/actionPlanService';
@@ -119,7 +119,11 @@ interface AppState {
   lastSyncAt: number | null;
   syncEnabled: boolean;
 
+  /** Number of records in conflict (per entity type). */
+  conflictCounts: { equipments: number; actionPlans: number };
+
   // ---- actions ----
+  refreshConflictCount: () => Promise<void>;
   login: (email: string, pass: string) => Promise<void>;
   register: (input: { email: string; password: string; nome: string; cargo: string }) => Promise<void>;
   logout: () => Promise<void>;
@@ -167,8 +171,15 @@ export const useAppStore = create<AppState>()(
         const rows = await db.planosAcao
           .filter((p) => !p.pendingDelete && !p.deletedAt)
           .toArray();
-        return rows.map(({ sincronizado: _s, pendingDelete: _p, syncAction: _a, syncError: _e, ...rest }) => {
+        return rows.map(({
+          sincronizado: _s, pendingDelete: _p,
+          syncAction: _a, syncError: _e,
+          syncBaseUpdatedAt: _b, syncConflict: _c,
+          syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru,
+          ...rest
+        }) => {
           void _s; void _p; void _a; void _e;
+          void _b; void _c; void _cr; void _ru;
           return rest as ActionPlan;
         });
       };
@@ -194,8 +205,15 @@ export const useAppStore = create<AppState>()(
             const freshEqs: Equipment[] = [];
             for (const e of dbEqs) {
               if (e.pendingDelete || e.deletedAt) continue;
-              const { sincronizado: _s, pendingDelete: _p, ...clean } = e;
-              void _s; void _p;
+              const {
+                sincronizado: _s, pendingDelete: _p,
+                syncAction: _sa, syncError: _se, statusUpdatePending: _su,
+                syncBaseUpdatedAt: _b, syncConflict: _c,
+                syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru,
+                ...clean
+              } = e;
+              void _s; void _p; void _sa; void _se; void _su;
+              void _b; void _c; void _cr; void _ru;
               freshEqs.push(clean as unknown as Equipment);
             }
 
@@ -217,6 +235,7 @@ export const useAppStore = create<AppState>()(
 
           set({ lastSyncAt: Date.now() });
           await get().refreshPendingCount();
+          await get().refreshConflictCount();
         } catch (err) {
           console.error('[store.sync]', err);
         } finally {
@@ -245,6 +264,7 @@ export const useAppStore = create<AppState>()(
         pending: 0,
         lastSyncAt: null,
         syncEnabled: isSupabaseConfigured,
+        conflictCounts: { equipments: 0, actionPlans: 0 },
 
         // -----------------------------------------------------------------
         // Auth — Supabase Auth + tabela `profiles`. A sessão é mantida pelo
@@ -321,6 +341,15 @@ export const useAppStore = create<AppState>()(
           }
           const count = await pendingSyncCount();
           set({ pending: count });
+        },
+
+        refreshConflictCount: async () => {
+          if (!isSupabaseConfigured) {
+            set({ conflictCounts: { equipments: 0, actionPlans: 0 } });
+            return;
+          }
+          const counts = await conflictCount();
+          set({ conflictCounts: counts });
         },
 
         triggerSync: async () => {

@@ -24,11 +24,11 @@ function notConfigured<T>(op: string): T | null {
 // Tipos compartilhados
 // ---------------------------------------------------------------------------
 
-export interface ServiceResult {
+export interface ServiceResult<T = Equipment> {
   ok: boolean;
   code?: 'duplicate' | 'permission_denied' | 'not_found' | 'network' | 'unknown' | 'not_applied' | 'invalid_status' | 'not_authenticated' | 'rpc_error';
   message?: string;
-  data?: Equipment;
+  data?: T;
 }
 
 /** Resultado de uma operação de busca (listagem) no Supabase.
@@ -72,6 +72,27 @@ export async function findEquipmentById(id: string): Promise<Equipment | null> {
   }
   if (!data) return null;
   return dbToEquipment(data as DbEquipamento);
+}
+
+/** Fetch a single equipment by ID, returning a ServiceResult that
+ *  distinguishes "not found" from network errors. */
+export async function fetchEquipmentById(id: string): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+  const { data, error } = await supabase
+    .from('equipamentos')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) {
+    console.error('[equipment.fetchEquipmentById]', error);
+    return { ok: false, code: 'network', message: error.message };
+  }
+  if (!data) {
+    return { ok: false, code: 'not_found', message: 'Equipamento não encontrado no servidor.' };
+  }
+  return { ok: true, data: dbToEquipment(data as DbEquipamento) };
 }
 
 export async function createEquipmentRemote(eq: Equipment): Promise<ServiceResult> {
@@ -325,10 +346,13 @@ function stripSyncMeta(row: Partial<LocalEquipment>): Equipment {
   const {
     sincronizado: _s, pendingDelete: _p,
     syncAction: _a, syncError: _e, statusUpdatePending: _su,
+    syncBaseUpdatedAt: _b, syncConflict: _cf, syncConflictReason: _cr,
+    remoteUpdatedAtAtConflict: _ru,
     deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u,
     ...eq
   } = row;
   void _s; void _p; void _a; void _e; void _su;
+  void _b; void _cf; void _cr; void _ru;
   void _d; void _db; void _c; void _u;
   return eq as Equipment;
 }
