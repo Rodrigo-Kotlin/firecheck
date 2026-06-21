@@ -180,7 +180,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         updatedAt: new Date().toISOString(),
       });
       deleted++;
-      console.log('[sync] Equipamento %s deletado (soft) do Supabase', eq.id);
+      if (import.meta.env.DEV) console.log('[sync] Equipamento %s deletado (soft) do Supabase', eq.id);
     } else {
       console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', { id: eq.id });
       errors++;
@@ -221,7 +221,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
           updatedAt: remoteUpdatedAt,
         });
         ok++;
-        console.log('[sync] Equipamento %s criado com sucesso', eq.id);
+        if (import.meta.env.DEV) console.log('[sync] Equipamento %s criado com sucesso', eq.id);
       }
     } else if (eq.syncAction === 'update') {
       // Verificar conflito antes de atualizar
@@ -246,7 +246,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
               updatedAt: remoteUpdatedAt,
             });
             ok++;
-            console.log('[sync] Equipamento %s recriado no servidor (não existia)', eq.id);
+            if (import.meta.env.DEV) console.log('[sync] Equipamento %s recriado no servidor (não existia)', eq.id);
           }
         } else {
           // Erro de rede — preservar pendência
@@ -280,7 +280,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
               updatedAt: remoteUpdatedAt,
             });
             ok++;
-            console.log('[sync] Equipamento %s atualizado com sucesso', eq.id);
+            if (import.meta.env.DEV) console.log('[sync] Equipamento %s atualizado com sucesso', eq.id);
           } else {
             console.error('[sync] Falha ao atualizar equipamento %s — mantendo sincronizado: false', eq.id);
             errors++;
@@ -334,7 +334,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
           ok++;
         } else if (result.code === 'duplicate') {
           await db.equipamentos.update(eq.id, { syncError: 'duplicate' });
-          console.warn('[sync] Conflito de duplicidade para %s — syncError=duplicate', eq.id);
+          if (import.meta.env.DEV) console.warn('[sync] Conflito de duplicidade para %s — syncError=duplicate', eq.id);
         } else {
           console.error('[sync] Falha ao sincronizar equipamento %s', eq.id);
           errors++;
@@ -424,7 +424,7 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       }
 
       ok++;
-      console.log('[sync] Inspeção %s e status do equipamento %s sincronizados com sucesso',
+      if (import.meta.env.DEV) console.log('[sync] Inspeção %s e status do equipamento %s sincronizados com sucesso',
         insp.id, insp.equipmentId);
     } else {
       // RPC falhou — NÃO marcar inspeção como sincronizada para retentar
@@ -502,7 +502,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         updatedAt: new Date().toISOString(),
       });
       deleted++;
-      console.log('[sync] Plano %s deletado (soft) do Supabase', plan.id);
+      if (import.meta.env.DEV) console.log('[sync] Plano %s deletado (soft) do Supabase', plan.id);
     } else {
       console.error('[sync.pushActionPlans] Falha ao deletar plano no Supabase', { id: plan.id });
       errors++;
@@ -536,7 +536,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
           updatedAt: remoteUpdatedAt,
         });
         ok++;
-        console.log('[sync] Plano %s criado com sucesso', plan.id);
+        if (import.meta.env.DEV) console.log('[sync] Plano %s criado com sucesso', plan.id);
       }
     } else if (plan.syncAction === 'update') {
       if (import.meta.env.DEV) {
@@ -559,7 +559,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
               updatedAt: remoteUpdatedAt,
             });
             ok++;
-            console.log('[sync] Plano %s recriado no servidor (não existia)', plan.id);
+            if (import.meta.env.DEV) console.log('[sync] Plano %s recriado no servidor (não existia)', plan.id);
           }
         } else {
           console.error('[sync.pushActionPlans] Erro ao verificar conflito para update', { id: plan.id });
@@ -590,7 +590,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
               updatedAt: remoteUpdatedAt,
             });
             ok++;
-            console.log('[sync] Plano %s atualizado com sucesso', plan.id);
+            if (import.meta.env.DEV) console.log('[sync] Plano %s atualizado com sucesso', plan.id);
           } else {
             console.error('[sync] Falha ao atualizar plano %s — mantendo sincronizado: false', plan.id);
             errors++;
@@ -642,7 +642,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
           ok++;
         } else if (result.code === 'duplicate') {
           await db.planosAcao.update(plan.id, { syncError: 'duplicate' });
-          console.warn('[sync] Conflito de duplicidade para plano %s — syncError=duplicate', plan.id);
+          if (import.meta.env.DEV) console.warn('[sync] Conflito de duplicidade para plano %s — syncError=duplicate', plan.id);
         } else {
           console.error('[sync] Falha ao sincronizar plano %s', plan.id);
           errors++;
@@ -953,7 +953,7 @@ export async function syncAll(
   options: SyncOptions = {},
 ): Promise<SyncReport> {
   if (_syncInProgress) {
-    console.log('[sync] sync já em andamento — ignorando chamada concorrente');
+    if (import.meta.env.DEV) console.log('[sync] sync já em andamento — ignorando chamada concorrente');
     return skip('sync-in-progress');
   }
 
