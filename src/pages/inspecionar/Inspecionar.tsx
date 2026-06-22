@@ -20,9 +20,11 @@ import {
   Info,
   ImagePlus,
   Loader2,
+  User,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
+import { INSPECTOR_OPTIONS } from '../../config/inspectors';
 
 type ChecklistValue = 'OK' | 'ATENCAO' | 'REPROVADO' | 'N.A.';
 
@@ -478,6 +480,7 @@ export default function Inspecionar() {
 
   const [success, setSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [inspectorName, setInspectorName] = useState(() => localStorage.getItem('firecheck_last_inspector_name') || '');
   const [isSaving, setIsSaving] = useState(false);
 
   const selectedEquipment = equipments.find((e) => e.id === eqId);
@@ -536,6 +539,12 @@ export default function Inspecionar() {
     // Prevent double-click
     if (isSaving) return;
 
+    if (!inspectorName) {
+      setErrorMsg('Selecione o inspetor responsável pela inspeção.');
+      setIsSaving(false);
+      return;
+    }
+
     // Determine status logic.
     // REPROVADO > ATENCAO > date warnings > regular.
     let finalStatus: EquipmentStatus = 'regular';
@@ -561,10 +570,11 @@ export default function Inspecionar() {
     setErrorMsg('');
 
     try {
+      localStorage.setItem('firecheck_last_inspector_name', inspectorName);
       await addInspection({
         equipmentId: selectedEquipment.id,
         data: new Date().toISOString().split('T')[0],
-        inspetor: user?.nome || 'Inspetor',
+        inspetor: inspectorName,
         status: finalStatus,
         observacoes,
         userId: user?.id,
@@ -799,6 +809,26 @@ export default function Inspecionar() {
           {/* Date, photo and observations — only when equipment is selected */}
           {selectedEquipment && (
             <>
+              {/* Inspector */}
+              <div className="card-subtle bg-white space-y-2">
+                <label htmlFor="inspectorName" className="field-label flex items-center gap-1.5">
+                  <User className="w-4 h-4" />
+                  Inspetor Responsável *
+                </label>
+                <select
+                  id="inspectorName"
+                  required
+                  value={inspectorName}
+                  onChange={(e) => setInspectorName(e.target.value)}
+                  className={`field-input appearance-none ${!inspectorName ? 'text-gray-400' : ''}`}
+                >
+                  <option value="" disabled>Selecione o inspetor responsável</option>
+                  {INSPECTOR_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.nome}>{opt.nome}</option>
+                  ))}
+                </select>
+              </div>
+
               {/* Date */}
               <div className="card-subtle bg-white space-y-2">
                 <label htmlFor="validadeDate" className="field-label flex items-center gap-1.5">
