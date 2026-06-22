@@ -623,9 +623,13 @@ export const useAppStore = create<AppState>()(
             return { ok: false, mode: 'local', message: 'Equipamento não encontrado.' };
           }
 
+          // Bloquear alteração manual de status — é atualizado apenas pelo fluxo de inspeção
+          const safeUpdates = { ...updates };
+          delete (safeUpdates as Record<string, unknown>).status;
+
           const updated: Equipment = {
             ...current,
-            ...updates,
+            ...safeUpdates,
             updatedAt: new Date().toISOString(),
           };
 
