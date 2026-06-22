@@ -19,12 +19,10 @@ import {
 } from 'lucide-react';
 import {
   EQUIP_TYPES,
-  EQUIP_STATUS,
   STATUS_LABEL,
   FIELD_CONFIGS,
   type FieldConfig,
 } from '../../constants/equipmentFormConfig';
-import type { EquipmentStatus } from '../../types';
 
 const schema = z.object({
   tipo: z.string().min(1, { message: 'Selecione o tipo do equipamento' }),
@@ -308,7 +306,6 @@ export default function EditarEquipamento() {
 
     const updates: Record<string, unknown> = {
       tipo: data.tipo,
-      status: data.status as EquipmentStatus,
       local: data.local,
       setor: data.setor,
       pavimento: data.pavimento || undefined,
@@ -419,12 +416,15 @@ export default function EditarEquipamento() {
           <>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               <FormSection title="Identificação" icon={Tag}>
-                <FormField label="Status" required error={errors.status?.message} htmlFor="status">
-                  <select id="status" {...register('status')} className={`field-input ${errors.status ? 'border-critical' : ''}`}>
-                    {EQUIP_STATUS.map((s) => (
-                      <option key={s} value={s}>{STATUS_LABEL[s]}</option>
-                    ))}
-                  </select>
+                <FormField label="Status">
+                  <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <ShieldAlert className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                    <span className="text-sm font-bold text-gray-700">{STATUS_LABEL[equipment.status] || equipment.status}</span>
+                    <span className="text-[10px] text-gray-400 ml-auto">Somente leitura</span>
+                  </div>
+                  <p className="text-[11px] text-gray-500 font-medium mt-1.5 leading-relaxed">
+                    O status do equipamento é atualizado automaticamente pelas inspeções e não pode ser alterado no cadastro.
+                  </p>
                 </FormField>
 
                 {fieldsPorSecao.identificacao.map((f) => (
