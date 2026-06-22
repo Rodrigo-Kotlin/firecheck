@@ -2,7 +2,7 @@
 
 > Documento de referência para IAs e desenvolvedores.
 > Leia antes de sugerir mudanças ou iniciar novas sessões.
-> Última atualização: 2026-06-21 · Prompt 08 (Resolução manual de conflitos + auditoria PWA/cache + testes finais) concluído.
+> Última atualização: 2026-06-22 · Prompt 08 (Resolução manual de conflitos + seleção de inspetor nas inspeções) concluído.
 
 ---
 
@@ -516,6 +516,31 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 ---
 
+### 8. Atualização pós-auditoria — Seleção de inspetor nas inspeções
+
+**Data**: 2026-06-22 · **Branch**: `fix/firecheck-08-resolucao-manual-conflitos`
+
+**Contexto**: Com o login compartilhado (usuário padrão para todos os inspetores), o campo `inspetor` era populado automaticamente com `user?.nome || 'Inspetor'`, impossibilitando identificar qual inspetor de fato realizou a inspeção.
+
+**Solução**:
+1. **`src/config/inspectors.ts`** — arquivo de configuração com os 4 inspetores fixos (ALLAN HENNING, DANILLO UCHÔA, DAVID HILL, YWERNG SOUZA).
+2. **`Inspecionar.tsx`** — select obrigatório "Inspetor Responsável" inserido entre a escolha do equipamento e a data de validade, com placeholder `Selecione o inspetor responsável`.
+3. **Validação** — impede submeter sem selecionar um inspetor.
+4. **Persistência local** — último inspetor escolhido salvo em `localStorage` (`firecheck_last_inspector_name`) para pré-preenchimento na próxima inspeção.
+5. **Valor remoto** — `inspetor` agora envia o nome selecionado em vez de `user?.nome`.
+6. **Nenhuma migration necessária**: a coluna `inspetor text` já existe em `public.inspecoes` desde a migration `0001_init_schema.sql`.
+
+**Arquivos alterados**:
+- `src/config/inspectors.ts` (criado)
+- `src/pages/inspecionar/Inspecionar.tsx` (modificado)
+
+**Fallback em UI de histórico/relatórios**: `inspecao.inspetor || profile.nome || user.email || 'Não informado'` — não implementado nesta etapa pois o fluxo existente já exibe `insp.inspetor` diretamente (válido tanto para inspeções novas quanto antigas).
+
+`npm run lint`: 0 erros, 1 warning pré-existente (mesmo).
+`npm run build`: tsc + vite build sem erros.
+
+---
+
 ## 10. Branches de Trabalho
 
 | Branch | Status |
@@ -530,7 +555,7 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Concluída |
 | `fix/firecheck-06-auto-sync-confiavel` | Concluída |
 | `fix/firecheck-07-controle-conflitos-updated-at` | Concluída |
-| `fix/firecheck-08-resolucao-manual-conflitos` | Ativa |
+| `fix/firecheck-08-resolucao-manual-conflitos` | Ativa (resolução manual de conflitos + seleção de inspetor) |
 
 ---
 
@@ -955,7 +980,8 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-06-21 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Criação/atualização do `PROJECT.md` | Documentação completa do projeto com histórico de correções, riscos, próximos passos | Concluído | Prompt 06 — auto-sync confiável |
 | 2026-06-21 | `fix/firecheck-06-auto-sync-confiavel` | Auto-sync confiável | `useAutoSync` com mount trigger, `isOnline` reativo, listeners centralizados, logs DEV, bug `pushApErrors` corrigido | Concluído | Prompt 07 — controle básico de conflito por updated_at/versão |
 | 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at + UI de conflito | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store, badge "Conflito" em equipamentos/planos, alerta em detalhes, painel Dashboard, indicador Sidebar | Concluído | Prompt 08 — resolução manual de conflito (forçar sync ou descartar alteração local) |
-| 2026-06-21 | `fix/firecheck-08-resolucao-manual-conflitos` | Resolução manual de conflitos + auditoria PWA | `resolveEquipmentConflictKeepLocal/UseRemote`, `resolveActionPlanConflictKeepLocal/UseRemote`, UI de resolução em DetalhesEquipamento e PlanoDeAcao, auditoria migrations (14 seguras), SW/PWA (navigateFallback + NetworkOnly), listeners (sem duplicatas), console.log sanitizados (12 em DEV guard), lint 0 erros, build ok | Concluído | PR para main |
+| 2026-06-21 | `fix/firecheck-08-resolucao-manual-conflitos` | Resolução manual de conflitos + auditoria PWA | `resolveEquipmentConflictKeepLocal/UseRemote`, `resolveActionPlanConflictKeepLocal/UseRemote`, UI de resolução em DetalhesEquipamento e PlanoDeAcao, auditoria migrations (14 seguras), SW/PWA (navigateFallback + NetworkOnly), listeners (sem duplicatas), console.log sanitizados (12 em DEV guard), lint 0 erros, build ok | Concluído | --- |
+| 2026-06-22 | `fix/firecheck-08-resolucao-manual-conflitos` | Seleção de inspetor nas inspeções | `src/config/inspectors.ts` com 4 inspetores fixos; select obrigatório em `Inspecionar.tsx`; persistência em localStorage do último inspetor; `inspetor` agora envia nome selecionado em vez de `user?.nome`; nenhuma migration necessária (coluna já existia); lint 0 erros, build ok | Concluído | Revisão para main |
 
 ---
 
