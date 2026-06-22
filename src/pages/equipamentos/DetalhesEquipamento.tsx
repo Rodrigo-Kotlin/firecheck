@@ -97,9 +97,9 @@ function DetailSection({ title, icon: Icon, cols = 3, children }: DetailSectionP
 export default function DetalhesEquipamento() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { equipments, inspections, setCurrentTab, user, deleteEquipment, users } = useAppStore();
+  const { equipments, inspections, setCurrentTab, user, deleteEquipment, users, resolveEquipmentConflictKeepLocal, resolveEquipmentConflictUseRemote } = useAppStore();
 
-  const eq = equipments.find((e) => e.id === id);
+  const eq = equipments.find((e) => e.id === id && !e.pendingDelete && !e.deletedAt);
 
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
@@ -107,7 +107,7 @@ export default function DetalhesEquipamento() {
 
   useEffect(() => {
     if (!qrModalOpen || !eq) return;
-    const value = eq.qrcode || eq.qrCode || eq.id;
+    const value = eq.id;
     let cancelled = false;
     QRCode.toDataURL(value, {
       errorCorrectionLevel: 'H',
@@ -124,7 +124,7 @@ export default function DetalhesEquipamento() {
 
   const handleDownloadQr = async () => {
     if (!eq) return;
-    const value = eq.qrcode || eq.qrCode || eq.id;
+    const value = eq.id;
     try {
       const url = await QRCode.toDataURL(value, {
         errorCorrectionLevel: 'H',
@@ -299,6 +299,67 @@ export default function DetalhesEquipamento() {
         </div>
       </div>
 
+      {/* Conflict alert */}
+      {(eq.syncConflict || eq.syncError === 'conflict') && (
+        <div className="bg-red-50 border border-red-200 border-l-[4px] border-l-critical rounded-lg p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-critical flex-shrink-0" />
+            <span className="text-sm font-black text-critical uppercase tracking-wider">
+              Conflito de sincronização
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-red-800 font-medium leading-relaxed">
+            {eq.syncConflictReason ?? 'Há uma alteração local pendente que conflita com uma versão mais recente no servidor.'}
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] font-mono text-red-700 bg-red-100/50 rounded-lg px-3 py-2">
+            {eq.syncBaseUpdatedAt && (
+              <div><span className="font-bold uppercase text-[10px] text-red-500">Base local: </span>{eq.syncBaseUpdatedAt}</div>
+            )}
+            {eq.remoteUpdatedAtAtConflict && (
+              <div><span className="font-bold uppercase text-[10px] text-red-500">Remoto: </span>{eq.remoteUpdatedAtAtConflict}</div>
+            )}
+            {eq.updatedAt && (
+              <div><span className="font-bold uppercase text-[10px] text-red-500">Local atual: </span>{eq.updatedAt}</div>
+            )}
+          </div>
+          <p className="text-[11px] text-red-600 font-semibold">
+            O sync automático não enviará este registro até que o conflito seja resolvido.
+          </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm('Tem certeza que deseja manter sua versão local? Isso irá sobrescrever a versão mais recente do servidor.')) return;
+                try {
+                  await resolveEquipmentConflictKeepLocal(eq.id);
+                  showToast({ kind: 'success', title: 'Conflito resolvido', description: 'Sua versão foi enviada ao servidor.' });
+                } catch {
+                  showToast({ kind: 'error', title: 'Erro', description: 'Falha ao resolver conflito. Tente novamente.' });
+                }
+              }}
+              className="btn-sm bg-red-600 text-white font-bold hover:bg-red-700 border-none"
+            >
+              Manter minha versão
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm('Tem certeza que deseja usar a versão do servidor? Sua alteração local será descartada.')) return;
+                try {
+                  await resolveEquipmentConflictUseRemote(eq.id);
+                  showToast({ kind: 'success', title: 'Conflito resolvido', description: 'Versão do servidor restaurada.' });
+                } catch (err) {
+                  showToast({ kind: 'error', title: 'Erro', description: err instanceof Error ? err.message : 'Falha ao resolver conflito.' });
+                }
+              }}
+              className="btn-sm bg-white border border-red-200 text-critical font-bold hover:bg-red-50"
+            >
+              Usar versão do servidor
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Read-only banner */}
       {!editable && (
         <div className="flex items-center gap-3 bg-gray-50 border border-gray-200 px-3 py-2.5 rounded-lg">
@@ -382,8 +443,8 @@ export default function DetalhesEquipamento() {
         />
       </DetailSection>
 
-      {/* QR Code Actions */}
-      {(eq.qrcode || eq.qrCode) && (
+      {/* QR Code Actions — sempre exibido pois id é a identidade oficial */}
+      {eq.id && (
         <DetailSection title="QR Code" icon={QrCode} cols={3}>
           <div className="col-span-full flex flex-wrap gap-2">
             <button

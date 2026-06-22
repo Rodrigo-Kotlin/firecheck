@@ -1,4 +1,18 @@
 import type { Equipment, Inspection, ActionPlan } from '../types';
+import type { LocalActionPlan } from '../db';
+
+// Campos que NUNCA devem ir para dados_tecnicos
+const SYNC_META_FIELDS = new Set([
+  'sincronizado',
+  'pendingDelete',
+  'syncAction',
+  'syncError',
+  'statusUpdatePending',
+  'syncBaseUpdatedAt',
+  'syncConflict',
+  'syncConflictReason',
+  'remoteUpdatedAtAtConflict',
+]);
 
 const COMMON_FIELDS = new Set([
   'id', 'tipo', 'subtipo', 'local', 'setor', 'pavimento', 'fabricante', 'numSerie',
@@ -8,6 +22,7 @@ const COMMON_FIELDS = new Set([
   'dataUltimoTeste', 'dataProximoTeste', 'dataTesteHidrostatico', 'dataValidadeTeste',
   'status', 'qrCode', 'qrcode', 'fotoUrl', 'observacoes', 'createdBy', 'dadosTecnicos',
   'createdAt', 'updatedAt', 'deletedAt', 'deletedBy',
+  ...SYNC_META_FIELDS,
 ]);
 
 export interface DbEquipamento {
@@ -68,6 +83,8 @@ export interface DbPlanoAcao {
   user_id: string | null;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
+  deleted_by: string | null;
 }
 
 const emptyToUndef = (v: string | null | undefined): string | undefined =>
@@ -153,8 +170,9 @@ export function equipmentToDb(eq: Partial<Equipment>): Record<string, unknown> {
   if (eq.deletedAt !== undefined) row.deleted_at = eq.deletedAt || null;
   if (eq.deletedBy !== undefined) row.deleted_by = eq.deletedBy || null;
 
-  const qrCode = eq.qrCode || eq.qrcode || eq.id;
-  if (qrCode !== undefined) row.qr_code = qrCode;
+  // A identidade oficial é o campo id (TAG). qr_code no banco deve sempre
+  // refletir a TAG, independente de divergência em qrCode/qrcode.
+  if (eq.id !== undefined) row.qr_code = eq.id;
 
   const dadosTecnicos: Record<string, unknown> = {};
   if (eq.dadosTecnicos) {
@@ -209,11 +227,14 @@ export function dbToActionPlan(row: DbPlanoAcao): ActionPlan {
     status: row.status,
     createdAt: row.created_at.split('T')[0],
     userId: emptyToUndef(row.user_id),
+    updatedAt: emptyToUndef(row.updated_at),
+    deletedAt: row.deleted_at ?? undefined,
+    deletedBy: row.deleted_by ?? undefined,
   };
 }
 
-export function actionPlanToDb(plan: Partial<ActionPlan>): Partial<DbPlanoAcao> {
-  const row: Partial<DbPlanoAcao> = {};
+export function actionPlanToDb(plan: Partial<ActionPlan>): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
   if (plan.id !== undefined) row.id = plan.id;
   if (plan.equipmentId !== undefined) row.equipment_id = plan.equipmentId;
   if (plan.local !== undefined) row.local = plan.local;
@@ -223,5 +244,23 @@ export function actionPlanToDb(plan: Partial<ActionPlan>): Partial<DbPlanoAcao> 
   if (plan.prazo !== undefined) row.prazo = plan.prazo ?? null;
   if (plan.status !== undefined) row.status = plan.status;
   if (plan.userId !== undefined) row.user_id = plan.userId ?? null;
+  if (plan.updatedAt !== undefined) row.updated_at = plan.updatedAt || null;
+  if (plan.deletedAt !== undefined) row.deleted_at = plan.deletedAt || null;
+  if (plan.deletedBy !== undefined) row.deleted_by = plan.deletedBy || null;
   return row;
+}
+
+/** Strip local-only sync metadata from an action plan row before returning
+ *  to the UI. These fields live in Dexie but must never leak to consumers. */
+export function stripActionPlanSyncMeta(row: Partial<LocalActionPlan>): ActionPlan {
+  const {
+    sincronizado: _s, pendingDelete: _p,
+    syncAction: _a, syncError: _e,
+    syncBaseUpdatedAt: _b, syncConflict: _c,
+    syncConflictReason: _r, remoteUpdatedAtAtConflict: _u,
+    ...plan
+  } = row;
+  void _s; void _p; void _a; void _e;
+  void _b; void _c; void _r; void _u;
+  return plan as ActionPlan;
 }

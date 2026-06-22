@@ -42,7 +42,9 @@ function useQrDataUrl(value: string, width: number = 512): string {
 }
 
 function QrCodeLabel({ equipment, qrSize = 180 }: { equipment: Equipment; qrSize?: number }) {
-  const value = equipment.qrcode || equipment.qrCode || equipment.id;
+  // A identidade oficial é o campo id (TAG normalizada). qrCode/qrcode são mantidos
+  // apenas para compatibilidade — sempre idênticos ao id.
+  const value = equipment.id;
   const qrUrl = useQrDataUrl(value, qrSize);
 
   return (
@@ -88,7 +90,7 @@ function QrCodeLabel({ equipment, qrSize = 180 }: { equipment: Equipment; qrSize
 }
 
 export function QrCodeLabelCard({ equipment, onView }: { equipment: Equipment; onView?: () => void }) {
-  const value = equipment.qrcode || equipment.qrCode || equipment.id;
+  const value = equipment.id;
   const qrUrl = useQrDataUrl(value, 160);
 
   const handleDownload = async () => {

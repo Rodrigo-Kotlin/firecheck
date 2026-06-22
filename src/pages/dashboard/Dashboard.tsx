@@ -1,11 +1,11 @@
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { Plus, QrCode, AlertTriangle, ShieldAlert, ArrowRight, TrendingUp, ClipboardList, CheckCircle2, Package, Clock } from 'lucide-react';
+import { Plus, QrCode, AlertTriangle, ShieldAlert, ArrowRight, TrendingUp, ClipboardList, CheckCircle2, Package, Clock, AlertOctagon } from 'lucide-react';
 import { isAdmin } from '../../services/permissions';
 import type { LucideIcon } from 'lucide-react';
 
 export default function Dashboard() {
-  const { user, stats, equipments, actionPlans, setCurrentTab } = useAppStore();
+  const { user, stats, equipments, actionPlans, conflictCounts, setCurrentTab } = useAppStore();
   const navigate = useNavigate();
 
   const alertEquipments = equipments.filter(eq => eq.status === 'vencido' || eq.status === 'pendente').slice(0, 3);
@@ -273,6 +273,42 @@ export default function Dashboard() {
           Nova Inspeção Manual
         </button>
       </div>
+
+      {/* Conflitos de sincronização */}
+      {(conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0) && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertOctagon className="w-5 h-5 text-critical flex-shrink-0" />
+            <span className="text-sm font-black text-critical uppercase tracking-wider">
+              Conflito{conflictCounts.equipments + conflictCounts.actionPlans > 1 ? 's' : ''} de sincronização
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-red-800 font-medium">
+            {conflictCounts.equipments > 0 && `${conflictCounts.equipments} equipamento${conflictCounts.equipments > 1 ? 's' : ''}`}
+            {conflictCounts.equipments > 0 && conflictCounts.actionPlans > 0 && ' e '}
+            {conflictCounts.actionPlans > 0 && `${conflictCounts.actionPlans} plano${conflictCounts.actionPlans > 1 ? 's' : ''} de ação`}
+            {' '}com alterações conflitantes. Os registros foram preservados localmente e o sync automático foi bloqueado. Revise e resolva os conflitos manualmente.
+          </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {conflictCounts.equipments > 0 && (
+              <button
+                onClick={() => navigate('/equipamentos')}
+                className="btn-sm bg-white border border-red-200 text-critical font-bold hover:bg-red-50"
+              >
+                Ver equipamentos
+              </button>
+            )}
+            {conflictCounts.actionPlans > 0 && (
+              <button
+                onClick={() => navigate('/planodeacao')}
+                className="btn-sm bg-white border border-red-200 text-critical font-bold hover:bg-red-50"
+              >
+                Ver planos de ação
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Alertas Importantes — resumo por categoria */}
       <div className="space-y-3">

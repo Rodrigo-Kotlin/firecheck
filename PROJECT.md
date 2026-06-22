@@ -1,283 +1,185 @@
-# FireCheck — Contexto do Projeto para IAs
+# FireCheck — Memória Técnica do Projeto
 
-> Documento de referência. Leia antes de sugerir mudanças.
-> Última atualização: 2026-06-09 · QR Codes gerenciados, código morto removido.
+> Documento de referência para IAs e desenvolvedores.
+> Leia antes de sugerir mudanças ou iniciar novas sessões.
+> Última atualização: 2026-06-21 · Prompt 08 (Resolução manual de conflitos + auditoria PWA/cache + testes finais) concluído.
 
 ---
 
-## 1. Visão geral
+## 1. Visão Geral
 
-**FireCheck** é uma PWA (Progressive Web App) para inspeção periódica de equipamentos de combate a incêndio em edificações. Foi pensada para uso em campo, sem rede, com sincronização oportunística para a nuvem quando o dispositivo volta a ficar online.
+**FireCheck** é uma PWA (Progressive Web App) **offline-first** para gestão, cadastro, inspeção, QR Code, histórico, planos de ação e relatórios de equipamentos de combate a incêndio (extintores, hidrantes, mangueiras, alarmes, iluminação de emergência, etc.).
 
 - **Público-alvo**: técnicos de manutenção, brigadistas e engenheiros de segurança.
-- **Modelo de uso**: local-first. Toda a operação (cadastro, inspeção, plano de ação) acontece no navegador; o Supabase é só para sincronizar entre dispositivos.
+- **Modelo de uso**: local-first. Toda operação (cadastro, inspeção, plano de ação) acontece no navegador e persiste no IndexedDB (Dexie). O Supabase é usado apenas para sincronizar entre dispositivos.
 - **Hospedagem**: GitHub Pages (`https://rodrigo-kotlin.github.io/firecheck/`).
-- **Stack**: React 19 + TypeScript 6 + Vite 8 + Tailwind 4 + Dexie 4 + Zustand 5 + Supabase JS 2.
-- **Idioma da UI e dos commits**: PT-BR.
+- **Idioma da UI, código e commits**: PT-BR.
+- **Licença**: MIT.
 
 ---
 
-## 2. Comandos essenciais
+## 2. Objetivo da Aplicação
 
-```bash
-npm install                # instalar deps
-npm run dev                # Vite dev server (http://localhost:5173)
-npm run lint               # ESLint (regra única: tseslint recommended)
-npm run build              # tsc -b && vite build  →  dist/
-npm run preview            # servir o build localmente
-```
-
-> ⚠️ **Antes de qualquer commit** rode `npm run lint && npm run build`. O CI falha se algum deles quebrar.
-
----
-
-## 3. Estrutura de pastas
-
-```
-firecheck/
-├── .github/
-│   ├── CODEOWNERS                       # tudo de @Rodrigo-Kotlin
-│   └── workflows/
-│       ├── ci.yml                       # tsc + lint + build em PR/push
-│       └── deploy.yml                   # build & publish em GitHub Pages
-├── public/
-│   ├── sw.js                            # service worker (cache firecheck-v2)
-│   ├── manifest.json                    # PWA manifest
-│   ├── favicon.ico                      # multi-size 16+32+48
-│   ├── favicon-{16,32,48}.png
-│   ├── apple-touch-icon.png             # 180x180
-│   └── icon-{192,512,maskable-512}.png
-├── tools/
-│   ├── icon-source.svg                  # SVG mestre do ícone PWA
-│   └── generate-icons.mjs               # Node script: SVG -> PNG/ICO via sharp + to-ico
-├── supabase/
-│   ├── config.toml                      # project_id = "firecheck"
-│   └── migrations/
-│       ├── 0001_init_schema.sql         # tabelas + RLS permissivo + triggers
-│       ├── 0002_seed_data.sql           # inspetores seed
-│       └── 0003_supabase_auth.sql       # profiles + is_admin() + RPC admin + RLS auth
-├── src/
-│   ├── main.tsx                         # entrypoint (router + Toaster)
-│   ├── App.tsx                          # <Routes> + usePwaUpdate
-│   ├── index.css                        # design system (CSS variables + classes)
-│   ├── registerSW.ts                    # registra sw.js em prod
-│   ├── types/
-│   │   └── index.ts                     # TODOS os tipos de domínio
-│   ├── db/
-│   │   └── index.ts                     # Dexie (schema v3)
-│   ├── lib/
-│   │   └── supabase.ts                  # singleton + isSupabaseConfigured
-│   ├── services/
-│   │   ├── authService.ts               # Supabase Auth (signInWithPassword / signUp / OTP)
-│   │   ├── permissions.ts               # isAdmin, canEdit*, canManageUsers
-│   │   ├── equipmentService.ts          # CRUD cloud equipamentos
-│   │   ├── inspectionService.ts         # CRUD cloud inspeções
-│   │   ├── actionPlanService.ts         # CRUD cloud planos de ação
-│   │   ├── photoService.ts              # upload fotos
-│   │   ├── mappers.ts                   # snake_case (db) ⇄ camelCase (app)
-│   │   └── sync.ts                      # orquestrador push/pull
-│   ├── store/
-│   │   └── index.ts                     # Zustand (auth + RBAC + UI + sync)
-│   ├── hooks/
-│   │   ├── useToasts.ts                 # useSyncExternalStore de toasts
-│   │   └── usePwaUpdate.ts              # integra registerSW + toast
-│   ├── components/
-│   │   ├── Toaster.tsx                  # renderiza stack de toasts
-│   │   ├── ToggleSwitch.tsx             # switch premium
-│   │   ├── PasswordStrengthMeter.tsx    # barra 0–4
-│   │   ├── QrCodePrintCard.tsx          # QR do equipamento recém-criado
-│   │   └── layout/
-│   │       └── AppLayout.tsx            # sidebar + topbar + bottom nav
-│   └── pages/
-│       ├── login/Login.tsx
-│       ├── login/Cadastro.tsx
-│       ├── login/RecuperarSenha.tsx
-│       ├── login/RedefinirSenha.tsx
-│       ├── dashboard/Dashboard.tsx
-│       ├── equipamentos/
-│       │   ├── Equipamentos.tsx         # grid + busca + chips
-│       │   ├── NovoEquipamento.tsx      # form + RHF + zod
-│       │   └── DetalhesEquipamento.tsx
-│       ├── qrcodes/QrCodes.tsx          # busca, seleção, impressão lote A4
-│       ├── inspecionar/Inspecionar.tsx  # scanner + checklist + foto
-│       ├── scan/ScanQr.tsx              # html5-qrcode
-│       ├── relatorios/Relatorios.tsx    # PDF (jsPDF + html2canvas)
-│       ├── planodeacao/PlanoDeAcao.tsx  # CRUD plano
-│       ├── configuracoes/Configuracoes.tsx
-│       └── admin/AdminUsuarios.tsx      # só admins
-├── tsconfig.app.json                    # verbatimModuleSyntax, erasableSyntaxOnly
-├── tsconfig.json                        # project references
-├── package.json
-├── README.md                            # visão geral em PT-BR (para humanos)
-└── PROJECT.md                           # ESTE ARQUIVO (para IAs)
-```
+- Cadastrar equipamentos de combate a incêndio com identificação única por TAG/QR Code.
+- Realizar inspeções periódicas e registrar histórico.
+- Atualizar status operacional do equipamento via inspeção (RPC segura).
+- Gerar e imprimir QR Codes individuais ou em lote.
+- Criar planos de ação com criticidade inferida automaticamente.
+- Funcionar offline completo — todas as escritas vão para IndexedDB instantaneamente.
+- Sincronizar dados entre dispositivos e usuários quando a conexão retorna.
+- Preservar rastreabilidade (sem hard delete, sem reuso de TAG).
+- Evitar duplicidades e perda de dados.
+- Relatórios em PDF com jsPDF + html2canvas.
 
 ---
 
-## 4. Modelo de domínio (`src/types/index.ts`)
+## 3. Stack Tecnológica
+
+| Camada | Tecnologia |
+|--------|-----------|
+| Framework | React 19 + TypeScript 6 |
+| Build | Vite 8 |
+| Estado | Zustand 5 (com `persist` v3 no localStorage) |
+| Banco local | Dexie 4 (IndexedDB, schema v5) |
+| Backend | Supabase (PostgreSQL + Auth + Storage + RLS) |
+| Estilo | TailwindCSS 4 + design system próprio (`index.css`) |
+| Scanner QR | html5-qrcode |
+| QR | qrcode (canvas/DataURL) |
+| PDF | jsPDF + html2canvas |
+| Forms | react-hook-form + zod |
+| PWA | Service Worker manual (`public/sw.js`, cache-first) |
+| Ícones | Lucide React |
+| CI/CD | GitHub Actions (`ci.yml` + `deploy.yml`) |
+| Deploy | GitHub Pages |
+
+---
+
+## 4. Arquitetura Offline-First
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     UI (React 19)                            │
+│   pages/* + components/* + hooks/*                          │
+└───────────────────────────┬─────────────────────────────────┘
+                           │ estados / eventos
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│               Zustand (src/store/index.ts)                   │
+│   equipments[], inspections[], actionPlans[], user, etc.    │
+│   É a camada de apresentação. Recarrega de Dexie via sync. │
+└──────────┬──────────────────────────────────────┬───────────┘
+           │ leituras/escritas                     │ persist v3
+           ▼                                       ▼
+┌──────────────────────────┐              ┌─────────────────────┐
+│  Dexie (IndexedDB)       │              │ localStorage        │
+│  Fonte primária de dados │              │ firecheck-storage   │
+│  v5: equipamentos,       │              │ (config + users)    │
+│  inspecoes, planosAcao,  │              │ firecheck-auth-...  │
+│  fotos, acoes_pendentes  │              │ (sessão Supabase)   │
+└──────────┬───────────────┘              └─────────────────────┘
+           │ sync (oportunístico)
+           ▼
+┌──────────────────────────┐
+│  Supabase (PostgreSQL +  │
+│  Storage + RLS + Auth)   │
+│  public.equipamentos     │
+│  public.inspecoes        │
+│  public.planos_acao      │
+│  public.profiles         │
+└──────────────────────────┘
+```
+
+### Princípios
+
+- **Dexie/IndexedDB** é a base local principal e fonte primária de dados.
+- **Zustand** é estado de UI — recarregado de Dexie após cada sync.
+- **Supabase** é fonte remota compartilhada entre dispositivos.
+- O app funciona **100% offline** sem Supabase.
+- Alterações locais recebem metadados de sync: `sincronizado`, `pendingDelete`, `syncAction`, `syncError`, `statusUpdatePending`.
+- O sync faz push local (Dexie → Supabase) e pull remoto (Supabase → Dexie).
+- **Nunca usar `clear()` destrutivo** (exceto `clearLocalData()` acionado pelo usuário).
+- **Dados pendentes nunca são sobrescritos** por pull remoto.
+- **Nunca marcar como sincronizado sem confirmação remota.**
+
+---
+
+## 5. Entidades Principais
+
+### 5.1 Equipment (`src/types/index.ts`)
 
 ```ts
-type EquipmentStatus = 'regular' | 'pendente' | 'vencido' | 'observacao' | 'em_manutencao' | 'inativo' | 'substituido' | 'extraviado';
-type ActionPlanStatus = 'Aberta' | 'Em andamento' | 'Concluída' | 'Vencida';
-type Criticidade = 'Crítico' | 'Alto' | 'Médio' | 'Baixo';
-
-interface ActionPlan {
-  id: string;
-  equipmentId: string;
-  local: string;
-  descricao: string;
-  criticidade: Criticidade;
-  responsavel: string;
-  prazo: string;
-  status: ActionPlanStatus;
-  createdAt: string;
-  userId?: string;
-}
-
-interface AppConfig {
-  empresa: string;
-  unidade: string;
-  offlineMode: boolean;
-  notificationsEnabled: boolean;
-}
-
 interface Equipment {
-  id: string;
-  tipo: string;
+  id: string;              // TAG oficial (ex.: "EXT-001")
+  tipo: string;            // "Extintor", "Hidrante", etc.
   subtipo?: string;
   local: string;
   setor: string;
-  status: EquipmentStatus;
+  status: EquipmentStatus; // 'regular' | 'pendente' | 'vencido' | ...
   pavimento?: string;
   fabricante?: string;
   numSerie?: string;
-  capacidade?: string;
-  tipoCarga?: string;
-  modeloExtintor?: string;
-  classeFogo?: string;
-  seloLacre?: string;
-  manometro?: string;
-  suporte?: string;
-  sinalizacao?: string;
-  acessoDesobstruido?: string;
-  estadoGeral?: string;
-  tipoHidrante?: string;
-  tipoAbrigoVinculado?: string;
-  registro?: string;
-  valvula?: string;
-  adaptador?: string;
-  tampao?: string;
-  pressao?: string;
-  tipoMangueira?: string;
-  diametro?: string;
-  comprimento?: string;
-  tipoUniao?: string;
-  estadoMangueira?: string;
-  acondicionamento?: string;
-  possuiEtiquetaInspecao?: string;
-  tipoAbrigo?: string;
-  material?: string;
-  estadoPorta?: string;
-  estadoVisor?: string;
-  possuiMangueira?: string;
-  possuiEsguicho?: string;
-  possuiChaveStorz?: string;
-  possuiRegistro?: string;
-  tipoEsguicho?: string;
-  estadoRoscas?: string;
-  estadoVedacao?: string;
-  compatibilidadeMangueira?: string;
-  localAcondicionamento?: string;
-  tipoChaveStorz?: string;
-  diametroCompativel?: string;
-  estadoFisico?: string;
-  tipoAcionador?: string;
-  enderecoZona?: string;
-  estadoTampa?: string;
-  estadoBotao?: string;
-  alturaInstalacao?: string;
-  funcionamentoTestado?: string;
-  tipoAlarme?: string;
-  sireneAudiovisual?: string;
-  sireneSonora?: string;
-  sinalizadorVisual?: string;
-  zonaLaco?: string;
-  fonteAlimentacao?: string;
-  tipoCentral?: string;
-  quantidadeLacosZonas?: string;
-  bateriaBackup?: string;
-  comunicacaoDispositivos?: string;
-  statusPainel?: string;
-  localInstalacao?: string;
-  modeloIluminacao?: string;
-  funcaoIluminacao?: string;
-  autonomia?: string;
-  tipoInstalacao?: string;
-  potencia?: string;
-  tipoSinalizacao?: string;
-  codigoPlaca?: string;
-  fotoluminescente?: string;
-  visibilidade?: string;
-  estadoConservacao?: string;
-  fixacaoAdequada?: string;
-  tipoSprinkler?: string;
-  temperaturaAcionamento?: string;
-  posicaoInstalacao?: string;
-  estadoBulbo?: string;
-  obstrucao?: string;
-  corrosao?: string;
-  vazamento?: string;
-  areaProtegida?: string;
-  tipoBomba?: string;
-  vazao?: string;
-  alimentacaoEletrica?: string;
-  painelComando?: string;
-  bombaJockey?: string;
-  bombaPrincipal?: string;
-  bombaReserva?: string;
-  tipoPorta?: string;
-  tempoResistenciaFogo?: string;
-  barraAntipanico?: string;
-  dobradicas?: string;
-  molaAerea?: string;
-  fechamentoAutomatico?: string;
-  vedacao?: string;
-  tipoDetectorFumaca?: string;
-  tipoDetectorCalor?: string;
-  nomeModelo?: string;
-  descricaoTecnica?: string;
-  dataFabricacao?: string;
-  dataUltimaManutencao?: string;
-  dataProximaManutencao?: string;
-  dataUltimoTeste?: string;
-  dataProximoTeste?: string;
-  dataTesteHidrostatico?: string;
-  dataValidadeTeste?: string;
+  // ... dezenas de campos opcionais por tipo de equipamento
   dataProximaInspecao?: string;
   dataUltimaInspecao?: string;
-  qrcode?: string;
+  qrcode?: string;         // sempre igual a id (compatibilidade)
+  qrCode?: string;         // sempre igual a id (compatibilidade)
   fotoUrl?: string;
   observacoes?: string;
+  dadosTecnicos?: Record<string, string | number | boolean | null>;
   createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  pendingDelete?: boolean;  // local only, never persists
+  syncError?: string;       // local only (ex.: 'duplicate')
+  statusUpdatePending?: boolean; // local only
 }
+```
 
+**Decisão arquitetural**: `id` é a TAG oficial do equipamento (ex.: `EXT-001`). `qrCode` e `qrcode` são mantidos apenas para compatibilidade e refletem o mesmo valor de `id`. Futura evolução recomendada: `id UUID` + `tag TEXT UNIQUE`.
+
+### 5.2 Inspection
+
+```ts
 interface Inspection {
-  id: string;
-  equipmentId: string;
-  data: string;
+  id: string;               // "INSP-{UUID}"
+  equipmentId: string;      // ref. Equipment.id
+  data: string;             // ISO date
   inspetor: string;
   status: EquipmentStatus;
   observacoes?: string;
   userId?: string;
 }
+```
 
-interface Inspector {
-  id: string;
-  nome: string;
-  cargo: string;
-  role: 'admin' | 'inspector';
+Inspeções atualizam o status operacional do equipamento via RPC segura (`apply_equipment_inspection_status`). Se o status for `vencido` ou `pendente`, um plano de ação é criado automaticamente.
+
+### 5.3 ActionPlan
+
+```ts
+interface ActionPlan {
+  id: string;               // "PAC-{timestamp}-{random}"
+  equipmentId: string;
+  local: string;
+  descricao: string;
+  criticidade: Criticidade; // 'Crítico' | 'Alto' | 'Médio' | 'Baixo'
+  responsavel: string;
+  prazo: string;
+  status: ActionPlanStatus; // 'Aberta' | 'Em andamento' | 'Concluída' | 'Vencida'
+  createdAt: string;
+  userId?: string;
+  updatedAt?: string;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
 }
+```
 
+Planos de ação foram migrados do Zustand/localStorage para Dexie, com push/pull completo, soft delete e reconciliação entre dispositivos.
+
+### 5.4 UserProfile
+
+```ts
 interface UserProfile {
   id: string;
   email: string;
@@ -287,810 +189,791 @@ interface UserProfile {
   createdAt: string;
   updatedAt: string;
 }
-
-type PublicUser = UserProfile;
-
-interface Stats {
-  total: number;
-  emDia: number;
-  pendentes: number;
-  vencidos: number;
-  conformidade: number;
-}
 ```
 
 ---
 
-## 5. Autenticação Supabase Auth (`src/services/authService.ts`)
+## 6. Supabase e Segurança
 
-**Decisão arquitetural**: identidade é gerenciada pelo Supabase Auth (senhas com hash bcrypt no servidor, sessões JWT, refresh tokens). A PWA continua offline-first **para dados** (Dexie + Supabase sync), mas **login/registro/recuperação exigem rede**.
+### Autenticação
 
-A senha nunca passa do input para nenhum storage local — o Supabase faz hash + storage no servidor.
+- **Supabase Auth** com senha + recovery OTP por e-mail.
+- Sessão gerenciada pelo client Supabase, persistida em `localStorage['firecheck-auth']`.
+- Refresh automático a cada ~50min.
+- Login/registro/recovery exigem rede (identidade está no Supabase); dados continuam offline-first.
 
 ### Fluxo de identidade
 
 ```
-[auth.users]            ← gerenciado pelo Supabase Auth (bcrypt, JWT, refresh)
-   │ 1:1
-   ▼
-[public.profiles]       ← trigger `handle_new_user` cria a linha no signup
-   ├─ id, email, nome, cargo, role, created_at
-   └─ RLS: select autenticado / update self (sem mexer no role) /
-           update admin / delete admin (exceto self)
-
-[auth.uid()] ── policies usam nas tabelas de domínio (0003)
+auth.users (Supabase Auth, bcrypt, JWT)
+  │ 1:1
+  ▼
+public.profiles (trigger handle_new_user cria no signup)
+  ├─ id, email, nome, cargo, role, created_at
+  └─ RLS: select autenticado / update self (sem role) / update admin / delete admin (exceto self)
 ```
 
-### Regras
+- **Primeiro usuário** a se cadastrar vira admin (trigger). Demais são `inspector`.
+- **E-mail** é case-insensitive (normalizado no client) e único globalmente.
+- **Política de senha** (client-side): ≥ 8 caracteres, 1 letra, 1 dígito.
 
-1. **Primeiro usuário a se cadastrar no projeto vira admin** (regra do trigger `handle_new_user` em 0003). Demais são `inspector`.
-2. **E-mail é case-insensitive** (normalizado no client antes de cada chamada) e único globalmente (constraint `profiles.email UNIQUE` + `auth.users.email UNIQUE` do Supabase).
-3. **Sessão** é gerenciada pelo client Supabase e persistida em `localStorage['firecheck-auth']` (chave controlada por `SUPABASE_AUTH_STORAGE_KEY`). Refresh automático a cada ~50min.
-4. **`persist` do Zustand** guarda APENAS `actionPlans`, `config`, `users: PublicUser[]` (cache de perfis do Supabase para render instantâneo do admin).
-5. **Reage a `onAuthStateChange`** (`store/index.ts`): `SIGNED_IN` / `TOKEN_REFRESHED` / `USER_UPDATED` / `SIGNED_OUT` / `PASSWORD_RECOVERY` — sempre re-resolve o `user: Inspector` a partir do perfil.
+### Tabelas principais
 
-### Política de senha (client-side; Supabase reforça no servidor)
+| Tabela | Finalidade |
+|--------|-----------|
+| `public.equipamentos` | Cadastro de equipamentos |
+| `public.inspecoes` | Histórico de inspeções |
+| `public.planos_acao` | Planos de ação |
+| `public.profiles` | Perfis de usuário (1:1 com auth.users) |
+| `storage.buckets` | Bucket `fotos` para upload de imagens |
 
-| Regra | Implementação |
-|---|---|
-| ≥ 8 caracteres | `checkPasswordPolicy` |
-| Pelo menos 1 letra | regex |
-| Pelo menos 1 dígito | regex |
-| Score 0–4 | `getPasswordStrength` (entropia simples) |
-| Barra visual | `<PasswordStrengthMeter score={...} />` |
+### RLS (Row Level Security)
 
-> Em produção, recomende endurecer `password_requirements` em `supabase/config.toml` (`lower_upper_letters_digits_symbols`) ou via painel.
-
-### Recuperação de senha (OTP por e-mail)
-
-Fluxo em 3 etapas, 2 páginas:
-
-```
-/recuperar-senha                            /redefinir-senha
-┌──────────────────┐    ┌────────────────────────────────────────┐
-│ Digita e-mail    │ →  │ Etapa 1: input OTP (6 dígitos)         │
-│ signInWithOtp    │    │   verifyOtp({ email, token, 'email' }) │
-│ (shouldCreate... │    │   → sessão temporária                  │
-│  false)          │    │ Etapa 2: digita nova senha 2x          │
-└──────────────────┘    │   updateUser({ password })             │
-                       │   → toast + navega para /login         │
-                       └────────────────────────────────────────┘
-```
-
-Por que OTP em vez de magic link com `resetPasswordForEmail`? O usuário pediu **código de 6 dígitos por e-mail** (decisão do projeto). O fluxo OTP é totalmente self-contained: o usuário digita o código no app, sem precisar abrir o e-mail em outro dispositivo e voltar.
-
-### API pública (`src/services/authService.ts`)
-
-```ts
-registerUser({ email, password, nome, cargo }): Promise<Inspector>
-loginUser({ email, password }): Promise<Inspector>
-logoutUser(): Promise<void>
-resolveSession(): Promise<Inspector | null>             // chamado no boot
-requestPasswordRecovery(email): Promise<void>           // envia OTP
-verifyRecoveryOtp(email, token): Promise<{ email }>     // valida OTP
-updateOwnPassword(newPassword): Promise<void>           // redefine
-listUsers(): Promise<PublicUser[]>
-setUserRole(id: string, role: 'admin' | 'inspector'): Promise<void>
-deleteUser(id: string): Promise<void>                   // via RPC admin_delete_user
-isSupabaseReady(): Promise<boolean>
-
-// Validação client-side
-normalizeEmail / isValidEmail / checkPasswordPolicy / getPasswordStrength
-isValidNome / isValidCargo
-```
-
-Erros: `authError(code, message)` é uma factory (`erasableSyntaxOnly: true` proíbe `class`). Use `isAuthError(x)` antes de narrowing. `mapSupabaseError` converte erros do client Supabase em `AuthError`.
-
-### Migração do modelo antigo (PBKDF2 local)
-
-A tabela `users` do Dexie (v3) foi **removida** (Dexie v4). O upgrade faz `users.clear()` e apaga `localStorage['firecheck-auth-session']`. Contas existentes precisam ser recadastradas — não há migração automática de hashes (impossível: PBKDF2 não pode ser revertido para texto).
-
----
-
-## 6. RBAC (`src/services/permissions.ts`)
-
-O RBAC client-side espelha as policies RLS do Supabase. Em produção, **a verdade mora no servidor** — o client apenas esconde controles que o servidor já bloquearia.
-
-```ts
-isAdmin(user: Inspector | null): boolean
-canManageUsers(user): boolean
-canEditEquipment(user, eq: Equipment): boolean
-canDeleteEquipment(user, eq): boolean
-canEditInspection(user, ins: Inspection): boolean
-canDeleteInspection(user, ins): boolean
-canEditActionPlan(user, plan): boolean
-canDeleteActionPlan(user, plan): boolean
-```
+Todas as policies exigem `auth.role() = 'authenticated'`. A edição cadastral do equipamento é restrita a admin/dono (`eq.createdBy = auth.uid()`). A atualização operacional por inspeção (status, datas) é permitida via RPC `apply_equipment_inspection_status` (SECURITY DEFINER).
 
 ### Matriz de permissões
 
-| Ação | Admin | Inspector (dono) | Inspector (de outro) | Sem login |
-|---|---|---|---|---|
-| `canEdit/Delete Equipment` | ✅ sempre | ✅ se `eq.createdBy === user.id` | ❌ (read-only + lock) | ❌ (redireciona) |
-| `canEdit/Delete Inspection` | ✅ sempre | ✅ se `ins.userId === user.id` | ❌ | ❌ |
-| `canEdit/Delete ActionPlan` | ✅ sempre | ✅ se `plan.userId === user.id` | ❌ | ❌ |
+| Ação | Admin | Inspector (dono) | Inspector (outro) | Sem login |
+|------|-------|-----------------|-------------------|-----------|
+| `canEdit/Delete Equipment` | ✅ | ✅ se `createdBy === user.id` | ❌ (read-only) | ❌ |
+| `canEdit/Delete Inspection` | ✅ | ✅ se `userId === user.id` | ❌ | ❌ |
+| `canEdit/Delete ActionPlan` | ✅ | ✅ se `userId === user.id` | ❌ | ❌ |
 | `canManageUsers` | ✅ | ❌ | ❌ | ❌ |
-| `deleteUser` (Supabase) | ✅ via RPC | ❌ | ❌ | ❌ |
-| Ver qualquer página | ✅ | ✅ | ✅ (read-only nos não-próprios) | ❌ → `/login` |
 
-### RLS server-side (Supabase)
-
-Todas as policies de `0003_supabase_auth.sql` exigem `auth.role() = 'authenticated'`. Policies de `profiles`:
-- `select` autenticado.
-- `update` self (mas não pode mexer no próprio `role`).
-- `update` admin (qualquer perfil).
-- `delete` admin (exceto self).
-- Delete de `auth.users` exposto via RPC `admin_delete_user(uuid)` (SECURITY DEFINER) com checagem de `is_admin()`.
-
-### UI consistente de read-only
-
-- Cards de equipamento: `Lock` + badge "Leitura" (`Equipamentos.tsx`).
-- Detalhes: banner âmbar no topo + botão delete escondido (`DetalhesEquipamento.tsx`).
-- Plano de ação: `disabled` em inputs e botões + lock badge + "por {nome}" (`PlanoDeAcao.tsx`).
+**Nunca expor `.env`, tokens ou chaves.** `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` são configuradas via variáveis de ambiente GitHub Pages.
 
 ---
 
-## 7. Estado global (`src/store/index.ts`)
+## 7. Migrations Supabase
 
-Zustand com `persist` (localStorage) em **versão 2** (a primeira v1 carregava `user` direto na store; migração remove o campo).
+As migrations ficam em `supabase/migrations/`. **Nunca editar migrations antigas depois de aplicadas** — criar nova migration.
 
-### Partialize (o que vai pro localStorage)
+| Migration | Finalidade | Observação |
+|-----------|-----------|------------|
+| `0001_init_schema.sql` | Tabelas `equipamentos`, `inspecoes`, `inspetores` + RLS permissivo + bucket `fotos` + triggers | Idempotente |
+| `0002_seed_data.sql` | Dados de exemplo (inspetores, equipamentos) | Seed inicial |
+| `0003_supabase_auth.sql` | `profiles`, `is_admin()`, RPC `admin_delete_user`, RLS auth | Idempotente |
+| `0004_add_modelo_extintor.sql` | Coluna `modelo_extintor` em equipamentos | Aditiva |
+| `0005_add_equipment_fields.sql` | Campos operacionais + `qr_code` (legado como `qrcode`) | Aditiva |
+| `0006_fix_equipamentos_rls.sql` | Corrige políticas RLS de equipamentos | Corretiva |
+| `0007_security_linter_fixes.sql` | Ajustes de segurança detectados por linter | Corretiva |
+| `0008_remove_permissive_policies.sql` | Remove `FOR ALL` policies permissivas | Corretiva |
+| `0009_add_dados_tecnicos_equipamentos.sql` | Coluna `dados_tecnicos` (JSONB) + coluna `qr_code` (text) | Aditiva |
+| `0010_add_soft_delete_to_equipamentos.sql` | Soft delete com `deleted_at`, `deleted_by` + ajuste RLS | Aditiva |
+| `0011_apply_equipment_inspection_status.sql` | RPC `apply_equipment_inspection_status` (SECURITY DEFINER) | Aditiva |
+| `0012_clean_sync_metadata_from_dados_tecnicos.sql` | Remove metadados de sync vazados em `dados_tecnicos` | Corretiva |
+| `0013_add_soft_delete_to_planos_acao.sql` | `deleted_at`, `deleted_by` em planos_acao | Aditiva |
+| `0014_normalize_equipment_qrcode_fields.sql` | Normaliza `qr_code` para refletir `id` (TAG oficial) | Corretiva (Prompt 05) |
+
+---
+
+## 8. Problemas Críticos Já Encontrados e Corrigidos
+
+### 8.1 Duplicidade de inspeções
+
+- **Causa**: persistência duplicada em `Inspecionar.tsx` (gravação direta Dexie + chamada `addInspection`) + duplo clique no botão finalizar.
+- **Correção**: `addInspection` virou ponto único de escrita; `isSaving` bloqueia reentrância; ID único com `crypto.randomUUID()`; trava de sync.
+
+### 8.2 Equipamentos excluídos continuavam aparecendo
+
+- **Causa**: hard delete remoto sem tombstone; outros clientes mantinham registro no IndexedDB.
+- **Correção**: soft delete com `deleted_at`; pull respeita tombstone (migration `0010`); reconciliação de órfãos.
+
+### 8.3 Auto-sync não atualizava UI sem F5
+
+- **Causa**: pull atualizava Dexie, mas Zustand/tela não recarregava.
+- **Correção**: `useAutoSync` (foco, visibilidade, online, intervalo); Zustand recarregado de Dexie após sync.
+
+### 8.4 TAG duplicada e falso sucesso
+
+- **Causa**: TAG validada apenas no Zustand (não em Dexie/Supabase); uso de `upsert` perigoso; sucesso exibido antes de confirmação remota.
+- **Correção**: normalização de TAG (`normalizeTag`); validação em Zustand + Dexie + Supabase; `insert` para criação, `update` para edição; `syncAction`; QR = TAG.
+
+### 8.5 RLS bloqueava atualização de status por inspeção
+
+- **Causa**: RLS permitia update apenas a admin/dono; inspeção de usuário comum alterava status local e não persistia remotamente.
+- **Correção**: RPC `apply_equipment_inspection_status` (SECURITY DEFINER, migration `0011`); flag `statusUpdatePending`; `pushInspections()` chama RPC após enviar inspeção.
+
+### 8.6 Pull vazio deixava itens fantasmas
+
+- **Causa**: `pullEquipments()` e `pullInspections()` retornavam antes da reconciliação quando remoto vinha `[]`.
+- **Correção**: `FetchResult` com `ok` + `data`; pull diferencia erro remoto de resposta vazia válida; reconcilia órfãos.
+
+### 8.7 Metadados vazavam para `dados_tecnicos`
+
+- **Causa**: objetos locais com `sincronizado`, `pendingDelete` etc. iam para o mapper remoto.
+- **Correção**: `stripSyncMeta()`; `SYNC_META_FIELDS`; migration `0012` para limpar dados contaminados.
+
+### 8.8 Planos de ação eram locais por dispositivo
+
+- **Causa**: ficavam no Zustand/localStorage; não havia pull; `fetchActionPlans()` não era chamado.
+- **Correção**: migração para Dexie (schema v5); push/pull completos; soft delete; contador de pendências; migration `0013`.
+
+### 8.9 QR Code e rastreabilidade da TAG
+
+- **Causa**: `qr_code` no Supabase podia divergir de `id` (TAG); scanner buscava apenas no Zustand; equipamentos excluídos podiam ser encontrados.
+- **Correção (em andamento, Prompt 05)**: utilitário `equipmentIdentity.ts` com funções centralizadas; `syncEquipmentQrFields()` aplicado em pull/loader; `equipmentToDb` sempre usa `id` para `qr_code`; scanner busca em Zustand → Dexie → Supabase, rejeita `pendingDelete`/`deletedAt`; migration `0014`.
+
+---
+
+## 9. Histórico de Correções por Prompt
+
+### Prompt 01 — TAG única, create/update e falso sucesso
+
+**Branch**: `fix/firecheck-01-tag-unica-create-update`  
+**Status**: concluído  
+**Principais entregas**:
+- `normalizeTag()` em `tagGenerator.ts`
+- Validação local (Zustand + Dexie) e remota (Supabase) de TAG duplicada
+- `createEquipmentRemote()` com `insert`
+- `updateEquipmentRemote()` com `update`
+- `syncAction` ('create' | 'update' | 'delete')
+- QR Code = TAG
+- Scanner busca por identidade normalizada
+
+### Prompt 02 — RLS e status por inspeção
+
+**Branch**: `fix/firecheck-02-rls-status-inspecao`  
+**Status**: concluído  
+**Principais entregas**:
+- Migration `0011` com RPC `apply_equipment_inspection_status`
+- `applyEquipmentInspectionStatusRemote()`
+- Flag `statusUpdatePending`
+- `pushInspections()` chama RPC após enviar inspeção
+
+### Prompt 03 — Pull vazio, órfãos e metadados
+
+**Branch**: `fix/firecheck-03-pull-reconciliacao-metadados`  
+**Status**: concluído  
+**Principais entregas**:
+- `FetchResult<T>` com `ok` + `data`
+- Pull diferencia erro de resposta vazia
+- Reconciliação de órfãos locais
+- Migration `0012` para limpar metadados contaminados em `dados_tecnicos`
+
+### Prompt 04 — Planos de ação no Dexie e sync completo
+
+**Branch**: `fix/firecheck-04-planos-acao-dexie-sync`  
+**Status**: concluído  
+**Principais entregas**:
+- Dexie schema v5 com tabela `planosAcao`
+- Migração automática de localStorage → Dexie (uma vez)
+- `pushActionPlans()` com create/update/soft delete
+- `pullActionPlans()` com reconciliação
+- `pendingSyncCount()` incluindo planos
+- Migration `0013` (colunas `deleted_at`, `deleted_by`)
+
+### Prompt 05 — QR Code, scanner e rastreabilidade
+
+**Branch**: `fix/firecheck-05-qrcode-scanner-rastreabilidade`  
+**Status**: em andamento  
+**Principais entregas**:
+- `src/utils/equipmentIdentity.ts` com `normalizeEquipmentTag()`, `syncEquipmentQrFields()`, `matchesEquipmentIdentity()`, etc.
+- `equipmentToDb()` sempre usa `eq.id` para `qr_code` (migration `0014`)
+- `syncEquipmentQrFields()` aplicado em `carregarEquipamentos()` e `pullEquipments()`
+- Scanner (`ScanQr.tsx`) busca em 3 camadas (Zustand → Dexie → Supabase), rejeita excluídos
+- Migration `0014_normalize_equipment_qrcode_fields.sql`
+
+### Prompt 06 — Auto-sync confiável, atualização de Zustand e logs de diagnóstico
+
+**Branch**: `fix/firecheck-06-auto-sync-confiavel`  
+**Status**: concluído  
+**Objetivo**: validar auto-sync real entre dispositivos; confirmar atualização de Zustand sem F5; logs DEV; possivelmente Supabase Realtime.
+
+**Problema identificado**:  
+O auto-sync não disparava na montagem do hook `useAutoSync` — apenas registrava listeners de foco/visibilidade/online/intervalo, mas nunca chamava sync na inicialização. Além disso:
+- A constante `isOnline` era congelada em tempo de render (não reativa), fazendo o hook ignorar mudanças de conectividade.
+- Havia listener `online` duplicado no store (sem throttle), competindo com o hook.
+- A variável `pushApErrors` em `syncAll` era `const = 0` (nunca recebia erros reais).
+
+**Correções aplicadas**:
+
+1. **`useAutoSync.ts`** — reescrito com:
+   - `triggerAutoSync('mount')` na montagem do hook.
+   - `useSyncExternalStore` para `isOnline` reativo.
+   - Throttle de 8s entre execuções.
+   - Logs DEV detalhados por trigger, skip, início e conclusão.
+   - Limpeza completa no unmount.
+
+2. **`store/index.ts`** — removido listener `online`/`offline` duplicado (linhas 800-808). O hook centraliza todos os gatilhos automáticos.
+
+3. **`sync.ts`** — corrigido bug: `pushApErrors` agora é `let` e recebe `apR.errors`. Adicionados logs DEV detalhados por fase (push equipamentos/inspeções/planos, pull equipamentos/inspeções/planos) com contagem e identificação dos itens.
+
+4. **Gatilhos do auto-sync**: mount, focus, visibility, online, interval (30s).  
+   **Throttle**: 8s mínimo entre execuções.  
+   **Trava de concorrência**: `_syncInProgress` no módulo sync (já existente).  
+   **Atualização de Zustand**: `runSync()` no store recarrega equipamentos/inspeções/planos do Dexie após `syncAll()` e chama `set()` com os dados frescos.
+
+---
+
+### Prompt 07 — Controle básico de conflito por updated_at
+
+**Branch**: `fix/firecheck-07-controle-conflitos-updated-at`  
+**Status**: concluído  
+**Objetivo**: impedir que alterações offline sejam enviadas cegamente ao servidor quando outro dispositivo já modificou o mesmo registro; preservar alterações locais em conflito; notificar usuário via badge.
+
+**Problema identificado**:  
+O push não verificava se o registro remoto foi alterado desde a última sincronização. Um dispositivo A podia editar offline, dispositivo B editava online, e ao sincronizar A, seu cambio sobrescrevia o de B sem aviso. Pull também não registrava a versão base dos registros importados.
+
+**Solução implementada**:
+
+1. **Modelo de dados (`db/index.ts`)**:
+   - `LocalEquipment` e `LocalActionPlan` ganharam campos: `syncBaseUpdatedAt`, `syncConflict`, `syncConflictReason`, `remoteUpdatedAtAtConflict`.
+
+2. **Mappers (`services/mappers.ts`)**:
+   - `SYNC_META_FIELDS` e `stripActionPlanSyncMeta` incluem os novos campos.
+
+3. **Serviço remoto (`equipmentService.ts`, `actionPlanService.ts`)**:
+   - `ServiceResult` tornou-se genérico `ServiceResult<T = Equipment>`.
+   - `fetchEquipmentById` e `fetchActionPlanById` retornam `ServiceResult` com `code: 'not_found'` quando o registro não existe no servidor.
+
+4. **Push (`sync.ts`)**
+   - `pushEquipments` e `pushActionPlans`: antes de update/delete, buscam o registro remoto e comparam `syncBaseUpdatedAt` com `updated_at` remoto.
+   - Se diferente: marca `syncConflict: true`, `syncError: 'conflict'`, `sincronizado: false`, não envia a alteração, não incrementa `errors` (conflito é condição controlada).
+   - Se remoto não existe: converte update em create.
+   - Create: registra `syncBaseUpdatedAt` após sucesso.
+   - Delete: reconcilia se já deletado remotamente.
+
+5. **Pull (`sync.ts`)**
+   - `pullEquipments` e `pullActionPlans`: pulam registros com `syncConflict: true` (não sobrescrevem conflito local).
+   - Registram `syncBaseUpdatedAt` no momento da importação.
+
+6. **Store (`store/index.ts`)**:
+   - `stripSyncMeta` no `runSync` inclui novos campos.
+   - `refreshConflictCount` expõe contagem de conflitos por entidade.
+   - `conflictCounts` no estado Zustand.
+
+7. **UI de conflito**:
+   - Badge "Conflito" (ícone `AlertOctagon`) nos cards de equipamentos e planos de ação quando `syncConflict === true` ou `syncError === 'conflict'`.
+   - Alerta expandido na tela de detalhes do equipamento com motivo, timestamps (local base, remoto no conflito, local atual) e orientação.
+   - Painel de conflitos no Dashboard com botões de atalho para equipamentos/planos em conflito.
+   - Indicador de conflitos no Sidebar (área de status do Supabase) com contagem total.
+   - `conflictCounts` (`{ equipments: number; actionPlans: number }`) no estado Zustand, populado por `refreshConflictCount()`.
+8. **Riscos remanescentes**:
+   - Nenhum merge visual avançado implementado — conflito apenas detectado e bloqueado.
+   - Resolução manual requer que o usuário faça o equipamento "vencer" o conflito (ex.: editar e forçar sync, ou usar o botão "Resolver" — ainda não implementado).
+   - Inspeções estão fora de escopo para conflito (append-only).
+
+**Limitações sem Realtime**:  
+O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/online/intervalo. Supabase Realtime pode ser avaliado como evolução futura para propagação imediata.
+
+---
+
+### Prompt 08 — Resolução manual de conflitos + auditoria PWA/cache
+
+**Branch**: `fix/firecheck-08-resolucao-manual-conflitos`
+
+**Objetivo**: Implementar resolução manual de conflito (manter local / usar servidor) para equipamentos e planos de ação; adicionar UI de resolução nos cards e detalhes; realizar auditoria final de regressão (migrations, PWA, listeners, lint, build).
+
+**Mudanças realizadas**:
+
+1. **Resolução manual de conflito**:
+   - `resolveEquipmentConflictKeepLocal(id)`: sobrescreve remoto com dados locais via `updateEquipmentRemote`; limpa flags de conflito e marca `sincronizado: true`.
+   - `resolveEquipmentConflictUseRemote(id)`: busca remoto via `fetchEquipmentById`, substitui local no Dexie, limpa flags de conflito e marca `sincronizado: true`.
+   - `resolveActionPlanConflictKeepLocal(id)`: análogo para planos de ação via `updateActionPlanRemote`.
+   - `resolveActionPlanConflictUseRemote(id)`: busca remoto via `fetchActionPlanById`, substitui local no Dexie.
+   - Se a resolução "usar servidor" falha com `not_found`, a UI exibe o erro e o conflito permanece.
+   - Logs DEV com prefixo `[conflict-resolution]`.
+   - Toast de sucesso/erro após cada tentativa.
+
+2. **UI de resolução**:
+   - `DetalhesEquipamento.tsx`: dois botões (`"Manter minha versão"` / `"Usar versão do servidor"`) no alerta de conflito, com `confirm()` antes da ação.
+   - `PlanoDeAcao.tsx`: mesmos botões no card do plano, exibidos quando `syncConflict || syncError === 'conflict'`.
+   - Botões seguem o padrão visual do app (bg-red-600 white / bg-white border-red-200 critical).
+
+3. **Auditoria de migrations** (14 arquivos, Supabase):
+   - Todas as migrations são idempotentes (usam `IF NOT EXISTS`, `OR REPLACE`, `IF EXISTS`).
+   - Nenhuma migration altera schema de forma destrutiva após 2025.
+   - Nenhuma migration antiga foi editada.
+
+4. **Auditoria SW/PWA**:
+   - `vite.config.ts`: Supabase configurado como `NetworkOnly` no runtime caching.
+   - `navigateFallback: '/'` adicionado ao `workbox` para SPA offline — navegação em sub-rotas servirá `index.html`.
+   - `manifest.json`: `display: standalone`, ícones 16–512px, `start_url: '.'`, cores definidas.
+
+5. **Auditoria de listeners**:
+   - `useAutoSync.ts` é o único ponto central de listeners (`online`, `offline`, `visibilitychange`).
+   - Store não adiciona listeners `online`/`offline` duplicados.
+   - `onAuthStateChange` do Supabase nunca é removido pois o SDK gerencia o ciclo de vida.
+   - Nenhum vazamento de listener identificado.
+
+6. **Cobertura de conflitos**:
+   - `conflictCounts` (`{ equipments: number; actionPlans: number }`) no estado Zustand.
+   - `refreshConflictCount()` chamado em `hydrate` e `runSync`.
+   - `conflictCount()` em `sync.ts` conta registros com `syncError === 'conflict' && !sincronizado`.
+   - Conflito não incrementa `errors` no relatório de sync.
+
+7. **Riscos remanescentes**:
+   - Nenhum merge visual avançado (campo a campo) implementado — resolução é binária "tudo local" ou "tudo servidor".
+   - Resolução com falha de rede não limpa conflito — registro permanece `sincronizado: false`.
+   - Inspeções permanecem fora de escopo (append-only).
+   - Não há Supabase Realtime — conflito só é detectado durante pull, não em tempo real.
+
+`npm run lint`: 0 erros, 1 warning pré-existente (NovoEquipamento.tsx:278 — `react-hooks/incompatible-library`).
+`npm run build`: tsc + vite build sem erros; PWA gera sw.js com Workbox.
+
+**Pós-auditoria**: 12 `console.log`/`warn` informacionais em `sync.ts` sanitizados — envolvidos em `if (import.meta.env.DEV)`. `console.error` de erros reais mantidos em produção. (Commit `fe9507f`.)
+
+---
+
+## 10. Branches de Trabalho
+
+| Branch | Status |
+|--------|--------|
+| `main` | Produção |
+| `fix/firecheck-sync-equipamentos` | Concluída |
+| `fix/firecheck-inspecoes-sync` | Concluída |
+| `fix/firecheck-01-tag-unica-create-update` | Concluída |
+| `fix/firecheck-02-rls-status-inspecao` | Concluída |
+| `fix/firecheck-03-pull-reconciliacao-metadados` | Concluída |
+| `fix/firecheck-04-planos-acao-dexie-sync` | Concluída |
+| `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Concluída |
+| `fix/firecheck-06-auto-sync-confiavel` | Concluída |
+| `fix/firecheck-07-controle-conflitos-updated-at` | Concluída |
+| `fix/firecheck-08-resolucao-manual-conflitos` | Ativa |
+
+---
+
+## 11. Regras de Desenvolvimento
+
+1. Nunca usar `clear()` destrutivo no Dexie (exceto `clearLocalData()` acionado pelo usuário).
+2. Nunca sobrescrever dados locais pendentes (`!sincronizado`, `pendingDelete`, `syncAction`, `statusUpdatePending`, `syncError`).
+3. Nunca marcar como sincronizado sem confirmação remota.
+4. Nunca usar `upsert` para criação de equipamento — usar `insert`.
+5. Equipamento novo usa `insert` + `syncAction: 'create'`.
+6. Equipamento editado usa `update` + `syncAction: 'update'`.
+7. TAG duplicada deve ser bloqueada local (Zustand + Dexie) e remotamente (Supabase).
+8. QR Code deve sempre codificar a TAG oficial (`id`).
+9. Scanner nunca deve abrir equipamento excluído (rejeitar `pendingDelete`/`deletedAt`).
+10. Pull remoto vazio válido deve reconciliar órfãos locais.
+11. Erro remoto deve preservar dados locais intactos.
+12. Migrations antigas não devem ser editadas.
+13. `.env` nunca deve ser enviado em ZIP, commit ou documentação.
+14. Sempre rodar `npm run lint` e `npm run build` antes de commit.
+15. Não usar `any` — usar `unknown` + narrowing.
+16. Não usar `class`, `enum`, `namespace` (TypeScript `erasableSyntaxOnly: true`).
+17. Strings em PT-BR sempre com acentos corretos.
+
+---
+
+## 12. Camada Local: Dexie (`src/db/index.ts`)
+
+### Schema v5
 
 ```ts
-{
-  actionPlans: ActionPlan[],
-  config: AppConfig,
-  users: PublicUser[]    // <-- cache de perfis do Supabase para render instantâneo
-}
+db.version(5).stores({
+  equipamentos: 'id, tipo, status, sincronizado',
+  inspecoes:    'id, equipmentId, sincronizado',
+  planosAcao:   'id, equipmentId, status, sincronizado, pendingDelete, syncAction, deletedAt',
+  fotos:        'id, inspectionId',
+  acoes_pendentes: '++id, type, timestamp',
+});
 ```
 
-> **A identidade do usuário atual NÃO é persistida pela store.** Ela vive em `localStorage['firecheck-auth']` (gerenciado pelo client Supabase) e é re-resolvida via `supabase.auth.getSession()` + `select * from profiles where id = auth.uid()` no boot (`resolveSession()`).
-
-### Ações relevantes
-
-| Ação | Comportamento |
-|---|---|
-| `hydrate()` | Carrega equipamentos/inspeções do Dexie + perfis do Supabase → store. Resolve sessão. Auto-limpa seed data legado. |
-| `login(email, pwd)` | Async. Chama `authService.loginUser` (Supabase signInWithPassword). |
-| `register({...})` | Async. Trigger no Supabase cria o profile. Primeiro vira admin. |
-| `logout()` | `supabase.auth.signOut()`. Não limpa dados. |
-| `loadUsers()` | Recarrega `users: PublicUser[]` do Supabase. |
-| `setUserRole(id, role)` | Persiste + reload. Impede self-demote (checado no `AdminUsuarios.tsx`). |
-| `deleteUserAccount(id)` | Chama RPC `admin_delete_user`. Impede self-delete. Recarrega lista. |
-| `addEquipment(eq)` | Estampa `createdBy: get().user.id`. Persiste no Dexie. Dispara sync. |
-| `deleteEquipment(id)` | Remove do estado + Dexie + cascata inspeções/fotos. Dispara sync. |
-| `addInspection(ins)` | Estampa `userId`. Gera ID incremental `INSP-NNN`. Atualiza status do equipamento. Cria PA automaticamente se `vencido`/`pendente`. Dispara sync. |
-| `addActionPlan(p)` | Gera `id: "PAC-{timestamp}"` + `createdAt` + `status: "Aberta"`. Dispara sync. |
-| `updateActionPlan(id, updates)` | Atualiza parcial + marca `sincronizado: false`. Dispara sync. |
-| `deleteActionPlan(id)` | Remove do estado + Dexie. Dispara sync. |
-| `triggerSync()` | `void syncAll()` (fire-and-forget, nunca joga erro). |
-| `refreshPendingCount()` | Soma pendências cloud + action plans não sincronizados. |
-| `updateConfig(updates)` | Merge parcial no `AppConfig`. |
-
-### Subscrição ao Supabase Auth
-
-`store/index.ts` registra `supabase.auth.onAuthStateChange(...)` que reage a:
-- `SIGNED_IN` / `TOKEN_REFRESHED` / `USER_UPDATED` → re-resolve o perfil e atualiza `user: Inspector`.
-- `SIGNED_OUT` → zera `user` e marca `authReady: true`.
-- `PASSWORD_RECOVERY` → mantém `authReady: true` (o componente que chamou `verifyOtp` cuida da próxima etapa).
-- `INITIAL_SESSION` → ignorado (já tratado por `hydrate()` no boot).
-
-### Recalcular stats
-
-Sempre que `equipments` ou `inspections` mudam, a action chama `recomputeStatsFromEquipments` que recalcula `stats: { total, emDia, pendentes, vencidos, conformidade }`.
-
----
-
-## 8. Camada local: Dexie (`src/db/index.ts`)
-
-Schema **v4** (use `db.version(4).stores(...)`):
+### LocalEquipment (Dexie row)
 
 ```ts
-db.version(4)
-  .stores({
-    equipamentos:   'id, tipo, status, setor, [setor+tipo], sincronizado',
-    inspecoes:      'id, equipmentId, data, [equipmentId+data], sincronizado, userId',
-    fotos:          'id, inspectionId',
-    acoes_pendentes:'++id, tipo, createdAt',
-    // tabela `users` removida (auth migrou para Supabase)
-  })
-  .upgrade(async (tx) => {
-    await tx.table('users').clear().catch(() => undefined);
-    if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem('firecheck-auth-session'); // sessão legada PBKDF2
-    }
-  });
+type LocalEquipment = Equipment & {
+  sincronizado: boolean;
+  pendingDelete?: boolean;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  syncAction?: 'create' | 'update' | 'delete';
+  syncError?: string;
+  statusUpdatePending?: boolean;
+};
 ```
 
-> Tabelas mutáveis carregam `sincronizado: boolean`. Itens marcados `pendingDelete: true` são removidos do Dexie após DELETE no Supabase.
+Mesma estrutura para `LocalActionPlan` e `LocalInspection`.
 
-### Seed removida
+### Mappers (`src/services/mappers.ts`)
 
-O seed automático com dados mock foi removido. Na primeira carga o `hydrate()` verifica se existem equipamentos com IDs do seed antigo (`EXT-001`, `HID-042`, etc.) e, em caso positivo, limpa todo o banco local + nuvem para evitar dados obsoletos. O app começa vazio.
+- `dbToEquipment()`: converte snake_case do Supabase para camelCase da app. Mapeia `qr_code` para ambos `qrCode` e `qrcode`.
+- `equipmentToDb()`: converte camelCase para snake_case. `qr_code` sempre recebe `eq.id` (a TAG oficial).
+- `stripSyncMeta()`: remove campos locais de sync antes de retornar para a UI.
+- `stripActionPlanSyncMeta()`: mesmo para planos de ação.
 
 ---
 
-## 9. Sincronização Supabase (`src/services/sync.ts`)
+## 13. Sincronização Supabase (`src/services/sync.ts`)
 
-Bidirecional, **fire-and-forget**. Nunca joga exceção para o caller.
+Bidirecional, **fire-and-forget**. Nunca joga exceção para o caller. Concorrência prevenida por flag `_syncInProgress`.
 
 ### Fluxo
 
 ```
-syncNow()
-  ├── if !navigator.onLine          → return skip('offline')
-  ├── if !isSupabaseConfigured      → return skip('supabase-not-configured')
-  ├── if state.syncInProgress       → return skip('already-syncing')
-  ├── state.syncInProgress = true
-  ├── await pushPending()           // ↑ Dexie → Supabase (UPSERT/DELETE)
-  ├── await pullFromCloud()         // ↓ Supabase → Dexie (preserva pending)
-  └── state.syncInProgress = false
+syncAll(options?)
+  ├── if _syncInProgress          → return skip('sync-in-progress')
+  ├── if !canSync()                → return skip('offline' | 'supabase-not-configured')
+  ├── _syncInProgress = true
+  ├── pushEquipments()             // local pendentes → Supabase
+  ├── pushInspections()            // inclui RPC de status
+  ├── pushActionPlans()            // create/update/soft delete
+  ├── pullEquipments()             // cloud → Dexie + reconciliação
+  ├── pullInspections()            // cloud → Dexie + reconciliação
+  ├── pullActionPlans()            // cloud → Dexie + reconciliação
+  └── _syncInProgress = false
 ```
 
 ### Push
 
-- Para cada tabela (`equipamentos`, `inspecoes`, `fotos`, `planos_acao`) busca linhas com `sincronizado === false` e faz `upsert(...).onConflict('id')`.
-- Em sucesso, marca `sincronizado: true`.
-- Se a linha tem `pendingDelete: true`, faz `DELETE` e remove do Dexie.
+- Busca linhas com `!sincronizado` ou `pendingDelete`.
+- `pendingDelete`: soft delete remoto via `deleted_at`.
+- `syncAction === 'create'`: `insert`.
+- `syncAction === 'update'`: `update`.
+- Legacy (sem `syncAction`): tenta detectar via `findEquipmentById`.
+- `syncError = 'duplicate'` em caso de conflito — mantém dados intactos.
+- `statusUpdatePending`: tratado em `pushInspections` via RPC, não em `pushEquipments`.
 
 ### Pull
 
-- `fetchEquipments`, `fetchInspections`, `fetchActionPlans`.
-- Para cada linha cloud, faz `db.upsert(mapped)` APENAS se a versão local tem `sincronizado: true` (ou não existe). Pendências locais **nunca são sobrescritas**.
+- `fetchEquipments()` retorna `FetchResult` (diferencia erro de vazio).
+- Para cada linha cloud: se local não existe → insere; se local sincronizado → sobrescreve; se local pendente → preserva.
+- Tombstones (`deletedAt`) no cloud propagam para local.
+- Reconciliação de órfãos: itens locais sincronizados que não existem no cloud recebem `deletedAt`.
+- `syncEquipmentQrFields()` é aplicado em todos os equipamentos importados do cloud.
 
-### Botão manual
+### Auto-sync
 
-Sidebar (`AppLayout.tsx`) tem botão "Sincronizar agora" que chama `syncNow()`. Exibe toast com `SyncReport`.
-
-### Status online/offline
-
-`window.addEventListener('online'/'offline', ...)` no `App.tsx` atualiza `config.online` e dispara `syncNow()` quando volta online.
+- `window.addEventListener('online')` → `triggerSync()`.
+- `useAutoSync` hook escuta foco, visibilidade, online/offline e intervalo.
+- Botão manual "Sincronizar agora" no sidebar.
 
 ---
 
-## 10. Roteamento (`src/App.tsx`)
+## 14. Estado Global: Zustand (`src/store/index.ts`)
+
+### Partialize (persistido no localStorage)
+
+```ts
+{
+  config: AppConfig,
+  users: PublicUser[],  // cache de perfis do Supabase
+}
+```
+
+Equipamentos, inspeções e planos de ação vivem no Dexie e são carregados via `hydrate()`. A identidade do usuário atual não é persistida pela store — vive em `localStorage['firecheck-auth']` (gerenciado pelo client Supabase).
+
+### Ações principais
+
+| Ação | Comportamento |
+|------|-------------|
+| `hydrate()` | Carrega equipamentos/inspeções/planos do Dexie + perfis do Supabase. Resolve sessão. Migra planos legados. |
+| `addEquipment(eq)` | Estampa `createdBy`. Persiste no Dexie com `syncAction: 'create'`. Tenta push imediato. |
+| `updateEquipment(id, updates)` | Marca `syncAction: 'update'`. Tenta push imediato. |
+| `deleteEquipment(id)` | Marca `pendingDelete: true` + `syncAction: 'delete'`. Dispara sync. |
+| `addInspection(data)` | Gera ID único. Persiste inspeção + foto. Atualiza status do equipamento (statusUpdatePending). Cria PA se vencido/pendente. Dispara sync. |
+| `addActionPlan(p)` | Gera ID. Persiste no Dexie com `syncAction: 'create'`. Dispara sync. |
+| `triggerSync()` | `void syncAll()` (fire-and-forget). |
+
+### Subscrição Auth
+
+```ts
+supabase.auth.onAuthStateChange((event, session) => {
+  // SIGNED_IN / TOKEN_REFRESHED / USER_UPDATED → re-resolve perfil
+  // SIGNED_OUT → zera user
+  // PASSWORD_RECOVERY → mantém authReady
+});
+```
+
+---
+
+## 15. Roteamento (`src/App.tsx`)
 
 ```tsx
 <Routes>
-  {/* Públicas */}
   <Route path="/login" element={<Login />} />
   <Route path="/cadastro" element={<Cadastro />} />
   <Route path="/recuperar-senha" element={<RecuperarSenha />} />
   <Route path="/redefinir-senha" element={<RedefinirSenha />} />
-
-  {/* Protegidas — guard em AppLayout */}
   <Route path="/" element={<AppLayout />}>
     <Route index element={<Dashboard />} />
     <Route path="equipamentos" element={<Equipamentos />} />
     <Route path="equipamentos/novo" element={<NovoEquipamento />} />
     <Route path="equipamentos/:id" element={<DetalhesEquipamento />} />
     <Route path="inspecionar/:id" element={<Inspecionar />} />
+    <Route path="inspecionar" element={<Inspecionar />} />
     <Route path="scan" element={<ScanQr />} />
     <Route path="qrcodes" element={<QrCodes />} />
     <Route path="relatorios" element={<Relatorios />} />
     <Route path="planodeacao" element={<PlanoDeAcao />} />
     <Route path="configuracoes" element={<Configuracoes />} />
-    <Route path="admin/usuarios" element={<AdminUsuarios />} />  {/* admin only */}
+    <Route path="admin/usuarios" element={<AdminUsuarios />} />
   </Route>
-
   <Route path="*" element={<Navigate to="/" replace />} />
 </Routes>
 ```
 
-`AppLayout` redireciona para `/login` se `!user` (após `authReady`). A página `/admin/usuarios` redireciona para `/` se `!isAdmin(user)`.
-
 ---
 
-## 11. Design system (`src/index.css`)
+## 16. QR Code e Identidade do Equipamento
 
-### Tokens (CSS custom properties em `:root`)
-
-```
---color-primary, --color-primary-hover, --color-primary-active
---color-danger, --color-success, --color-warning, --color-info
---color-bg, --color-bg-elevated, --color-text, --color-text-muted, --color-border
-```
-
-### Classes utilitárias reutilizáveis
-
-| Classe | Função |
-|---|---|
-| `.card-subtle` | Card com sombra suave, borda e hover lift |
-| `.btn-primary` | Botão primário (gradiente + sombra) |
-| `.btn-ghost` | Botão secundário neutro |
-| `.btn-danger` | Botão destrutivo |
-| `.field-label` | Label uppercase tracking-wide |
-| `.field-input` / `.field-textarea` | Inputs com focus ring |
-| `.page-header` | Cabeçalho de página (título + ação) |
-| `.pill` / `.pill-success` / `.pill-warning` / `.pill-danger` | Etiquetas coloridas |
-| `.scrollbar-none` | `::-webkit-scrollbar { display: none }` |
-| `.thin-scrollbar` | Scroll custom fina |
-| `.no-print` | Esconde na impressão |
-| `.toggle-switch.on / .off` | Switch premium (ver §Componentes) |
-| `.toaster` | Container de toasts |
-| `.qr-label*` | Estilos do QR de impressão (com `@media print`) |
-
-### Cores semânticas (Tailwind 4)
-
-Use sempre nomes semânticos, não valores literais:
-- `text-text`, `text-text-muted`
-- `bg-bg`, `bg-bg-elevated`
-- `border-border`
-- `text-primary`, `bg-primary`
-- `text-success / warning / danger / info`
-
-### ToggleSwitch (112×38 desktop / 104×36 ≤480px)
-
-```css
-.toggle-switch { width: 112px; height: 38px; ... }
-.toggle-switch.on  { background: linear-gradient(180deg, #16a34a 0%, #008f4c 100%); }
-.toggle-switch.off { background: linear-gradient(180deg, #f8f8f8 0%, #dedede 100%); }
-.toggle-switch::before { /* knob 32×32 desktop / 30×30 ≤480px */ }
-```
-
-Markup:
-
-```tsx
-<ToggleSwitch
-  checked={value}
-  onChange={setValue}
-  ariaLabel="Modo offline"
-  onText="ON"
-  offText="OFF"
-/>
-```
-
----
-
-## 12. Componentes reutilizáveis
-
-| Componente | Props principais | Onde usar |
-|---|---|---|
-| `<Toaster />` | (nenhuma) | Uma vez no `App.tsx` |
-| `<ToggleSwitch />` | `checked, onChange, ariaLabel, onText?, offText?, className?` | Switches em Configurações |
-| `<PasswordStrengthMeter />` | `score: 0|1|2|3|4` | Tela de cadastro |
-| `<QrCodePrintCard />` | `id: string, name?: string, local?: string` | Após criar equipamento |
-
-### Hooks customizados
+### Utilitário central (`src/utils/equipmentIdentity.ts`)
 
 ```ts
-const { showToast, dismissToast, clearToasts, toasts } = useToasts();
-showToast({ kind: 'success' | 'error' | 'info' | 'warning', title, description?, duration? });
-
-usePwaUpdate();   // detecta nova versão → toast "Atualizar" → reload
+normalizeEquipmentTag(tag: string): string     // trim + uppercase + hífen
+getEquipmentTag(eq): string                     // retorna eq.id
+getEquipmentQrPayload(eq): string              // retorna eq.id
+syncEquipmentQrFields(eq): T                   // garante qrCode = qrcode = id
+matchesEquipmentIdentity(eq, code): boolean    // compara com id, qrCode, qrcode
 ```
+
+### Onde é usado
+
+- **Cadastro** (`NovoEquipamento.tsx`): TAG gerada automaticamente por tipo. `qrCode` deriva de `id`. Campo QR é read-only espelho da TAG.
+- **Impressão** (`QrCodePrintCard.tsx`): QR codifica `equipment.id`.
+- **Scanner** (`ScanQr.tsx`): normaliza código escaneado, busca em Zustand → Dexie → Supabase, rejeita `pendingDelete`/`deletedAt`.
+- **Detalhes** (`DetalhesEquipamento.tsx`): QR gerado com `eq.id`.
+- **Mappers** (`mappers.ts`): `equipmentToDb` sempre escreve `eq.id` em `qr_code`.
+- **Pull/Loader**: `syncEquipmentQrFields()` corrige dados legados durante importação.
+
+### Regras
+
+- QR Code deve sempre codificar a TAG oficial (`id`).
+- Scanner nunca deve abrir equipamento excluído.
+- `qrCode`/`qrcode`/`qr_code` devem sempre refletir `id`.
+- Futura evolução recomendada: `id UUID` + `tag TEXT UNIQUE` separada.
 
 ---
 
-## 13. PWA (Progressive Web App)
-
-### Visão geral
-
-O FireCheck é uma PWA completa: instalável, offline-first, com detecção de conectividade, sincronização oportunística e fluxo de atualização automática. A experiência é pensada para uso em campo, sem depender de rede.
-
-### Manifest (`public/manifest.json`)
-
-```json
-{
-  "short_name": "FireCheck",
-  "name": "FireCheck - Inspeção de Equipamentos",
-  "description": "Sistema móvel para inspeção de equipamentos de combate a incêndio.",
-  "lang": "pt-BR",
-  "start_url": "/firecheck/",
-  "scope": "/firecheck/",
-  "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#FFFFFF",
-  "theme_color": "#DC2626",
-  "categories": ["utilities", "productivity"],
-  "icons": [
-    { "src": "favicon-16.png",  "sizes": "16x16",  "type": "image/png", "purpose": "any" },
-    { "src": "favicon-32.png",  "sizes": "32x32",  "type": "image/png", "purpose": "any" },
-    { "src": "favicon-48.png",  "sizes": "48x48",  "type": "image/png", "purpose": "any" },
-    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
-    { "src": "icon-192.png",   "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icon-512.png",   "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
-  ],
-  "prefer_related_applications": false
-}
-```
+## 17. PWA (Progressive Web App)
 
 ### Service Worker (`public/sw.js`)
 
 Estratégia **cache-first com atualização em background** (stale-while-revalidate):
 
-1. `install`: pré-carrega assets estáticos no cache `firecheck-v2` e chama `skipWaiting()`.
-2. `activate`: limpa caches antigos e chama `clients.claim()`.
-3. `fetch`: serve do cache se disponível; inicia fetch em background para atualizar o cache. Se não está em cache, faz fetch da rede normalmente.
-4. `message`: escuta `SKIP_WAITING` para forçar o worker à espera a assumir o controle.
-
-```js
-// Assets pré-cacheados no install
-const ASSETS = [
-  '/', '/index.html', '/manifest.json',
-  '/favicon.ico', '/favicon-16.png', '/favicon-32.png', '/favicon-48.png',
-  '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png',
-  '/src/main.tsx', '/src/App.tsx', '/src/index.css'
-];
-```
+1. `install`: pré-carrega assets estáticos no cache `firecheck-v2`, `skipWaiting()`.
+2. `activate`: limpa caches antigos, `clients.claim()`.
+3. `fetch`: serve do cache se disponível; fetch em background para atualizar.
+4. `message`: escuta `SKIP_WAITING` para ativar novo worker.
 
 ### Registro (`src/registerSW.ts`)
 
-Registra o service worker **apenas em produção** (`import.meta.env.PROD`). Aceita um callback `onUpdateAvailable` que recebe uma função `reload` para disparar a atualização:
+Apenas em produção (`import.meta.env.PROD`). Callback `onUpdateAvailable` exibe toast "Nova versão disponível" com ação "Atualizar".
 
-```ts
-register((reload) => {
-  showToast({
-    kind: 'info',
-    title: 'Nova versão disponível',
-    description: 'Atualize agora para obter as últimas melhorias.',
-    action: { label: 'Atualizar', onClick: reload },
-    duration: 0,
-  });
-});
-```
+### Hook `usePwaUpdate`
 
-Fluxo de atualização:
-1. `register()` detecta `reg.waiting` (worker já baixado) ou escuta `updatefound` + `statechange` → `installed`.
-2. Invoca `onUpdateAvailable` com callback que posta `SKIP_WAITING`.
-3. `controllerchange` escuta a ativação do novo worker e recarrega a página.
-4. O toast usa `duration: 0` (não auto-dispensa) para garantir que o usuário veja.
+- Registra SW com callback de atualização.
+- Escuta `appinstalled` para toast de sucesso.
 
-Registro também acontece em `src/main.tsx` (chamada `serviceWorker.register()` no load), sem callback — isso garante que o SW seja registrado mesmo sem o hook, mas sem oferecer update notification se o componente `<App />` não montar o hook.
+### Hook `usePwaInstall`
 
-### Hook `usePwaUpdate` (`src/hooks/usePwaUpdate.ts`)
-
-Usado em `App.tsx`. Faz duas coisas:
-
-1. **Registra o SW com callback de atualização** — quando uma nova versão é detectada, exibe toast com ação "Atualizar".
-2. **Escuta `appinstalled`** — quando o usuário instala o PWA, exibe toast de sucesso ("App instalado com sucesso").
-
-```ts
-export function usePwaUpdate(): void {
-  useEffect(() => {
-    register((reload) => {
-      showToast({ kind: 'info', title: 'Nova versão disponível', action: { label: 'Atualizar', onClick: reload }, duration: 0 });
-    });
-  }, []);
-
-  useEffect(() => {
-    const onInstalled = () => {
-      showToast({ kind: 'success', title: 'App instalado com sucesso', description: 'Abra o FireCheck direto da sua tela inicial.', duration: 6000 });
-    };
-    window.addEventListener('appinstalled', onInstalled);
-    return () => window.removeEventListener('appinstalled', onInstalled);
-  }, []);
-}
-```
-
-### Hook `usePwaInstall` (`src/hooks/usePwaInstall.ts`)
-
-Máquina de estados da instalação:
-
-```
-'unavailable' → 'available' → 'installed'
-     ↑              |
-     └──────────────┘ (se usuário dispensa)
-```
-
-- **`unavailable`**: navegador não tem superfície de instalação. Mostra fallback (instruções manuais no iOS).
-- **`available`**: `beforeinstallprompt` foi disparado e está na fila. Botão "Instalar" visível no top bar.
-- **`installed`**: app já está rodando como standalone (`display-mode: standalone` ou `navigator.standalone` no iOS).
-
-Detecção iOS:
-- Usa `userAgent` + `maxTouchPoints` para identificar iPads (iOS 13+).
-- iOS nunca dispara `beforeinstallprompt`; exibe instruções "Share → Adicionar à tela inicial".
-- Detecta `navigator.standalone` para saber se já está instalado no iOS.
-
-API pública:
-
-```ts
-const install = usePwaInstall();
-// install.state: 'unavailable' | 'available' | 'installed'
-// install.isIos: boolean
-// install.promptInstall(): Promise<'accepted' | 'dismissed' | 'unavailable' | 'error'>
-```
-
-### Botão de instalação na interface
-
-`AppLayout.tsx` renderiza botão "Instalar" no top bar quando `install.state === 'available'`:
-
-```tsx
-{install.state === 'available' && (
-  <button onClick={handleInstallClick} disabled={installing}
-    className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-primary text-white hover:bg-primary-dark">
-    <Download className="w-3.5 h-3.5" />
-    <span className="hidden sm:inline">Instalar</span>
-  </button>
-)}
-```
-
-Se o usuário está no iOS e `state === 'unavailable'` (mas não está instalado), o AppLayout mostra um botão alternativo que abre um popup com instruções de instalação manual.
-
-### Detecção de conectividade
-
-`AppLayout.tsx` escuta eventos `online`/`offline` do navegador com deduplicação via ref. Exibe:
-
-1. **OfflineBanner** — faixa âmbar fixa no topo (mobile/desktop) com contagem de pendências.
-2. **SyncStatusBadge** — pill no top bar (desktop) com estado: `Sincronizado` (verde), `N pendentes` (âmbar), `Sincronizando...` (azul), `Offline` (vermelho).
-3. **SyncNowButton** — botão na sidebar com mesma semântica de cores.
-4. **Toasts** — "Conexão restabelecida" / "Você está offline" ao alternar.
+Máquina de estados: `unavailable` → `available` → `installed`. Detecta iOS para instruções manuais.
 
 ### Indicadores de sincronização
 
 | Componente | Onde | Função |
-|---|---|---|
+|-----------|------|--------|
 | `OfflineBanner` | Topo (mobile + desktop) | Faixa âmbar informando modo offline |
 | `SyncStatusBadge` | Top bar (≥768px) | Pill compacto com estado do sync |
 | `SyncNowButton` | Sidebar | Botão "Sincronizar agora" com contagem |
 | Badge Supabase | Sidebar | Status da conexão com nuvem |
 
-### Ícones e geração
+---
 
-- **SVG mestre**: `tools/icon-source.svg` — retângulo arredondado vermelho (`#DC2626`) com contorno de chama em branco (ícone Flame do Lucide).
-- **Geração**: `node tools/generate-icons.mjs` (requer `sharp` e `to-ico`).
-  - Gera PNGs: 16, 32, 48, 180, 192, 512, maskable-512.
-  - Gera `favicon.ico` multi-tamanho (16+32+48).
-- **Saída**: todos em `public/`.
+## 18. Riscos Remanescentes
 
-### Modo offline
-
-Tudo funciona localmente:
-- IndexedDB (Dexie) é a fonte primária de dados.
-- Escritas vão para Dexie com flag `sincronizado: false`.
-- Sync bidirecional com Supabase quando online.
-- Toasts e banners informam estado de conectividade.
-
-### Fluxo de atualização completo
-
-```
-1. Nova build → sw.js muda (cache key firecheck-v2 → v3 etc.)
-2. Browser baixa novo SW em background (updatefound)
-3. Novo SW entra em estado 'waiting' (ainda não ativo)
-4. usePwaUpdate detecta 'installed' com controller existente
-5. Toast "Nova versão disponível" com botão "Atualizar"
-6. Usuário clica → registerSW posta SKIP_WAITING
-7. Novo SW ativa → controllerchange → window.location.reload()
-8. Página recarrega com nova versão
-```
-
-### iOS (Safari)
-
-- `beforeinstallprompt` **não existe**. Botão "Instalar" só aparece se o evento foi disparado (Chrome/Android).
-- Detectamos iOS via UA + `maxTouchPoints` para iPads.
-- Exibimos instruções manuais: "Compartilhar → Adicionar à Tela de Início".
-- `navigator.standalone` detecta se já está instalado.
-- Safe areas: `env(safe-area-inset-bottom)` no CSS do bottom nav e toaster.
+1. **`id` ainda é a TAG** — não há UUID separado para chave primária. Reuso de TAG por outro cliente pode causar conflito (embora bloqueado localmente).
+2. **Conflitos offline complexos** ainda não têm resolução visual completa — `syncError: 'duplicate'` sinaliza, mas não há UI de merge.
+3. **Auto-sync não é realtime** — dependente de `navigator.onLine` + eventos de foco/visibilidade + clique manual. Para tempo real, adicionar Supabase Realtime.
+4. **Supabase Realtime** ainda não foi implementado como alternativa/evolução.
+5. **RLS precisa ser testada em perfis reais** — as policies de `planos_acao` em produção podem precisar de ajustes.
+6. **Cache/PWA** pode servir bundle antigo se service worker estiver desatualizado (stale-while-revalidate).
+7. **Migrations** precisam ser aplicadas manualmente no Supabase — não há CLI/automation.
+8. **Planos de ação** têm RLS que precisa ser revisada — atualmente usam `user_id` mas a policy pode não estar alinhada com a de equipamentos.
+9. **Scanner** busca no Supabase apenas por `findEquipmentById` (precisa do código exato) — não faz busca fuzzy.
+10. **Fotos grandes** (>5 MB) em base64 no IndexedDB podem estourar quota do browser.
 
 ---
 
-## 14. Build e deploy
+## 19. Próximos Passos Recomendados
 
-### CI (`.github/workflows/ci.yml`)
-
-Em todo push/PR:
-1. `npm ci`
-2. `npx tsc -b --noEmit`
-3. `npm run lint`
-4. `npm run build`
-
-### Deploy (`.github/workflows/deploy.yml`)
-
-Em push na `main`:
-1. Mesmos passos do CI.
-2. `actions/deploy-pages@v4` com artefato `dist/`.
-
-### Variáveis de ambiente
-
-| Nome | Onde | Obrigatório |
-|---|---|---|
-| `VITE_SUPABASE_URL` | `.env` (local) + GitHub Pages secrets | Não (fallback offline) |
-| `VITE_SUPABASE_ANON_KEY` | `.env` (local) + GitHub Pages secrets | Não (fallback offline) |
-
-> O cliente Supabase é construído em modo "disabled" se as variáveis estiverem ausentes ou forem placeholders (`isPlaceholder`). O app continua funcionando 100% local.
+1. **Prompt 09 — Testes finais e deploy**:
+   - Testar multiusuário completo:
+     - Admin cria equipamento.
+     - Usuário comum inspeciona.
+     - Status persiste entre dispositivos via RPC.
+     - Exclusão propaga corretamente.
+     - Conflito com resolução manual.
+   - Relatório final com queries SQL de validação.
+   - Criar release estável (tag + changelog) e PR.
+2. **Avaliar Supabase Realtime** como evolução para propagação imediata.
+3. **Avaliar migração estrutural**:
+   - `id UUID` como PK.
+   - `tag TEXT UNIQUE` para identificação.
+   - FKs por UUID.
+   - Scanner por tag.
 
 ---
 
-## 15. Configuração TypeScript
+## 20. Checklist de Testes Obrigatórios
 
-`tsconfig.app.json` tem regras estritas que **afetam o que você pode escrever**:
+### Equipamentos
 
-```json
-{
-  "compilerOptions": {
-    "target": "ES2023",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "verbatimModuleSyntax": true,
-    "erasableSyntaxOnly": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "isolatedModules": true,
-    "jsx": "react-jsx"
-  }
-}
-```
+- [ ] Criar equipamento online → aparece no Supabase.
+- [ ] Criar equipamento offline → `sincronizado: false`.
+- [ ] Sincronizar equipamento offline → `sincronizado: true`.
+- [ ] Bloquear TAG duplicada (local + remoto).
+- [ ] TAG normalizada (trim, uppercase, hífen).
+- [ ] QR = TAG no cadastro, impressão, detalhes.
+- [ ] Excluir equipamento → `deleted_at` + sumir de outros dispositivos.
+- [ ] Equipamento excluído não aparece no scanner.
 
-### Consequências práticas
+### Inspeções
 
-- ❌ **NÃO use** `class`, `enum`, `namespace`, `module Foo {}`.
-- ✅ **USE** `interface`, `type`, `as const`, factory functions (`const authError = (...) => ({...})`).
-- ✅ **Imports de tipos**: `import type { Equipment } from '...'` ou `import { type Foo } from '...'` (nunca misture com valores).
-- ❌ **Não deixe** imports/vars sem usar — remova antes de commitar.
+- [ ] Realizar inspeção como admin → status persiste via RPC.
+- [ ] Realizar inspeção como usuário comum em equipamento de admin.
+- [ ] Sem duplicidade no histórico.
+- [ ] Plano de ação criado automaticamente se vencido/pendente.
 
-### Paths
+### Planos de Ação
 
-- De `src/components/X.tsx` → `../types`, `../services/...`, `../hooks/...`
-- De `src/pages/foo/Foo.tsx` → `../../types`, `../../components/...`
-- De `src/pages/foo/sub/Foo.tsx` → `../../../components/...`
+- [ ] Criar plano em dispositivo A → aparece em B após sync.
+- [ ] Editar plano em B → propaga para A.
+- [ ] Excluir/concluir plano → soft delete.
+- [ ] Contador de pendências correto.
 
----
+### QR Code
 
-## 16. Convenções de código
+- [ ] Imprimir QR → conteúdo = TAG.
+- [ ] Escanear offline → encontra equipamento (Zustand + Dexie).
+- [ ] Escanear online → encontra equipamento (Supabase fallback).
+- [ ] Bloquear equipamento excluído no scanner.
+- [ ] Bloquear código não cadastrado.
 
-| Aspecto | Convenção |
-|---|---|
-| **Estilo** | Funções puras + hooks; sem classes |
-| **Nomes de arquivo** | PascalCase para componentes/páginas (`NovoEquipamento.tsx`), camelCase para utilitários (`useToasts.ts`) |
-| **Componentes** | Função nomeada, export default por página; named export para componentes compartilhados |
-| **Estado** | `useState` local para UI, Zustand para cross-page, Dexie para persistente |
-| **Forms** | `react-hook-form` + `zod` (já configurado em `NovoEquipamento`) |
-| **Toasts** | Sempre via `showToast({...})`. Nunca `alert()` ou `console.log()` para UX |
-| **Datas** | ISO strings (`'2026-06-06'`) na store, `new Date()` só para exibição |
-| **Strings PT-BR** | Sempre com acentos corretos ("Configurações", não "Configuracoes") |
-| **Comentários** | Só quando explicam o "porquê", nunca o "o quê" (código deve ser autoexplicativo) |
+### Sync
 
-### Proibições explícitas
-
-- ❌ `any` (use `unknown` + narrowing).
-- ❌ `console.log` em código de produção (mantenha `console.warn`/`console.error`).
-- ❌ `localStorage` direto (use o store ou `authService`).
-- ❌ `class` para modelar erros (use factory + type guard, vide `authError`).
-- ❌ Novas dependências sem discussão prévia (projeto prioriza zero-deps para auth e zero-npm onde Web Crypto/IndexedDB bastam).
+- [ ] Testar sem F5 (Zustand atualizado após pull).
+- [ ] Testar foco/visibilidade (trocar aba e voltar).
+- [ ] Testar online → offline → online.
+- [ ] Verificar console sem loop agressivo.
+- [ ] Dados pendentes preservados após pull.
+- [ ] Órfãos reconciliados após pull vazio.
 
 ---
 
-## 17. Convenções de commit
-
-**Conventional Commits em PT-BR**, com escopo entre parênteses.
+## 21. Comandos Úteis
 
 ```bash
-git commit -m "feat(equipamentos): adiciona filtro por criticidade"
-git commit -m "fix(sync): resolve deadlock em pullFromCloud"
-git commit -m "docs: atualiza PROJECT.md com fluxos de auth"
-git commit -m "chore(deps): bump vite para 8.0.1"
-git commit -m "refactor(store): separa slice de actionPlans"
+npm install              # instalar dependências
+npm run dev              # Vite dev server (http://localhost:5173)
+npm run lint             # ESLint (tseslint recommended)
+npm run build            # tsc -b && vite build → dist/
+npm run preview          # servir o build localmente
 ```
 
-Escopos comuns: `auth`, `ui`, `pwa`, `equipamentos`, `inspecoes`, `plano-acao`, `sync`, `store`, `db`, `docs`, `deps`, `ci`.
+> ⚠️ Antes de qualquer commit, rode `npm run lint && npm run build`. O CI falha se algum quebrar.
 
 ---
 
-## 18. Fluxo de dados ponta-a-ponta
+## 22. Queries SQL Úteis
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         UI (React 19)                                │
-│   pages/* + components/*                                             │
-└──────────────────────────┬───────────────────────────────────────────┘
-                           │ hooks / store
-                           ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                  Zustand store (src/store/index.ts)                  │
-│   auth · RBAC · UI · sync · actionPlans · config · users             │
-└──────────┬──────────────────────────────────────┬────────────────────┘
-           │ leituras/escritas                     │ persist v2
-           ▼                                       ▼
-┌─────────────────────────┐               ┌────────────────────┐
-│  Dexie (IndexedDB)      │               │ localStorage       │
-│  v3: 5 tabelas          │               │ firecheck-storage  │
-│  + seed mock            │               │ firecheck-auth-... │
-└──────────┬──────────────┘               └────────────────────┘
-           │ sync (oportunístico)
-           ▼
-┌─────────────────────────┐
-│  Supabase (Postgres +   │
-│  Storage + RLS)         │
-│  public.* tables        │
-└─────────────────────────┘
+### Verificar tabelas
+
+```sql
+select
+  to_regclass('public.equipamentos') as equipamentos,
+  to_regclass('public.inspecoes') as inspecoes,
+  to_regclass('public.planos_acao') as planos_acao;
 ```
 
----
+### Verificar migrations remotas
 
-## 19. Receitas (como adicionar features)
+```sql
+select version, name from supabase_migrations.schema_migrations order by version;
+```
 
-### Adicionar uma nova página
+### Verificar policies
 
-1. Criar `src/pages/foo/Foo.tsx` (componente default export).
-2. Adicionar rota em `src/App.tsx` dentro de `<Route element={<ProtectedShell />}>`.
-3. Adicionar link na sidebar/bottom-nav em `src/components/layout/AppLayout.tsx`.
-4. Se for restrita a admin, fazer guard `if (!isAdmin(user)) return <Navigate to="/" />`.
+```sql
+select tablename, policyname, cmd, qual, with_check
+from pg_policies
+where schemaname = 'public'
+order by tablename, policyname;
+```
 
-### Adicionar um novo campo em `Equipment`
+### Verificar metadados contaminados
 
-1. Adicionar em `src/types/index.ts::Equipment`.
-2. Adicionar input em `src/pages/equipamentos/NovoEquipamento.tsx` (RHF + zod).
-3. Adicionar input em `src/pages/equipamentos/DetalhesEquipamento.tsx` (se editável inline).
-4. Adicionar coluna em `supabase/migrations/000X_add_*.sql` (criar nova migration, nunca editar 0001).
-5. Adicionar mapeamento em `src/services/mappers.ts::equipmentToDb / dbToEquipment`.
-6. Limpar cache do browser antes de testar (Dexie v3 → v4 bump se a coluna é indexada).
+```sql
+select id, dados_tecnicos
+from public.equipamentos
+where dados_tecnicos ? 'sincronizado'
+   or dados_tecnicos ? 'pendingDelete'
+   or dados_tecnicos ? 'syncAction'
+   or dados_tecnicos ? 'statusUpdatePending'
+   or dados_tecnicos ? 'syncError'
+   or dados_tecnicos ? 'deletedAt'
+   or dados_tecnicos ? 'deletedBy'
+   or dados_tecnicos ? 'createdAt'
+   or dados_tecnicos ? 'updatedAt';
+```
 
-### Adicionar um novo papel (ex.: "supervisor")
+### Verificar divergência QR/TAG
 
-1. Adicionar `UserRole = 'admin' | 'inspector' | 'supervisor'` em `types/index.ts`.
-2. Criar regra em `src/services/permissions.ts` (`canEdit*(user, x) = isAdmin(user) || isSupervisor(user) || (isInspector(user) && x.userId === user.id)`).
-3. Adicionar opção no `<select>` de `AdminUsuarios.tsx`.
-4. Adicionar badge em `AppLayout.tsx` + `Dashboard.tsx` se quiser destacar.
-5. Atualizar migration 0001 ou criar nova — **não** edite migrations antigas.
+```sql
+select id, qr_code, deleted_at
+from public.equipamentos
+where deleted_at is null
+  and (
+    qr_code is null
+    or upper(trim(qr_code)) <> upper(trim(id))
+  )
+order by id;
+```
 
-### Adicionar uma nova configuração persistida
+### Verificar planos de ação
 
-1. Adicionar em `AppConfig` (`types/index.ts`).
-2. Adicionar action no store (ex.: `setMinhaConfig`).
-3. Adicionar setter no `partialize` (se deve ser persistido).
-4. Adicionar UI em `Configuracoes.tsx`.
-
----
-
-## 20. Limitações conhecidas
-
-- **Login exige rede.** Como a identidade está no Supabase, login/registro/recovery precisam de conexão. Os dados continuam offline-first — uma vez logado, a PWA funciona offline (sync oportunístico).
-- **SMTP do Supabase precisa estar configurado** para o OTP de recuperação funcionar. Em projetos novos, o Supabase usa um SMTP de teste com rate limit baixo (2 e-mails/hora). Para produção, configurar SMTP próprio.
-- **Sync não é tempo real**: dependemos de `navigator.onLine` + clique manual. Para tempo real, adicionar Supabase Realtime channels.
-- **Sem multi-tenancy**: tudo é por projeto Supabase. Se dois clientes precisam de FireCheck isolados, criar projetos Supabase separados. Não existe `orgId` ainda.
-- **Storage de fotos** fica no IndexedDB em base64 (offline-first). Upload só acontece em sync. Fotos grandes (>5 MB) podem estourar quota do browser.
-- **PDF do relatório** usa html2canvas + jsPDF, pesado e gera o warning de chunk > 700kB. Considerar lazy-load da rota `/relatorios`.
-- **PR #1 do Cloudflare Workers bot** existe na branch `cloudflare/workers-autoconfig` (base `8c0ccb8`). Não relacionada ao deploy real — pode ser fechada sem merge.
-- **Dexie v4 → v5**: se adicionar campo indexado, lembrar de incrementar a versão e prover migração.
-
----
-
-## 21. Verificação manual antes de PR
-
-Para mudanças de auth/RBAC (Supabase Auth):
-- [ ] Cadastrar primeira conta no projeto Supabase → vira `admin` (trigger 0003) → badge "Admin" + link "Usuários" no sidebar.
-- [ ] Cadastrar segunda conta → segunda é `inspector`, sem badge.
-- [ ] Tentar acessar `/admin/usuarios` como inspector → redireciona para `/`.
-- [ ] Promover inspector a admin na tela → badge aparece no próximo load.
-- [ ] Rebaixar admin para inspector → badge some, link "Usuários" some.
-- [ ] Tentar rebaixar/excluir a si mesmo → bloqueado (UI + RPC `is_admin()` + policy).
-- [ ] Excluir outro usuário → some da lista (deleção cascateia de `profiles` e `auth.users` via RPC).
-- [ ] Logout → `signOut()` limpa sessão Supabase + redirect `/login`.
-- [ ] Reload página logada → sessão restaurada via `supabase.auth.getSession()`.
-- [ ] Token expirado → `autoRefreshToken` renova sem o usuário perceber.
-- [ ] **Recovery OTP**: `/login` → "Esqueci minha senha" → digitar e-mail → recebe código de 6 dígitos → `/redefinir-senha` → digita OTP → digita nova senha → entra.
-- [ ] **Recovery OTP inválido** (código errado) → erro `OTP_INVALID` sem avançar.
-- [ ] **Recovery OTP expirado** (1h) → botão "Reenviar código" reenvia.
-
-Para mudanças de sync:
-- [ ] Com `.env` preenchido + rede → cadastrar equipamento → `sincronizado: true` no IndexedDB e linha aparece no Supabase.
-- [ ] Sem rede → cadastrar equipamento → `sincronizado: false`, sync fica pendente.
-- [ ] Voltar rede → botão "Sincronizar" puxa a fila.
-- [ ] Sem `.env` → botão "Sincronizar" mostra toast "modo offline".
-
-Para mudanças de UI:
-- [ ] Testar em viewport 320px (mobile pequeno), 375px, 768px (tablet), 1280px (desktop).
-- [ ] Testar com `prefers-reduced-motion: reduce`.
-- [ ] Verificar `npm run build` (CSS purged, sem warnings novos).
-- [ ] Verificar impressão (`@media print` em `.qr-label*` e `.no-print`).
+```sql
+select id, equipment_id, status, created_at, updated_at, deleted_at
+from public.planos_acao
+order by updated_at desc nulls last, created_at desc nulls last
+limit 20;
+```
 
 ---
 
-## 22. Quando pedir clarificação
+## 23. Como a IA Deve Usar Este Arquivo
 
-Em vez de inventar, **pergunte** se:
+Sempre que iniciar nova sessão neste projeto:
 
-- Você precisa adicionar uma nova dependência npm.
-- Você precisa tocar em `migrations/0001` (prefira criar uma nova).
-- Você precisa mudar o esquema de auth (afeta TODOS os usuários do dispositivo).
-- Você precisa mexer em `public/sw.js` (afeta cache offline).
-- Você precisa de uma nova variável de ambiente (precisa configurar no GitHub Pages secrets).
-- Você precisa de UI em inglês (projeto é PT-BR por convenção).
+1. Leia este `PROJECT.md` primeiro.
+2. Verifique o estado atual com `git status`, `git branch`, `npm run lint`, `npm run build`.
+3. Confira qual foi o último prompt executado (seção 9).
+4. Não repita correções já concluídas.
+5. Não avance para a próxima etapa sem validar a anterior.
+6. Não faça merge automático.
+7. Atualize este arquivo ao final de cada etapa.
 
 ---
 
-## 23. Resumo de uma linha
+## 24. Log de Atualizações
 
-> **FireCheck** = React 19 + Dexie + Zustand PWA offline-first para inspeção de extintores/hidrantes/alarmes, com Supabase Auth (senha + recovery OTP por e-mail), RBAC admin/inspector (ownership-based), perfis em `public.profiles` com RLS, sync bidirecional opcional com Supabase, gerenciamento de QR Codes com impressão em lote, UI em PT-BR, design system próprio em `index.css`, e deploy em GitHub Pages.
+| Data | Branch | Etapa | Alteração | Status | Próximo passo |
+|------|--------|-------|-----------|--------|---------------|
+| 2026-06-21 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Criação/atualização do `PROJECT.md` | Documentação completa do projeto com histórico de correções, riscos, próximos passos | Concluído | Prompt 06 — auto-sync confiável |
+| 2026-06-21 | `fix/firecheck-06-auto-sync-confiavel` | Auto-sync confiável | `useAutoSync` com mount trigger, `isOnline` reativo, listeners centralizados, logs DEV, bug `pushApErrors` corrigido | Concluído | Prompt 07 — controle básico de conflito por updated_at/versão |
+| 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at + UI de conflito | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store, badge "Conflito" em equipamentos/planos, alerta em detalhes, painel Dashboard, indicador Sidebar | Concluído | Prompt 08 — resolução manual de conflito (forçar sync ou descartar alteração local) |
+| 2026-06-21 | `fix/firecheck-08-resolucao-manual-conflitos` | Resolução manual de conflitos + auditoria PWA | `resolveEquipmentConflictKeepLocal/UseRemote`, `resolveActionPlanConflictKeepLocal/UseRemote`, UI de resolução em DetalhesEquipamento e PlanoDeAcao, auditoria migrations (14 seguras), SW/PWA (navigateFallback + NetworkOnly), listeners (sem duplicatas), console.log sanitizados (12 em DEV guard), lint 0 erros, build ok | Concluído | PR para main |
+
+---
+
+## 25. Critérios para Considerar o FireCheck Estável
+
+- [ ] `npm run lint` sem erros.
+- [ ] `npm run build` OK.
+- [ ] Todas as migrations (`0001`–`0014`) aplicadas no Supabase remoto.
+- [ ] Cadastro de equipamento sem duplicidade (local + remoto).
+- [ ] Inspeção sem duplicidade no histórico.
+- [ ] Status por inspeção persiste entre usuários (RPC).
+- [ ] Planos de ação sincronizam entre dispositivos.
+- [ ] QR Code escaneia corretamente (Zustand → Dexie → Supabase).
+- [ ] Exclusão propaga entre dispositivos (tombstone).
+- [ ] App funciona offline (criação, inspeção, plano de ação).
+- [ ] App sincroniza ao voltar online.
+- [ ] Nenhum dado pendente é perdido durante sync.
+- [ ] Nenhum falso sucesso é exibido (TAG duplicada bloqueada).
+- [ ] Teste multiusuário aprovado (admin + inspector).
+- [ ] Scanner rejeita equipamento excluído.
+- [ ] QR Code sempre codifica a TAG oficial.

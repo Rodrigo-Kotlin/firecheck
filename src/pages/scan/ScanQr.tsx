@@ -15,6 +15,10 @@ import {
   Beaker,
 } from 'lucide-react';
 import type { Equipment } from '../../types';
+import { matchesEquipmentIdentity, normalizeEquipmentTag } from '../../utils/equipmentIdentity';
+import { db } from '../../db';
+import { findEquipmentById } from '../../services/equipmentService';
+import { isSupabaseConfigured } from '../../lib/supabase';
 
 type ScanResult =
   | { kind: 'success'; eq: Equipment }
@@ -44,12 +48,47 @@ export default function ScanQr() {
     };
   }, []);
 
-  const handleQrSuccess = useCallback((code: string) => {
+  const findEquipmentByCode = useCallback(async (code: string): Promise<Equipment | null> => {
+    const isActive = (e: { pendingDelete?: boolean; deletedAt?: string | null }): boolean =>
+      !e.pendingDelete && !e.deletedAt;
+
+    // 1) Zustand (fast path)
+    const local = equipments.find(
+      (e) => isActive(e) && matchesEquipmentIdentity(e, code),
+    );
+    if (local) return local;
+
+    // 2) Dexie (offline cache)
+    try {
+      const all = await db.equipamentos.toArray();
+      const dexieEq = all.find(
+        (e) => isActive(e) && matchesEquipmentIdentity(e, code),
+      );
+      if (dexieEq) return dexieEq;
+    } catch {
+      // Dexie indisponível
+    }
+
+    // 3) Supabase (remote, only if online)
+    if (typeof navigator !== 'undefined' && navigator.onLine && isSupabaseConfigured) {
+      try {
+        const remoto = await findEquipmentById(code);
+        if (remoto && isActive(remoto)) return remoto;
+      } catch {
+        // Falha na consulta remota
+      }
+    }
+
+    return null;
+  }, [equipments]);
+
+  const handleQrSuccess = useCallback(async (code: string) => {
     // Prevent re-scanning the same code while a not-found overlay is showing.
     const current = scanResultRef.current;
     if (current?.kind === 'not-found' && current.code === code) return;
 
-    const eq = equipments.find((e) => e.id.toUpperCase() === code.trim().toUpperCase());
+    const normalizedCode = normalizeEquipmentTag(code);
+    const eq = await findEquipmentByCode(normalizedCode);
     if (eq) {
       setScanResult({ kind: 'success', eq });
       if (scannerRef.current && scannerRef.current.isScanning) {
@@ -61,7 +100,7 @@ export default function ScanQr() {
     } else {
       setScanResult({ kind: 'not-found', code });
     }
-  }, [equipments, navigate]);
+  }, [findEquipmentByCode, navigate]);
 
   useEffect(() => {
     const html5QrcodeId = 'qr-reader';

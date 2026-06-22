@@ -2,7 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Shield, QrCode, FileBarChart, X,
   ClipboardList, Settings, LogOut,
-  RefreshCw, Cloud, CloudOff, Users,
+  RefreshCw, Cloud, CloudOff, Users, AlertOctagon,
 } from 'lucide-react';
 import { useAppStore } from '../../store';
 import { isAdmin } from '../../services/permissions';
@@ -16,7 +16,7 @@ type SidebarProps = {
 };
 
 export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
-  const { user, syncEnabled, syncing, pending, triggerSync, logout } = useAppStore();
+  const { user, syncEnabled, syncing, pending, conflictCounts, triggerSync, logout } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -155,6 +155,14 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
                   </span>
                 )}
               </div>
+              {(conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0) && (
+                <div className="flex items-center gap-1.5 text-[10px] font-bold text-critical bg-red-50 rounded-md px-2 py-1.5">
+                  <AlertOctagon className="w-3 h-3 flex-shrink-0" />
+                  <span>
+                    Conflito{conflictCounts.equipments + conflictCounts.actionPlans > 1 ? 's' : ''}: {conflictCounts.equipments + conflictCounts.actionPlans}
+                  </span>
+                </div>
+              )}
               <SyncNowButton
                 isOnline={isOnline}
                 syncing={syncing}

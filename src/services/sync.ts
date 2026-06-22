@@ -22,19 +22,24 @@
  * report.
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { db, type LocalActionPlan } from '../db';
-import { fetchEquipments, upsertEquipment, softDeleteEquipment } from './equipmentService';
+import { db } from '../db';
+import { fetchEquipments, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById, softDeleteEquipment, applyEquipmentInspectionStatusRemote, type ServiceResult } from './equipmentService';
 import { fetchInspections, upsertInspection } from './inspectionService';
-import { upsertActionPlan, deleteActionPlan } from './actionPlanService';
+import {
+  fetchActionPlans,
+  fetchActionPlanById,
+  createActionPlanRemote,
+  updateActionPlanRemote,
+  softDeleteActionPlanRemote,
+} from './actionPlanService';
 import {
   dbToEquipment,
   dbToInspection,
-  dbToActionPlan,
   equipmentToDb,
   inspectionToDb,
-  actionPlanToDb,
 } from './mappers';
-import type { ActionPlan, Equipment } from '../types';
+import type { Equipment } from '../types';
+import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
 
 /** Concurrency guard — prevents overlapping sync runs. */
 let _syncInProgress = false;
@@ -46,14 +51,41 @@ export interface SyncReport {
   errors: number;
   skipped: boolean;
   reason?: string;
-  /** IDs of action plans that were successfully pushed. */
-  pushedActionPlanIds: string[];
-  /** IDs of action plans that were successfully deleted from cloud. */
-  deletedActionPlanIds: string[];
+
+  // -- Detalhamento por domínio --
+  pushEqOk: number;
+  pushInsOk: number;
+  pushErrors: number;
+  pullEqImported: number;
+  pullEqReconciled: number;
+  pullInsImported: number;
+  pullInsReconciled: number;
+  pullEqError: boolean;
+  pullInsError: boolean;
+  pullEqEmpty: boolean;
+  pullInsEmpty: boolean;
+
+  // -- Detalhamento de planos de ação --
+  pushApOk: number;
+  pushApErrors: number;
+  pullApImported: number;
+  pullApReconciled: number;
+  pullApError: boolean;
+  pullApEmpty: boolean;
 }
 
 function skip(reason: string): SyncReport {
-  return { pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason, pushedActionPlanIds: [], deletedActionPlanIds: [] };
+  return {
+    pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason,
+    pushEqOk: 0, pushInsOk: 0, pushErrors: 0,
+    pullEqImported: 0, pullEqReconciled: 0,
+    pullInsImported: 0, pullInsReconciled: 0,
+    pullEqError: false, pullInsError: false,
+    pullEqEmpty: false, pullInsEmpty: false,
+    pushApOk: 0, pushApErrors: 0,
+    pullApImported: 0, pullApReconciled: 0,
+    pullApError: false, pullApEmpty: false,
+  };
 }
 
 function canSync(): boolean {
@@ -66,6 +98,13 @@ export function isSyncInProgress(): boolean {
   return _syncInProgress;
 }
 
+/** Compare two ISO date strings by their numeric timestamp.
+ *  Returns true when the remote timestamp differs from the local base. */
+function isConflict(localBase: string | null | undefined, remoteUpdatedAt: string | undefined): boolean {
+  if (!localBase || !remoteUpdatedAt) return false;
+  return new Date(remoteUpdatedAt).getTime() !== new Date(localBase).getTime();
+}
+
 // ---------------------------------------------------------------------------
 // PUSH
 // ---------------------------------------------------------------------------
@@ -75,46 +114,236 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
   let errors = 0;
   let deleted = 0;
 
-  // 1) pending deletes — soft delete: send a tombstone (deleted_at) to Supabase
-  //    so other clients can discover the deletion during pull.
+  const markConflict = async (id: string, remoteUpdatedAt: string, reason: string) => {
+    if (import.meta.env.DEV) {
+      console.log(`[conflict] detected for equipment ${id}: ${reason}`);
+    }
+    await db.equipamentos.update(id, {
+      syncConflict: true,
+      syncConflictReason: reason,
+      remoteUpdatedAtAtConflict: remoteUpdatedAt,
+      syncError: 'conflict',
+      sincronizado: false,
+    });
+  };
+
+  // 1) pending deletes — soft delete com verificação de conflito
   const toDelete = await db.equipamentos.filter((e) => !!e.pendingDelete).toArray();
+  if (import.meta.env.DEV && toDelete.length > 0) {
+    console.log(`[sync] pushEquipments: ${toDelete.length} exclusões pendentes (${toDelete.map(e => e.id).join(', ')})`);
+  }
   for (const eq of toDelete) {
+    // Verificar conflito antes de deletar
+    const remoteResult = await fetchEquipmentById(eq.id);
+    if (remoteResult.ok && remoteResult.data) {
+      const remote = remoteResult.data;
+      if (remote.deletedAt) {
+        // Já deletado remotamente — reconciliar
+        await db.equipamentos.update(eq.id, {
+          pendingDelete: false,
+          sincronizado: true,
+          syncAction: undefined,
+          syncConflict: false,
+          syncConflictReason: undefined,
+          syncError: undefined,
+          deletedAt: remote.deletedAt,
+          deletedBy: remote.deletedBy ?? userId ?? null,
+          updatedAt: remote.updatedAt ?? new Date().toISOString(),
+        });
+        deleted++;
+        if (import.meta.env.DEV) console.log('[sync] Equipamento %s já deletado remotamente — reconciliado', eq.id);
+        continue;
+      }
+      if (isConflict(eq.syncBaseUpdatedAt, remote.updatedAt)) {
+        await markConflict(eq.id, remote.updatedAt ?? '', 'Este equipamento foi alterado em outro dispositivo antes da exclusão. Revise antes de excluir.');
+        errors++;
+        continue;
+      }
+    } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+      // Erro de rede — preservar pendência
+      console.error('[sync.pushEquipments] Erro ao verificar conflito para exclusão', { id: eq.id });
+      errors++;
+      continue;
+    }
+    // Sem conflito ou não encontrado — prosseguir com soft delete
     const success = await softDeleteEquipment(eq.id, userId);
     if (success) {
       await db.equipamentos.update(eq.id, {
         pendingDelete: false,
         sincronizado: true,
+        syncAction: undefined,
+        syncConflict: false,
+        syncConflictReason: undefined,
+        syncError: undefined,
         deletedAt: new Date().toISOString(),
         deletedBy: userId ?? null,
         updatedAt: new Date().toISOString(),
       });
       deleted++;
-      console.log('[sync] Equipamento %s deletado (soft) do Supabase', eq.id);
+      if (import.meta.env.DEV) console.log('[sync] Equipamento %s deletado (soft) do Supabase', eq.id);
     } else {
-      console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', {
-        id: eq.id,
-      });
+      console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', { id: eq.id });
       errors++;
     }
   }
 
-  // 2) pending upserts
-  const pending = await db.equipamentos.filter((e) => !e.sincronizado && !e.pendingDelete).toArray();
+  // 2) pending sync — create / update (exclui syncError e itens com statusUpdatePending
+  //    sem syncAction — são sincronizados via RPC em pushInspections)
+  const pending = await db.equipamentos
+    .filter((e) => !e.sincronizado && !e.pendingDelete && !e.syncError && !(e.statusUpdatePending && !e.syncAction))
+    .toArray();
+  if (import.meta.env.DEV && pending.length > 0) {
+    console.log(`[sync] pushEquipments: ${pending.length} pendentes (${pending.map(e => e.id).join(', ')})`);
+  }
   for (const eq of pending) {
-    let toUpsert: Equipment = eq;
+    let toSync: Equipment = eq;
     if (!eq.createdBy && userId) {
       await db.equipamentos.update(eq.id, { createdBy: userId });
-      toUpsert = { ...eq, createdBy: userId };
+      toSync = { ...eq, createdBy: userId };
     }
-    const success = await upsertEquipment(toUpsert);
-    if (success) {
-      await db.equipamentos.update(eq.id, { sincronizado: true });
-      ok++;
-      console.log('[sync] Equipamento %s sincronizado com sucesso', eq.id);
+
+    let result: ServiceResult;
+
+    if (eq.syncAction === 'create') {
+      // Create não precisa verificar conflito — é inserção nova
+      result = await createEquipmentRemote(toSync);
+      if (result.ok) {
+        // Buscar updated_at remoto após criação para salvar como base
+        const fetchResult = await fetchEquipmentById(eq.id);
+        const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+        await db.equipamentos.update(eq.id, {
+          sincronizado: true,
+          syncAction: undefined,
+          syncError: undefined,
+          syncConflict: false,
+          syncConflictReason: undefined,
+          syncBaseUpdatedAt: remoteUpdatedAt,
+          updatedAt: remoteUpdatedAt,
+        });
+        ok++;
+        if (import.meta.env.DEV) console.log('[sync] Equipamento %s criado com sucesso', eq.id);
+      }
+    } else if (eq.syncAction === 'update') {
+      // Verificar conflito antes de atualizar
+      if (import.meta.env.DEV) {
+        console.log(`[conflict] checking equipment ${eq.id}: base=${eq.syncBaseUpdatedAt}`);
+      }
+      const remoteResult = await fetchEquipmentById(eq.id);
+      if (!remoteResult.ok) {
+        if (remoteResult.code === 'not_found') {
+          // Remoto não existe — tratar como criação
+          result = await createEquipmentRemote(toSync);
+          if (result.ok) {
+            const fetchResult = await fetchEquipmentById(eq.id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+            await db.equipamentos.update(eq.id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              syncBaseUpdatedAt: remoteUpdatedAt,
+              updatedAt: remoteUpdatedAt,
+            });
+            ok++;
+            if (import.meta.env.DEV) console.log('[sync] Equipamento %s recriado no servidor (não existia)', eq.id);
+          }
+        } else {
+          // Erro de rede — preservar pendência
+          console.error('[sync.pushEquipments] Erro ao verificar conflito para update', { id: eq.id });
+          errors++;
+          continue;
+        }
+      } else {
+        const remote = remoteResult.data!;
+        if (import.meta.env.DEV) {
+          console.log(`[conflict] remote updated_at=${remote.updatedAt}, local base=${eq.syncBaseUpdatedAt}`);
+        }
+        if (isConflict(eq.syncBaseUpdatedAt, remote.updatedAt)) {
+          await markConflict(eq.id, remote.updatedAt ?? '', 'Este registro foi alterado em outro dispositivo antes da sincronização. Revise antes de continuar.');
+          if (import.meta.env.DEV) console.log(`[conflict] update blocked for equipment ${eq.id}`);
+          // Não conta como erro — é conflito controlado
+        } else {
+          if (import.meta.env.DEV) console.log(`[conflict] update allowed for equipment ${eq.id}`);
+          result = await updateEquipmentRemote(toSync);
+          if (result.ok) {
+            // Buscar updated_at remoto após update
+            const fetchResult = await fetchEquipmentById(eq.id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+            await db.equipamentos.update(eq.id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              syncBaseUpdatedAt: remoteUpdatedAt,
+              updatedAt: remoteUpdatedAt,
+            });
+            ok++;
+            if (import.meta.env.DEV) console.log('[sync] Equipamento %s atualizado com sucesso', eq.id);
+          } else {
+            console.error('[sync] Falha ao atualizar equipamento %s — mantendo sincronizado: false', eq.id);
+            errors++;
+          }
+        }
+      }
     } else {
-      console.error('[sync] Falha ao sincronizar equipamento %s — mantendo sincronizado: false', eq.id);
-      errors++;
+      // Legacy — sem syncAction: tenta detectar se é create ou update
+      const remoteResult = await fetchEquipmentById(eq.id);
+      if (remoteResult.ok && remoteResult.data) {
+        const remote = remoteResult.data;
+        if (isConflict(eq.syncBaseUpdatedAt, remote.updatedAt)) {
+          await markConflict(eq.id, remote.updatedAt ?? '', 'Conflito detectado em registro legado. Revise antes de continuar.');
+          continue;
+        }
+        result = await updateEquipmentRemote(toSync);
+        if (result.ok) {
+          const fetchResult = await fetchEquipmentById(eq.id);
+          const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+          await db.equipamentos.update(eq.id, {
+            sincronizado: true,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            syncBaseUpdatedAt: remoteUpdatedAt,
+            updatedAt: remoteUpdatedAt,
+          });
+          ok++;
+        } else {
+          console.error('[sync] Falha ao sincronizar equipamento %s — mantendo sincronizado: false', eq.id);
+          errors++;
+        }
+      } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+        console.error('[sync] Erro ao verificar equipamento remoto %s', eq.id);
+        errors++;
+      } else {
+        result = await createEquipmentRemote(toSync);
+        if (result.ok) {
+          const fetchResult = await fetchEquipmentById(eq.id);
+          const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+          await db.equipamentos.update(eq.id, {
+            sincronizado: true,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            syncBaseUpdatedAt: remoteUpdatedAt,
+            updatedAt: remoteUpdatedAt,
+          });
+          ok++;
+        } else if (result.code === 'duplicate') {
+          await db.equipamentos.update(eq.id, { syncError: 'duplicate' });
+          if (import.meta.env.DEV) console.warn('[sync] Conflito de duplicidade para %s — syncError=duplicate', eq.id);
+        } else {
+          console.error('[sync] Falha ao sincronizar equipamento %s', eq.id);
+          errors++;
+        }
+      }
     }
+  }
+  if (import.meta.env.DEV) {
+    console.log(`[sync] pushEquipments final: ok=${ok} errors=${errors} deleted=${deleted}`);
   }
   return { ok, errors, deleted };
 }
@@ -153,153 +382,385 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       await db.inspecoes.update(insp.id, { userId });
       toUpsert = { ...insp, userId };
     }
+
+    // 1. Enviar inspeção para o Supabase
     const success = await upsertInspection(toUpsert);
-    if (success) {
-      await db.inspecoes.update(insp.id, { sincronizado: true });
-      ok++;
-    } else {
+    if (!success) {
       console.error('[sync] Falha ao sincronizar inspeção %s — mantendo sincronizado: false', insp.id);
+      errors++;
+      continue;
+    }
+
+    // 2. Aplicar status do equipamento via RPC segura (SECURITY DEFINER)
+    const localEq = await db.equipamentos.get(insp.equipmentId);
+    const rpcResult = await applyEquipmentInspectionStatusRemote(
+      insp.equipmentId,
+      insp.status,
+      insp.data,
+      localEq?.dataProximaInspecao ?? undefined,
+    );
+
+    if (rpcResult.ok) {
+      // 3. Sucesso completo: marcar inspeção como sincronizada e atualizar equipamento local
+      await db.inspecoes.update(insp.id, { sincronizado: true });
+
+      // Atualizar equipamento local com os dados retornados pela RPC
+      if (rpcResult.data) {
+        const rpcData = rpcResult.data as unknown as Record<string, unknown>;
+        await db.equipamentos.update(insp.equipmentId, {
+          sincronizado: true,
+          statusUpdatePending: undefined,
+          updatedAt: (typeof rpcData.updated_at === 'string' ? rpcData.updated_at : undefined) as string | undefined,
+          status: typeof rpcData.status === 'string' ? (rpcData.status as Equipment['status']) : undefined,
+          dataUltimaInspecao: typeof rpcData.data_ultima_inspecao === 'string' ? rpcData.data_ultima_inspecao : undefined,
+          dataProximaInspecao: typeof rpcData.data_proxima_inspecao === 'string' ? rpcData.data_proxima_inspecao : undefined,
+        });
+      } else {
+        // RPC retornou ok sem data — apenas limpar flags
+        await db.equipamentos.update(insp.equipmentId, {
+          sincronizado: true,
+          statusUpdatePending: undefined,
+        });
+      }
+
+      ok++;
+      if (import.meta.env.DEV) console.log('[sync] Inspeção %s e status do equipamento %s sincronizados com sucesso',
+        insp.id, insp.equipmentId);
+    } else {
+      // RPC falhou — NÃO marcar inspeção como sincronizada para retentar
+      console.error('[sync] Inspeção %s enviada, mas RPC de status falhou: %s',
+        insp.id, rpcResult.message ?? rpcResult.code);
       errors++;
     }
   }
   return { ok, errors, deleted };
 }
 
-async function pushActionPlans(
-  plans: LocalActionPlan[],
-  userId?: string,
-): Promise<{ ok: number; errors: number; deleted: number; syncedIds: string[]; deletedIds: string[] }> {
+async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
-  const syncedIds: string[] = [];
-  const deletedIds: string[] = [];
 
-  // 1) pending deletes
-  const toDelete = plans.filter((p) => p.pendingDelete);
+  const markConflict = async (id: string, remoteUpdatedAt: string, reason: string) => {
+    if (import.meta.env.DEV) {
+      console.log(`[conflict] detected for action plan ${id}: ${reason}`);
+    }
+    await db.planosAcao.update(id, {
+      syncConflict: true,
+      syncConflictReason: reason,
+      remoteUpdatedAtAtConflict: remoteUpdatedAt,
+      syncError: 'conflict',
+      sincronizado: false,
+    });
+  };
+
+  // 1) pending deletes — soft delete com verificação de conflito
+  const toDelete = await db.planosAcao.filter((p) => !!p.pendingDelete).toArray();
   for (const plan of toDelete) {
-    const success = await deleteActionPlan(plan.id);
-    if (success) {
+    // Verificar conflito antes de deletar
+    const remoteResult = await fetchActionPlanById(plan.id);
+    if (remoteResult.ok && remoteResult.data) {
+      const remote = remoteResult.data;
+      if (remote.deletedAt) {
+        // Já deletado remotamente — reconciliar
+        await db.planosAcao.update(plan.id, {
+          pendingDelete: false,
+          sincronizado: true,
+          syncAction: undefined,
+          syncConflict: false,
+          syncConflictReason: undefined,
+          syncError: undefined,
+          deletedAt: remote.deletedAt,
+          deletedBy: remote.deletedBy ?? userId ?? null,
+          updatedAt: remote.updatedAt ?? new Date().toISOString(),
+        });
+        deleted++;
+        if (import.meta.env.DEV) console.log('[sync] Plano %s já deletado remotamente — reconciliado', plan.id);
+        continue;
+      }
+      if (isConflict(plan.syncBaseUpdatedAt, remote.updatedAt)) {
+        await markConflict(plan.id, remote.updatedAt ?? '', 'Este plano foi alterado em outro dispositivo antes da exclusão. Revise antes de excluir.');
+        errors++;
+        continue;
+      }
+    } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+      console.error('[sync.pushActionPlans] Erro ao verificar conflito para exclusão', { id: plan.id });
+      errors++;
+      continue;
+    }
+    const result = await softDeleteActionPlanRemote(plan.id, userId);
+    if (result.ok) {
+      await db.planosAcao.update(plan.id, {
+        pendingDelete: false,
+        sincronizado: true,
+        syncAction: undefined,
+        syncConflict: false,
+        syncConflictReason: undefined,
+        syncError: undefined,
+        deletedAt: new Date().toISOString(),
+        deletedBy: userId ?? null,
+        updatedAt: new Date().toISOString(),
+      });
       deleted++;
-      deletedIds.push(plan.id);
-      console.log('[sync] Plano de ação %s deletado do Supabase', plan.id);
+      if (import.meta.env.DEV) console.log('[sync] Plano %s deletado (soft) do Supabase', plan.id);
     } else {
-      console.error('[sync] Falha ao deletar plano de ação %s no Supabase', plan.id);
+      console.error('[sync.pushActionPlans] Falha ao deletar plano no Supabase', { id: plan.id });
       errors++;
     }
   }
 
-  // 2) pending upserts — only push plans that have explicit sincronizado: false
-  const pending = plans.filter((p) => p.sincronizado === false && !p.pendingDelete);
+  // 2) pending sync — create / update
+  const pending = await db.planosAcao
+    .filter((p) => !p.sincronizado && !p.pendingDelete && !p.syncError)
+    .toArray();
+  if (import.meta.env.DEV && pending.length > 0) {
+    console.log(`[sync] pushActionPlans: ${pending.length} pendentes (${pending.map(p => p.id).join(', ')})`);
+  }
   for (const plan of pending) {
-    const clean: ActionPlan = {
-      id: plan.id,
-      equipmentId: plan.equipmentId,
-      local: plan.local,
-      descricao: plan.descricao,
-      criticidade: plan.criticidade,
-      responsavel: plan.responsavel,
-      prazo: plan.prazo,
-      status: plan.status,
-      createdAt: plan.createdAt,
-      userId: plan.userId ?? userId,
-    };
-    const success = await upsertActionPlan(clean);
-    if (success) {
-      ok++;
-      syncedIds.push(plan.id);
-      console.log('[sync] Plano de ação %s sincronizado com sucesso', plan.id);
+    const toSync = { ...plan, userId: plan.userId ?? userId };
+
+    let result: ServiceResult;
+
+    if (plan.syncAction === 'create') {
+      result = await createActionPlanRemote(toSync);
+      if (result.ok) {
+        const fetchResult = await fetchActionPlanById(plan.id);
+        const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+        await db.planosAcao.update(plan.id, {
+          sincronizado: true,
+          syncAction: undefined,
+          syncError: undefined,
+          syncConflict: false,
+          syncConflictReason: undefined,
+          syncBaseUpdatedAt: remoteUpdatedAt,
+          updatedAt: remoteUpdatedAt,
+        });
+        ok++;
+        if (import.meta.env.DEV) console.log('[sync] Plano %s criado com sucesso', plan.id);
+      }
+    } else if (plan.syncAction === 'update') {
+      if (import.meta.env.DEV) {
+        console.log(`[conflict] checking action plan ${plan.id}: base=${plan.syncBaseUpdatedAt}`);
+      }
+      const remoteResult = await fetchActionPlanById(plan.id);
+      if (!remoteResult.ok) {
+        if (remoteResult.code === 'not_found') {
+          result = await createActionPlanRemote(toSync);
+          if (result.ok) {
+            const fetchResult = await fetchActionPlanById(plan.id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+            await db.planosAcao.update(plan.id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              syncBaseUpdatedAt: remoteUpdatedAt,
+              updatedAt: remoteUpdatedAt,
+            });
+            ok++;
+            if (import.meta.env.DEV) console.log('[sync] Plano %s recriado no servidor (não existia)', plan.id);
+          }
+        } else {
+          console.error('[sync.pushActionPlans] Erro ao verificar conflito para update', { id: plan.id });
+          errors++;
+          continue;
+        }
+      } else {
+        const remote = remoteResult.data!;
+        if (import.meta.env.DEV) {
+          console.log(`[conflict] remote updated_at=${remote.updatedAt}, local base=${plan.syncBaseUpdatedAt}`);
+        }
+        if (isConflict(plan.syncBaseUpdatedAt, remote.updatedAt)) {
+          await markConflict(plan.id, remote.updatedAt ?? '', 'Este registro foi alterado em outro dispositivo antes da sincronização. Revise antes de continuar.');
+          if (import.meta.env.DEV) console.log(`[conflict] update blocked for action plan ${plan.id}`);
+        } else {
+          if (import.meta.env.DEV) console.log(`[conflict] update allowed for action plan ${plan.id}`);
+          result = await updateActionPlanRemote(toSync);
+          if (result.ok) {
+            const fetchResult = await fetchActionPlanById(plan.id);
+            const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+            await db.planosAcao.update(plan.id, {
+              sincronizado: true,
+              syncAction: undefined,
+              syncError: undefined,
+              syncConflict: false,
+              syncConflictReason: undefined,
+              syncBaseUpdatedAt: remoteUpdatedAt,
+              updatedAt: remoteUpdatedAt,
+            });
+            ok++;
+            if (import.meta.env.DEV) console.log('[sync] Plano %s atualizado com sucesso', plan.id);
+          } else {
+            console.error('[sync] Falha ao atualizar plano %s — mantendo sincronizado: false', plan.id);
+            errors++;
+          }
+        }
+      }
     } else {
-      console.error('[sync] Falha ao sincronizar plano de ação %s — mantendo sincronizado: false', plan.id);
-      errors++;
+      // Legacy — sem syncAction: tenta create; se duplicar, faz update
+      const remoteResult = await fetchActionPlanById(plan.id);
+      if (remoteResult.ok && remoteResult.data) {
+        const remote = remoteResult.data;
+        if (isConflict(plan.syncBaseUpdatedAt, remote.updatedAt)) {
+          await markConflict(plan.id, remote.updatedAt ?? '', 'Conflito detectado em registro legado. Revise antes de continuar.');
+          continue;
+        }
+        result = await updateActionPlanRemote(toSync);
+        if (result.ok) {
+          const fetchResult = await fetchActionPlanById(plan.id);
+          const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+          await db.planosAcao.update(plan.id, {
+            sincronizado: true,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            syncBaseUpdatedAt: remoteUpdatedAt,
+            updatedAt: remoteUpdatedAt,
+          });
+          ok++;
+        }
+      } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+        console.error('[sync] Erro ao verificar plano remoto %s', plan.id);
+        errors++;
+        continue;
+      } else {
+        result = await createActionPlanRemote(toSync);
+        if (result.ok) {
+          const fetchResult = await fetchActionPlanById(plan.id);
+          const remoteUpdatedAt = fetchResult.ok && fetchResult.data ? fetchResult.data.updatedAt : new Date().toISOString();
+          await db.planosAcao.update(plan.id, {
+            sincronizado: true,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            syncBaseUpdatedAt: remoteUpdatedAt,
+            updatedAt: remoteUpdatedAt,
+          });
+          ok++;
+        } else if (result.code === 'duplicate') {
+          await db.planosAcao.update(plan.id, { syncError: 'duplicate' });
+          if (import.meta.env.DEV) console.warn('[sync] Conflito de duplicidade para plano %s — syncError=duplicate', plan.id);
+        } else {
+          console.error('[sync] Falha ao sincronizar plano %s', plan.id);
+          errors++;
+        }
+      }
     }
   }
-  return { ok, errors, deleted, syncedIds, deletedIds };
+  if (import.meta.env.DEV) {
+    console.log(`[sync] pushActionPlans final: ok=${ok} errors=${errors} deleted=${deleted}`);
+  }
+  return { ok, errors, deleted };
 }
 
 // ---------------------------------------------------------------------------
 // PULL
 // ---------------------------------------------------------------------------
 
-/** Replace equipment rows from cloud, but never overwrite local unsynced edits.
- *  After importing, remove any local rows that are fully synced (`sincronizado: true`)
- *  but no longer exist in the cloud — the cloud is the source of truth for synced
- *  data. */
-async function pullEquipments(): Promise<number> {
-  console.log('[sync] Pull de equipamentos...');
-  const cloud = await fetchEquipments();
-  if (!cloud) {
-    console.log('[sync] Supabase retornou null para equipamentos — preservando dados locais');
-    return 0;
-  }
-  if (cloud.length === 0) {
-    console.log('[sync] Supabase retornou lista vazia de equipamentos — preservando dados locais');
-    return 0;
+interface PullResult {
+  imported: number;
+  reconciled: number;
+  error: boolean;
+  /** true quando o Supabase retornou resposta válida vazia (não erro). */
+  empty: boolean;
+}
+
+/** Import cloud equipment rows, reconcile orphans, preserve pending changes.
+ *  Regras:
+ *   • Se fetch falhar (rede/RLS/Supabase) → preserva tudo, não reconcilia.
+ *   • Se fetch retornar lista vazia → reconcilia órfãos (pode ser a exclusão
+ *     do último item no servidor).
+ *   • Itens locais sincronizados sem pendência que não existem no cloud
+ *     são marcados com deletedAt (soft delete local).
+ *   • Itens locais pendentes (sincronizado: false, pendingDelete, syncAction,
+ *     statusUpdatePending, syncError) são sempre preservados. */
+async function pullEquipments(): Promise<PullResult> {
+  if (import.meta.env.DEV) console.log('[sync] pullEquipments...');
+  const result = await fetchEquipments();
+
+  // --- Erro remoto: preservar tudo ---
+  if (!result.ok) {
+    console.error('[sync] pullEquipments erro: preservando dados locais');
+    return { imported: 0, reconciled: 0, error: true, empty: false };
   }
 
+  const cloud = result.data ?? [];
   const cloudIds = new Set(cloud.map((e) => e.id));
-  let pulled = 0;
+  let imported = 0;
   let reconciled = 0;
   const reconciledIds: string[] = [];
 
   await db.transaction('rw', db.equipamentos, async () => {
+    // --- Importar / atualizar registros do cloud ---
     for (const eq of cloud) {
-      const local = await db.equipamentos.get(eq.id);
+      const normalEq = syncEquipmentQrFields(eq);
+      const local = await db.equipamentos.get(normalEq.id);
 
       if (!local) {
-        // Skip inserting tombstones for items this client never had
-        if (eq.deletedAt) continue;
-        await db.equipamentos.put({ ...eq, sincronizado: true });
-        pulled++;
-        continue;
-      }
-
-      // Preserve local pending changes (both unsynced edits and pending deletes)
-      if (!local.sincronizado || local.pendingDelete) {
-        continue;
-      }
-
-      // Cloud has a tombstone → mark local as deleted
-      if (eq.deletedAt) {
+        // Não inserir tombstones de equipamentos que este cliente nunca viu
+        if (normalEq.deletedAt) continue;
         await db.equipamentos.put({
-          ...eq,
+          ...normalEq,
+          sincronizado: true,
+          syncBaseUpdatedAt: normalEq.updatedAt ?? null,
+        });
+        imported++;
+        continue;
+      }
+
+      // Preservar alterações locais pendentes (incluindo conflitos)
+      if (!local.sincronizado || local.pendingDelete || local.syncAction || local.statusUpdatePending || local.syncError || local.syncConflict) {
+        continue;
+      }
+
+      // Cloud tem tombstone → marcar local como deletado
+      if (normalEq.deletedAt) {
+        await db.equipamentos.put({
+          ...normalEq,
           sincronizado: true,
           pendingDelete: false,
+          syncBaseUpdatedAt: normalEq.updatedAt ?? null,
         });
-        pulled++;
-        console.log('[sync] Equipamento %s marcado como deletado (tombstone remota)', eq.id);
+        imported++;
+        if (import.meta.env.DEV) console.log('[sync] Equipamento %s marcado como deletado (tombstone remota)', normalEq.id);
         continue;
       }
 
-      // Fully synced local row → overwrite with cloud data
-      await db.equipamentos.put({ ...eq, sincronizado: true });
-      pulled++;
+      // Linha local totalmente sincronizada → sobrescrever com dados do cloud
+      await db.equipamentos.put({
+        ...normalEq,
+        sincronizado: true,
+        syncBaseUpdatedAt: normalEq.updatedAt ?? null,
+      });
+      imported++;
     }
 
-    // -------------------------------------------------------------------
-    // Reconciliação de órfãos locais (legado hard-delete)
-    // -------------------------------------------------------------------
-    // Equipamentos que foram removidos fisicamente do Supabase antes da
-    // implantação do tombstone (soft delete) podem continuar existindo no
-    // IndexedDB de clientes que nunca receberam a exclusão.
+    // --- Reconciliação de órfãos locais ---
+    // Registros que existem no IndexedDB mas não no cloud (hard-delete remoto
+    // ou pull vazio válido). Marcamos com deletedAt para ocultar da UI.
     //
-    // Após um pull bem-sucedido, detectamos esses órfãos e marcamos com
-    // deletedAt localmente. A UI já filtra deletedAt, então o item some.
-    //
-    // Regras de segurança:
-    //   • sincronizado === false → preservar (alteração local não enviada)
-    //   • pendingDelete === true  → preservar (exclusão local pendente)
-    //   • deletedAt preenchido    → preservar (já reconciliado)
-    //   • ID existe no cloud      → não é órfão
-    // -------------------------------------------------------------------
+    // Preservamos itens com:
+    //   sincronizado === false    → alteração local não enviada
+    //   pendingDelete === true    → exclusão local pendente
+    //   syncAction                → operação local pendente (create/update/delete)
+    //   statusUpdatePending       → status local aguardando RPC
+    //   syncError                 → conflito conhecido
+    //   deletedAt preenchido      → já reconciliado
+    // ---
     const now = new Date().toISOString();
     const allLocal = await db.equipamentos.toArray();
 
     for (const local of allLocal) {
-      if (!local.sincronizado) continue;        // alteração local não enviada
-      if (local.pendingDelete) continue;         // exclusão local pendente
-      if (local.deletedAt) continue;              // já reconciliado
-      if (cloudIds.has(local.id)) continue;      // ainda existe no cloud
+      if (cloudIds.has(local.id)) continue;
+      if (!local.sincronizado) continue;
+      if (local.pendingDelete) continue;
+      if (local.syncAction) continue;
+      if (local.statusUpdatePending) continue;
+      if (local.syncError) continue;
+      if (local.deletedAt) continue;
 
       await db.equipamentos.update(local.id, {
         deletedAt: now,
@@ -311,59 +772,168 @@ async function pullEquipments(): Promise<number> {
       reconciled++;
       reconciledIds.push(local.id);
       if (import.meta.env.DEV) {
-        console.log('[sync] Órfão reconciliado: %s', local.id);
+        console.log('[sync] equipment orphan marked deletedAt: %s', local.id);
       }
     }
 
     if (import.meta.env.DEV && reconciled > 0) {
-      console.log('[sync] Pull: %d remotos, %d locais, %d órfãos reconciliados',
-        cloud.length, allLocal.length, reconciled);
-      console.log('[sync] IDs reconciliados: %s', reconciledIds.join(', '));
+      console.log('[sync] Pull equipamentos: %d cloud, %d importados, %d órfãos reconciliados',
+        cloud.length, imported, reconciled);
     }
   });
 
-  console.log(`[sync] Pull de equipamentos concluído: ${pulled} importados (${reconciled} órfãos reconciliados)`);
-  return pulled;
+  if (import.meta.env.DEV) {
+    console.log('[sync] pullEquipments final: cloud=%d imported=%d reconciled=%d empty=%s',
+      cloud.length, imported, reconciled, cloud.length === 0 ? 'true' : 'false');
+  }
+  return { imported, reconciled, error: false, empty: cloud.length === 0 };
 }
 
-async function pullInspections(): Promise<number> {
-  console.log('[sync] Pull de inspeções...');
-  const cloud = await fetchInspections();
-  if (!cloud) {
-    console.log('[sync] Supabase retornou null para inspeções — preservando dados locais');
-    return 0;
-  }
-  if (cloud.length === 0) {
-    console.log('[sync] Supabase retornou lista vazia de inspeções — preservando dados locais');
-    return 0;
+async function pullInspections(): Promise<PullResult> {
+  if (import.meta.env.DEV) console.log('[sync] pullInspections...');
+  const result = await fetchInspections();
+
+  // --- Erro remoto: preservar tudo ---
+  if (!result.ok) {
+    console.error('[sync] pullInspections erro: preservando dados locais');
+    return { imported: 0, reconciled: 0, error: true, empty: false };
   }
 
+  const cloud = result.data ?? [];
   const cloudIds = new Set(cloud.map((i) => i.id));
-  let pulled = 0;
+  let imported = 0;
+  let reconciled = 0;
 
   await db.transaction('rw', db.inspecoes, async () => {
+    // --- Importar / atualizar registros do cloud ---
     for (const insp of cloud) {
       const local = await db.inspecoes.get(insp.id);
       if (!local) {
         await db.inspecoes.put({ ...insp, sincronizado: true });
-        pulled++;
+        imported++;
       } else if (local.sincronizado && !local.pendingDelete) {
         await db.inspecoes.put({ ...insp, sincronizado: true });
-        pulled++;
+        imported++;
       }
       // else: local has unsynced changes — preserve them.
     }
 
+    // --- Reconciliação de órfãos locais ---
     const allLocal = await db.inspecoes.toArray();
     for (const local of allLocal) {
-      if (!cloudIds.has(local.id) && local.sincronizado && !local.pendingDelete) {
-        await db.inspecoes.delete(local.id);
+      if (cloudIds.has(local.id)) continue;
+      if (!local.sincronizado) continue;
+      if (local.pendingDelete) continue;
+
+      // Inspeção sincronizada sem pendência que não existe no cloud → remover
+      await db.inspecoes.delete(local.id);
+      reconciled++;
+      if (import.meta.env.DEV) {
+        console.log('[sync] inspection orphan removed: %s', local.id);
+      }
+    }
+
+    if (import.meta.env.DEV && reconciled > 0) {
+      console.log('[sync] Pull inspeções: %d cloud, %d importadas, %d órfãos removidos',
+        cloud.length, imported, reconciled);
+    }
+  });
+
+  if (import.meta.env.DEV) {
+    console.log('[sync] pullInspections final: imported=%d reconciled=%d error=false empty=%s',
+      imported, reconciled, cloud.length === 0 ? 'true' : 'false');
+  }
+  return { imported, reconciled, error: false, empty: cloud.length === 0 };
+}
+
+async function pullActionPlans(): Promise<PullResult> {
+  if (import.meta.env.DEV) console.log('[sync] pullActionPlans...');
+  const result = await fetchActionPlans();
+
+  if (!result.ok) {
+    console.error('[sync] pullActionPlans erro: preservando dados locais');
+    return { imported: 0, reconciled: 0, error: true, empty: false };
+  }
+
+  const cloud = result.data ?? [];
+  const cloudIds = new Set(cloud.map((p) => p.id));
+  let imported = 0;
+  let reconciled = 0;
+
+  await db.transaction('rw', db.planosAcao, async () => {
+    for (const plan of cloud) {
+      const local = await db.planosAcao.get(plan.id);
+
+      if (!local) {
+        // Não inserir tombstones que este cliente nunca viu
+        if (plan.deletedAt) continue;
+        await db.planosAcao.put({
+          ...plan,
+          sincronizado: true,
+          syncBaseUpdatedAt: plan.updatedAt ?? null,
+        });
+        imported++;
+        continue;
+      }
+
+      // Preservar alterações locais pendentes (incluindo conflitos)
+      if (!local.sincronizado || local.pendingDelete || local.syncAction || local.syncError || local.syncConflict) {
+        continue;
+      }
+
+      // Cloud tem tombstone → marcar local como deletado
+      if (plan.deletedAt) {
+        await db.planosAcao.put({
+          ...plan,
+          sincronizado: true,
+          pendingDelete: false,
+          syncBaseUpdatedAt: plan.updatedAt ?? null,
+        });
+        imported++;
+        if (import.meta.env.DEV) console.log('[sync] Plano %s marcado como deletado (tombstone remota)', plan.id);
+        continue;
+      }
+
+      // Linha local totalmente sincronizada → sobrescrever com dados do cloud
+      await db.planosAcao.put({
+        ...plan,
+        sincronizado: true,
+        syncBaseUpdatedAt: plan.updatedAt ?? null,
+      });
+      imported++;
+    }
+
+    // --- Reconciliação de órfãos locais ---
+    const now = new Date().toISOString();
+    const allLocal = await db.planosAcao.toArray();
+
+    for (const local of allLocal) {
+      if (cloudIds.has(local.id)) continue;
+      if (!local.sincronizado) continue;
+      if (local.pendingDelete) continue;
+      if (local.syncAction) continue;
+      if (local.syncError) continue;
+      if (local.deletedAt) continue;
+
+      await db.planosAcao.update(local.id, {
+        deletedAt: now,
+        deletedBy: null,
+        updatedAt: now,
+        sincronizado: true,
+        pendingDelete: false,
+      });
+      reconciled++;
+      if (import.meta.env.DEV) {
+        console.log('[sync] plan orphan marked deletedAt: %s', local.id);
       }
     }
   });
 
-  console.log(`[sync] Pull de inspeções concluído: ${pulled} importados`);
-  return pulled;
+  if (import.meta.env.DEV) {
+    console.log('[sync] pullActionPlans final: cloud=%d imported=%d reconciled=%d empty=%s',
+      cloud.length, imported, reconciled, cloud.length === 0 ? 'true' : 'false');
+  }
+  return { imported, reconciled, error: false, empty: cloud.length === 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -380,11 +950,10 @@ export interface SyncOptions {
 }
 
 export async function syncAll(
-  localActionPlans: LocalActionPlan[] = [],
   options: SyncOptions = {},
 ): Promise<SyncReport> {
   if (_syncInProgress) {
-    console.log('[sync] sync já em andamento — ignorando chamada concorrente');
+    if (import.meta.env.DEV) console.log('[sync] sync já em andamento — ignorando chamada concorrente');
     return skip('sync-in-progress');
   }
 
@@ -397,51 +966,131 @@ export async function syncAll(
   }
 
   _syncInProgress = true;
-  console.log('[sync] Iniciando sincronização...');
+  if (import.meta.env.DEV) {
+    console.log('[sync] ===== INÍCIO =====');
+    console.log('[sync] Iniciando sincronização...');
+    const userId = options.userId;
+    if (userId) console.log(`[sync] userId=${userId}`);
+  }
 
-  let pushed = 0;
+  let pushEqOk = 0;
+  let pushInsOk = 0;
+  let pushErrors = 0;
   let pulled = 0;
   let deleted = 0;
   let errors = 0;
-  let pushedActionPlanIds: string[] = [];
-  let deletedActionPlanIds: string[] = [];
+
+  let pushApOk = 0;
+  let pushApErrors = 0;
+
+  let pullEqImported = 0;
+  let pullEqReconciled = 0;
+  let pullEqError = false;
+  let pullEqEmpty = false;
+
+  let pullInsImported = 0;
+  let pullInsReconciled = 0;
+  let pullInsError = false;
+  let pullInsEmpty = false;
+
+  let pullApImported = 0;
+  let pullApReconciled = 0;
+  let pullApError = false;
+  let pullApEmpty = false;
 
   try {
     if (!options.pullOnly) {
       const eqR = await pushEquipments(options.userId);
       const insR = await pushInspections(options.userId);
-      const apR = await pushActionPlans(localActionPlans, options.userId);
-      pushed += eqR.ok + insR.ok + apR.ok;
+      const apR = await pushActionPlans(options.userId);
+      pushEqOk = eqR.ok;
+      pushInsOk = insR.ok;
+      pushApOk = apR.ok;
+      pushApErrors = apR.errors;
+      pushErrors = eqR.errors + insR.errors + apR.errors;
       deleted += eqR.deleted + insR.deleted + apR.deleted;
-      errors += eqR.errors + insR.errors + apR.errors;
-      pushedActionPlanIds = apR.syncedIds;
-      deletedActionPlanIds = apR.deletedIds;
+      errors += pushErrors;
     }
 
     if (!options.pushOnly) {
       const eqP = await pullEquipments();
       const insP = await pullInspections();
-      pulled += eqP + insP;
+      const apP = await pullActionPlans();
+
+      pullEqImported = eqP.imported;
+      pullEqReconciled = eqP.reconciled;
+      pullEqError = eqP.error;
+      pullEqEmpty = eqP.empty;
+
+      pullInsImported = insP.imported;
+      pullInsReconciled = insP.reconciled;
+      pullInsError = insP.error;
+      pullInsEmpty = insP.empty;
+
+      pullApImported = apP.imported;
+      pullApReconciled = apP.reconciled;
+      pullApError = apP.error;
+      pullApEmpty = apP.empty;
+
+      pulled += eqP.imported + insP.imported + apP.imported;
+      if (eqP.error || insP.error || apP.error) errors++;
     }
   } catch (err) {
     console.error('[sync] exceção durante syncAll:', err);
     errors++;
   } finally {
-    console.log(`[sync] Sincronização concluída. Push: ${pushed}, Pull: ${pulled}, Delete: ${deleted}, Erros: ${errors}`);
+    if (import.meta.env.DEV) {
+      console.log('[sync] ===== RESUMO =====');
+      console.log('[sync] ' +
+        `Push: eq=${pushEqOk} ins=${pushInsOk} ap=${pushApOk} errors=${pushErrors} | ` +
+        `Pull: eq=${pullEqImported}(${pullEqReconciled}) ins=${pullInsImported}(${pullInsReconciled}) ap=${pullApImported}(${pullApReconciled}) | ` +
+        `Delete=${deleted} Erros=${errors}`);
+    }
     _syncInProgress = false;
+    if (import.meta.env.DEV) console.log('[sync] ===== FIM =====');
   }
 
-  return { pushed, pulled, deleted, errors, skipped: false, pushedActionPlanIds, deletedActionPlanIds };
+  return {
+    pushed: pushEqOk + pushInsOk + pushApOk,
+    pulled,
+    deleted,
+    errors,
+    skipped: false,
+    pushEqOk,
+    pushInsOk,
+    pushErrors,
+    pullEqImported,
+    pullEqReconciled,
+    pullInsImported,
+    pullInsReconciled,
+    pullEqError,
+    pullInsError,
+    pullEqEmpty,
+    pullInsEmpty,
+    pushApOk,
+    pushApErrors,
+    pullApImported,
+    pullApReconciled,
+    pullApError,
+    pullApEmpty,
+  };
 }
 
-/** Counts the rows that still need to be pushed — surfaced in the UI. */
+/** Counts the rows that still need to be pushed — surfaced in the UI.
+ *  Includes conflict rows (syncConflict === true) since they block sync. */
 export async function pendingSyncCount(): Promise<number> {
   const eqs = await db.equipamentos.filter((e) => !e.sincronizado || !!e.pendingDelete).count();
   const ins = await db.inspecoes.filter((i) => !i.sincronizado || !!i.pendingDelete).count();
-  // Action plans are not in Dexie; callers should also count those from the
-  // store if they care.
-  return eqs + ins;
+  const aps = await db.planosAcao.filter((p) => !p.sincronizado || !!p.pendingDelete).count();
+  return eqs + ins + aps;
+}
+
+/** Counts rows in conflict (syncConflict === true) for UI badges. */
+export async function conflictCount(): Promise<{ equipments: number; actionPlans: number }> {
+  const equipments = await db.equipamentos.filter((e) => !!e.syncConflict).count();
+  const actionPlans = await db.planosAcao.filter((p) => !!p.syncConflict).count();
+  return { equipments, actionPlans };
 }
 
 // Re-export the mapper helpers for convenience.
-export { dbToEquipment, dbToInspection, dbToActionPlan, equipmentToDb, inspectionToDb, actionPlanToDb };
+export { dbToEquipment, dbToInspection, equipmentToDb, inspectionToDb };

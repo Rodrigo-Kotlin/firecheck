@@ -11,6 +11,7 @@ import {
 } from './mappers';
 import { db, type LocalEquipment } from '../db';
 import type { Equipment } from '../types';
+import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
 
 const isDev = import.meta.env.DEV;
 
@@ -20,22 +21,145 @@ function notConfigured<T>(op: string): T | null {
 }
 
 // ---------------------------------------------------------------------------
+// Tipos compartilhados
+// ---------------------------------------------------------------------------
+
+export interface ServiceResult<T = Equipment> {
+  ok: boolean;
+  code?: 'duplicate' | 'permission_denied' | 'not_found' | 'network' | 'unknown' | 'not_applied' | 'invalid_status' | 'not_authenticated' | 'rpc_error';
+  message?: string;
+  data?: T;
+}
+
+/** Resultado de uma operação de busca (listagem) no Supabase.
+ *  `ok: false` significa erro de rede/RLS/Supabase — dados locais devem ser
+ *  preservados sem reconciliação.
+ *  `ok: true` + `data: []` é resposta válida vazia — reconciliação DEVE rodar. */
+export interface FetchResult<T> {
+  ok: boolean;
+  data: T[] | null;
+}
+
+// ---------------------------------------------------------------------------
 // Supabase CRUD
 // ---------------------------------------------------------------------------
 
-export async function fetchEquipments(): Promise<Equipment[] | null> {
-  if (!isSupabaseConfigured || !supabase) return notConfigured('fetchEquipments');
+export async function fetchEquipments(): Promise<FetchResult<Equipment>> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, data: null };
+  }
   const { data, error } = await supabase
     .from('equipamentos')
     .select('*')
     .order('id');
   if (error) {
     console.error('[equipment.fetchEquipments]', error);
-    return null;
+    return { ok: false, data: null };
   }
-  return (data as DbEquipamento[]).map(dbToEquipment);
+  return { ok: true, data: (data as DbEquipamento[]).map(dbToEquipment) };
 }
 
+export async function findEquipmentById(id: string): Promise<Equipment | null> {
+  if (!isSupabaseConfigured || !supabase) return null;
+  const { data, error } = await supabase
+    .from('equipamentos')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) {
+    console.error('[equipment.findEquipmentById]', error);
+    return null;
+  }
+  if (!data) return null;
+  return dbToEquipment(data as DbEquipamento);
+}
+
+/** Fetch a single equipment by ID, returning a ServiceResult that
+ *  distinguishes "not found" from network errors. */
+export async function fetchEquipmentById(id: string): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+  const { data, error } = await supabase
+    .from('equipamentos')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) {
+    console.error('[equipment.fetchEquipmentById]', error);
+    return { ok: false, code: 'network', message: error.message };
+  }
+  if (!data) {
+    return { ok: false, code: 'not_found', message: 'Equipamento não encontrado no servidor.' };
+  }
+  return { ok: true, data: dbToEquipment(data as DbEquipamento) };
+}
+
+export async function createEquipmentRemote(eq: Equipment): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+  const payload = equipmentToDb(eq);
+  payload.created_at = new Date().toISOString();
+  payload.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from('equipamentos')
+    .insert(payload)
+    .select('id')
+    .single();
+
+  if (error) {
+    if (error.code === '23505') {
+      return { ok: false, code: 'duplicate', message: 'Já existe um equipamento com esta TAG no servidor.' };
+    }
+    if (error.code === '42501') {
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para criar equipamento.' };
+    }
+    console.error('[equipment.createEquipmentRemote]', error);
+    return { ok: false, code: 'unknown', message: error.message };
+  }
+
+  if (!data || !data.id) {
+    return { ok: false, code: 'unknown', message: 'Nenhuma linha criada — erro inesperado.' };
+  }
+
+  return { ok: true };
+}
+
+export async function updateEquipmentRemote(eq: Equipment): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+  const payload = equipmentToDb(eq);
+  payload.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from('equipamentos')
+    .update(payload)
+    .eq('id', eq.id)
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    if (error.code === '42501') {
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para atualizar equipamento.' };
+    }
+    console.error('[equipment.updateEquipmentRemote]', error);
+    return { ok: false, code: 'unknown', message: error.message };
+  }
+
+  if (!data) {
+    return { ok: false, code: 'not_found', message: 'Atualização não aplicada. Verifique permissão/RLS ou conflito de sincronização.' };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * @deprecated Use createEquipmentRemote() para criação e updateEquipmentRemote() para edição.
+ * upsertEquipment permanece apenas para compatibilidade com código legado.
+ */
 export async function upsertEquipment(eq: Equipment): Promise<boolean> {
   if (!isSupabaseConfigured || !supabase) {
     notConfigured<boolean>('upsertEquipment');
@@ -114,6 +238,51 @@ export async function softDeleteEquipment(id: string, userId?: string): Promise<
   return true;
 }
 
+export async function applyEquipmentInspectionStatusRemote(
+  equipmentId: string,
+  status: string,
+  inspectionDate?: string,
+  nextInspectionDate?: string,
+): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+
+  const { data, error } = await supabase.rpc('apply_equipment_inspection_status', {
+    p_equipment_id: equipmentId,
+    p_status: status,
+    p_inspection_date: inspectionDate ?? null,
+    p_next_inspection_date: nextInspectionDate ?? null,
+  });
+
+  if (error) {
+    if (error.code === 'UNAUTH') {
+      return { ok: false, code: 'not_authenticated', message: 'Usuário não autenticado.' };
+    }
+    if (error.code === 'INVSTT') {
+      return { ok: false, code: 'invalid_status', message: 'Status inválido.' };
+    }
+    if (error.code === 'NFOUND') {
+      return { ok: false, code: 'not_found', message: 'Equipamento não encontrado ou excluído.' };
+    }
+    if (error.code === '42501') {
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para executar esta operação.' };
+    }
+    console.error('[equipment.applyEquipmentInspectionStatus]', error);
+    return { ok: false, code: 'rpc_error', message: error.message ?? 'Não foi possível atualizar o status do equipamento no servidor.' };
+  }
+
+  if (!data) {
+    return { ok: false, code: 'not_applied', message: 'Nenhuma alteração aplicada — equipamento não encontrado ou excluído.' };
+  }
+
+  if (isDev) {
+    console.log('[equipment.applyEquipmentInspectionStatus] Status do equipamento %s atualizado para %s', equipmentId, status);
+  }
+
+  return { ok: true, data: data as unknown as Equipment };
+}
+
 // ---------------------------------------------------------------------------
 // Centralised equipment loader — Supabase is the primary source of truth.
 // IndexedDB is only used as offline fallback.
@@ -128,17 +297,19 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
 
   // Online path: fetch from Supabase
   if (isOnline && isSupabaseConfigured && supabase) {
-    const cloudData = await fetchEquipments();
+    const result = await fetchEquipments();
 
-    if (cloudData !== null) {
+    if (result.ok && result.data) {
+      const cloudData = result.data;
       if (cloudData.length > 0) {
         // Merge: import cloud rows without overwriting local pending data
         for (const eq of cloudData) {
+          const normalEq = syncEquipmentQrFields(eq);
           const local = await db.equipamentos.get(eq.id);
           if (!local) {
-            await db.equipamentos.put({ ...eq, sincronizado: true });
+            await db.equipamentos.put({ ...normalEq, sincronizado: true });
           } else if (local.sincronizado && !local.pendingDelete) {
-            await db.equipamentos.put({ ...eq, sincronizado: true });
+            await db.equipamentos.put({ ...normalEq, sincronizado: true });
           }
           // else: preserve local pending changes
         }
@@ -169,10 +340,20 @@ export async function carregarEquipamentos(): Promise<Equipment[]> {
   return localEqs.map(stripSyncMeta);
 }
 
-/** Strip Dexie-only sync metadata from an equipment row. */
+/** Strip Dexie-only sync metadata from an equipment row.
+ *  Campos locais de sync não devem sair do IndexedDB nem ir para Supabase. */
 function stripSyncMeta(row: Partial<LocalEquipment>): Equipment {
-  const { sincronizado: _s, pendingDelete: _p, deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u, ...eq } = row;
-  void _s; void _p; void _d; void _db; void _c; void _u;
+  const {
+    sincronizado: _s, pendingDelete: _p,
+    syncAction: _a, syncError: _e, statusUpdatePending: _su,
+    syncBaseUpdatedAt: _b, syncConflict: _cf, syncConflictReason: _cr,
+    remoteUpdatedAtAtConflict: _ru,
+    deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u,
+    ...eq
+  } = row;
+  void _s; void _p; void _a; void _e; void _su;
+  void _b; void _cf; void _cr; void _ru;
+  void _d; void _db; void _c; void _u;
   return eq as Equipment;
 }
 
