@@ -15,6 +15,7 @@ import {
   Tag,
   Wrench,
   Trash2,
+  Pencil,
   Lock,
   FileText,
   SearchX,
@@ -387,14 +388,26 @@ export default function DetalhesEquipamento() {
         </div>
       )}
 
-      {/* Primary action */}
-      <button
-        onClick={handleStartInspection}
-        className="btn-primary"
-      >
-        <Play className="w-4 h-4 fill-white" />
-        Iniciar Inspeção
-      </button>
+      {/* Primary actions */}
+      <div className="flex gap-3">
+        <button
+          onClick={handleStartInspection}
+          className="btn-primary flex-1"
+        >
+          <Play className="w-4 h-4 fill-white" />
+          Iniciar Inspeção
+        </button>
+
+        {editable && !eq.syncConflict && eq.syncError !== 'conflict' && (
+          <button
+            onClick={() => navigate(`/equipamentos/${encodeURIComponent(eq.id)}/editar`)}
+            className="btn-secondary flex-1"
+          >
+            <Pencil className="w-4 h-4" />
+            Editar
+          </button>
+        )}
+      </div>
 
       {/* Identificação */}
       <DetailSection title="Identificação" icon={Tag} cols={3}>

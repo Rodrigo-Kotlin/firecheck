@@ -12,6 +12,7 @@ const Login = lazy(() => import('./pages/login/Login'));
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'));
 const Equipamentos = lazy(() => import('./pages/equipamentos/Equipamentos'));
 const NovoEquipamento = lazy(() => import('./pages/equipamentos/NovoEquipamento'));
+const EditarEquipamento = lazy(() => import('./pages/equipamentos/EditarEquipamento'));
 const DetalhesEquipamento = lazy(() => import('./pages/equipamentos/DetalhesEquipamento'));
 const Inspecionar = lazy(() => import('./pages/inspecionar/Inspecionar'));
 const ScanQr = lazy(() => import('./pages/scan/ScanQr'));
@@ -71,6 +72,7 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="equipamentos" element={<Equipamentos />} />
             <Route path="equipamentos/novo" element={<NovoEquipamento />} />
+            <Route path="equipamentos/:id/editar" element={<EditarEquipamento />} />
             <Route path="equipamentos/:id" element={<DetalhesEquipamento />} />
             <Route path="inspecionar" element={<Inspecionar />} />
             <Route path="scan" element={<ScanQr />} />
