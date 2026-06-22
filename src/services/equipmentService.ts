@@ -206,11 +206,14 @@ export async function deleteEquipment(id: string): Promise<boolean> {
 }
 
 /** Soft-delete: sets deleted_at and keeps the tombstone in Supabase
- *  so other clients can discover the deletion during pull. */
-export async function softDeleteEquipment(id: string, userId?: string): Promise<boolean> {
+ *  so other clients can discover the deletion during pull.
+ *
+ *  Uses `.select()` to confirm the row was actually updated (RLS may silently
+ *  skip rows the caller cannot modify). Falls back to the SECURITY DEFINER RPC
+ *  `soft_delete_equipment` when the UPDATE matches 0 rows. */
+export async function softDeleteEquipment(id: string, userId?: string): Promise<ServiceResult> {
   if (!isSupabaseConfigured || !supabase) {
-    notConfigured<boolean>('softDeleteEquipment');
-    return false;
+    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
   }
   const now = new Date().toISOString();
   const update: Record<string, unknown> = {
@@ -220,22 +223,59 @@ export async function softDeleteEquipment(id: string, userId?: string): Promise<
   if (userId) {
     update.deleted_by = userId;
   }
-  const { error } = await supabase
+
+  // 1) Tentativa via UPDATE + .select() para confirmar RLS
+  const { data, error } = await supabase
     .from('equipamentos')
     .update(update)
-    .eq('id', id);
+    .eq('id', id)
+    .select('id, deleted_at, deleted_by, updated_at')
+    .maybeSingle();
+
   if (error) {
-    console.error('[equipment.softDeleteEquipment] Falha ao marcar deleted_at', {
-      id,
-      code: error.code,
-      message: error.message,
-      details: error.details,
-      hint: error.hint,
-    });
-    return false;
+    if (error.code === '42501') {
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para excluir equipamento.' };
+    }
+    console.error('[equipment.softDeleteEquipment]', error);
+    return { ok: false, code: 'unknown', message: error.message };
   }
-  console.log('[equipment] Equipamento %s marcado como deleted_at=%s', id, now);
-  return true;
+
+  const row = data as Record<string, unknown> | null;
+  if (row && row.deleted_at) {
+    return { ok: true, data: row as unknown as Equipment };
+  }
+
+  // 2) Fallback: RPC SECURITY DEFINER (bypassa RLS)
+  if (isDev) {
+    console.log('[equipment.softDeleteEquipment] UPDATE não aplicou — tentando RPC fallback', { id });
+  }
+  const { data: rpcData, error: rpcError } = await supabase
+    .rpc('soft_delete_equipment', { p_id: id })
+    .maybeSingle();
+
+  if (rpcError) {
+    if (rpcError.code === 'PERMD') {
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para excluir equipamento.' };
+    }
+    if (rpcError.code === 'NFOUND') {
+      return { ok: false, code: 'not_found', message: 'Equipamento não encontrado.' };
+    }
+    if (rpcError.code === 'ALDEL') {
+      return { ok: false, code: 'not_applied', message: 'Equipamento já foi excluído.' };
+    }
+    if (rpcError.code === 'UNAUTH') {
+      return { ok: false, code: 'not_authenticated', message: 'Usuário não autenticado.' };
+    }
+    console.error('[equipment.softDeleteEquipment] RPC falhou', rpcError);
+    return { ok: false, code: 'rpc_error', message: rpcError.message ?? 'Erro ao executar soft delete via RPC.' };
+  }
+
+  const rpcRow = rpcData as Record<string, unknown> | null;
+  if (!rpcRow || !rpcRow.deleted_at) {
+    return { ok: false, code: 'not_applied', message: 'Exclusão não aplicada — equipamento não encontrado ou já excluído.' };
+  }
+
+  return { ok: true, data: rpcRow as unknown as Equipment };
 }
 
 export async function applyEquipmentInspectionStatusRemote(

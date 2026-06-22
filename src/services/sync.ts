@@ -166,8 +166,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
       continue;
     }
     // Sem conflito ou não encontrado — prosseguir com soft delete
-    const success = await softDeleteEquipment(eq.id, userId);
-    if (success) {
+    const result = await softDeleteEquipment(eq.id, userId);
+    const remoteRow = result.data as unknown as Record<string, unknown>;
+    if (result.ok && remoteRow && remoteRow.deleted_at) {
+      const remoteData = remoteRow;
       await db.equipamentos.update(eq.id, {
         pendingDelete: false,
         sincronizado: true,
@@ -175,14 +177,15 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         syncConflict: false,
         syncConflictReason: undefined,
         syncError: undefined,
-        deletedAt: new Date().toISOString(),
-        deletedBy: userId ?? null,
-        updatedAt: new Date().toISOString(),
+        deletedAt: (remoteData.deleted_at as string) ?? new Date().toISOString(),
+        deletedBy: (remoteData.deleted_by as string | null) ?? userId ?? null,
+        updatedAt: (remoteData.updated_at as string) ?? new Date().toISOString(),
       });
       deleted++;
       if (import.meta.env.DEV) console.log('[sync] Equipamento %s deletado (soft) do Supabase', eq.id);
     } else {
-      console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', { id: eq.id });
+      await db.equipamentos.update(eq.id, { syncError: result.code ?? 'unknown' });
+      console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', { id: eq.id, code: result.code, message: result.message });
       errors++;
     }
   }

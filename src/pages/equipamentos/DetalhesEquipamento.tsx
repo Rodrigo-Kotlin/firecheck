@@ -221,6 +221,10 @@ export default function DetalhesEquipamento() {
   const owner = eq.createdBy ? users.find((u) => u.id === eq.createdBy) : null;
 
   const handleDelete = () => {
+    if (!canDeleteEquipment(user, eq)) {
+      showToast({ kind: 'error', title: 'Você não tem permissão para excluir este equipamento.' });
+      return;
+    }
     deleteEquipment(eq.id);
     showToast({ kind: 'success', title: 'Equipamento excluído.' });
     navigate('/equipamentos', { replace: true });
