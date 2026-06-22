@@ -183,6 +183,9 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
             <LogOut className="w-5 h-5" />
             <span>Sair</span>
           </button>
+          <p className="text-[11px] text-slate-400 text-center opacity-70 pb-1">
+            by Efetiva SST
+          </p>
         </div>
       </aside>
     </>

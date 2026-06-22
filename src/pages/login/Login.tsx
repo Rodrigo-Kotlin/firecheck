@@ -174,6 +174,9 @@ export default function Login() {
         <p className="text-center text-[11px] text-gray-400 mt-6">
           FireCheck v1.0.0 · PWA Offline-First
         </p>
+        <p className="text-[11px] text-slate-400 text-center opacity-70 mt-1">
+          by Efetiva SST
+        </p>
       </div>
     </div>
   );
