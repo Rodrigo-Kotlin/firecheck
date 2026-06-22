@@ -401,7 +401,7 @@ export default function DetalhesEquipamento() {
         {editable && !eq.syncConflict && eq.syncError !== 'conflict' && (
           <button
             onClick={() => navigate(`/equipamentos/${encodeURIComponent(eq.id)}/editar`)}
-            className="btn-secondary flex-1"
+            className="btn-ghost flex-1"
           >
             <Pencil className="w-4 h-4" />
             Editar
