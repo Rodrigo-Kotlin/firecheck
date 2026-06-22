@@ -63,6 +63,11 @@ export default function Equipamentos() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const handleDelete = () => {
     if (!deleteTarget) return;
+    const targetEq = ativos.find((e) => e.id === deleteTarget);
+    if (targetEq && !canDeleteEquipment(user, targetEq)) {
+      showToast({ kind: 'error', title: 'Você não tem permissão para excluir este equipamento.' });
+      return;
+    }
     deleteEquipment(deleteTarget);
     showToast({ kind: 'success', title: 'Equipamento excluído.' });
   };
