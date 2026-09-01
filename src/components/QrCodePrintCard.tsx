@@ -3,6 +3,16 @@ import QRCode from 'qrcode';
 import { Printer, X, ShieldCheck, Download, Eye } from 'lucide-react';
 import type { Equipment } from '../types';
 
+const QR_PER_PAGE = 6;
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    result.push(arr.slice(i, i + size));
+  }
+  return result;
+}
+
 interface SingleProps {
   equipment: Equipment;
   equipments?: never;
@@ -150,7 +160,9 @@ export function QrCodeLabelCard({ equipment, onView }: { equipment: Equipment; o
 
 export default function QrCodePrintCard(props: QrCodePrintCardProps) {
   const isBatch = 'equipments' in props;
-  const equipmentsList = isBatch ? props.equipments : (props.equipment ? [props.equipment] : []);
+  const equipmentsList: Equipment[] = isBatch
+    ? (props.equipments ?? [])
+    : (props.equipment ? [props.equipment] : []);
   const onClose = 'onClose' in props ? props.onClose : undefined;
 
   const handlePrint = () => {
@@ -196,8 +208,12 @@ export default function QrCodePrintCard(props: QrCodePrintCardProps) {
 
       <div className="print-area">
         <div className="qr-label-grid">
-          {equipmentsList?.map((eq) => (
-            <QrCodeLabel key={eq.id} equipment={eq} />
+          {chunk(equipmentsList, QR_PER_PAGE).map((page, pageIndex) => (
+            <div key={pageIndex} className="qr-print-page">
+              {page.map((eq) => (
+                <QrCodeLabel key={eq.id} equipment={eq} />
+              ))}
+            </div>
           ))}
         </div>
       </div>
