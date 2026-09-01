@@ -29,8 +29,8 @@ export default function QRCodePrintLabel({ equipment }: { equipment: Equipment }
     <div className="qr-print-card">
       <div className="qr-print-topbar" />
       <div className="qr-print-brand">
-        <span className="qr-print-brand-name">FireCheck</span>
-        <span className="qr-print-brand-sub">by Efetiva SST</span>
+        <span className="qr-print-brand-name">EFETIVA SST</span>
+        <span className="qr-print-brand-sub">Inspeção de Equipamentos</span>
       </div>
       <div className="qr-print-qr">
         {qrUrl ? (

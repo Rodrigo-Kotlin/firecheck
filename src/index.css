@@ -1459,6 +1459,130 @@ input[type="checkbox"], input[type="radio"] {
   display: contents;
 }
 
+/* --- Print card (screen preview) --- */
+.qr-print-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 100%;
+  max-width: 280px;
+  margin: 0 auto;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.qr-print-topbar {
+  width: 100%;
+  height: 4px;
+  background: #dc2626;
+  border-radius: 3px;
+  margin-bottom: 8px;
+}
+
+.qr-print-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.qr-print-brand-name {
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #dc2626;
+}
+
+.qr-print-brand-sub {
+  font-size: 10px;
+  font-weight: 600;
+  color: #9ca3af;
+  margin-top: 2px;
+}
+
+.qr-print-qr {
+  width: 120px;
+  height: 120px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-print-qr img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.qr-print-placeholder {
+  width: 80%;
+  height: 80%;
+  border: 2px dashed #d1d5db;
+  border-radius: 4px;
+}
+
+.qr-print-tag {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 4px;
+}
+
+.qr-print-info {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.qr-print-details {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qr-print-detail {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 6px;
+  background: #f9fafb;
+  border-radius: 2px;
+}
+
+.qr-print-detail-label {
+  font-size: 10px;
+  font-weight: 800;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.qr-print-detail-value {
+  font-size: 10px;
+  font-weight: 700;
+  color: #374151;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.qr-print-footer {
+  margin-top: 8px;
+  font-size: 9px;
+  color: #9ca3af;
+}
+
 /* ===== Dedicated print page (outside AppLayout) ===== */
 
 .qr-print-root {
@@ -1471,15 +1595,13 @@ input[type="checkbox"], input[type="radio"] {
 }
 
 /* ===== Print styles ===== */
-/* No global body * { display:none } or visibility:hidden — the print page
-   lives outside AppLayout so there is nothing to hide. */
+
+@page {
+  size: A4 portrait;
+  margin: 8mm;
+}
 
 @media print {
-  @page {
-    size: A4 portrait;
-    margin: 10mm;
-  }
-
   html, body, #root {
     margin: 0 !important;
     padding: 0 !important;
@@ -1490,13 +1612,11 @@ input[type="checkbox"], input[type="radio"] {
     overflow: visible !important;
   }
 
-  /* Hide screen-only UI (print page header buttons, etc.) */
   .no-print,
   .no-print * {
     display: none !important;
   }
 
-  /* Print page root — clean white background */
   .qr-print-root {
     min-height: auto !important;
     background: #ffffff !important;
@@ -1507,15 +1627,13 @@ input[type="checkbox"], input[type="radio"] {
     padding: 0 !important;
   }
 
-  /* 2-column x 3-row grid = 6 QR codes per A4 page */
+  /* 2 columns × 3 rows = 6 per A4 page */
   .qr-print-page {
     display: grid !important;
     grid-template-columns: repeat(2, 1fr);
     grid-template-rows: repeat(3, 1fr);
-    gap: 6mm;
+    gap: 4mm;
     width: 100%;
-    min-height: calc(297mm - 20mm);
-    box-sizing: border-box;
     page-break-after: always;
     break-after: page;
   }
@@ -1525,129 +1643,73 @@ input[type="checkbox"], input[type="radio"] {
     break-after: auto;
   }
 
-  /* Individual print card */
+  /* Compact card for print */
   .qr-print-card {
-    display: flex !important;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 82mm;
-    padding: 5mm;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    text-align: center;
-    box-sizing: border-box;
+    max-width: none;
+    width: 100%;
+    margin: 0;
+    padding: 2.5mm 3mm;
+    border: 0.5pt solid #d1d5db;
+    border-radius: 3px;
     break-inside: avoid;
     page-break-inside: avoid;
   }
 
   .qr-print-topbar {
-    width: 100%;
-    height: 4px;
-    background: #dc2626;
-    border-radius: 3px;
-    margin-bottom: 3mm;
+    height: 2mm;
+    margin-bottom: 1.5mm;
+    border-radius: 1mm;
   }
 
   .qr-print-brand {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin-bottom: 3mm;
+    margin-bottom: 1.5mm;
   }
 
   .qr-print-brand-name {
-    font-size: 12px;
-    font-weight: 900;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: #dc2626;
+    font-size: 9pt;
+    letter-spacing: 0.1em;
   }
 
   .qr-print-brand-sub {
-    font-size: 8px;
-    font-weight: 600;
-    color: #9ca3af;
-    margin-top: 1px;
+    font-size: 6pt;
+    margin-top: 0.5mm;
   }
 
   .qr-print-qr {
-    width: 32mm;
-    height: 32mm;
-    margin-bottom: 4mm;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .qr-print-qr img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-  }
-
-  .qr-print-placeholder {
-    width: 80%;
-    height: 80%;
-    border: 2px dashed #d1d5db;
-    border-radius: 4px;
+    width: 24mm;
+    height: 24mm;
+    margin-bottom: 1.5mm;
   }
 
   .qr-print-tag {
-    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-    font-size: 13px;
-    font-weight: 700;
-    color: #111827;
-    margin-bottom: 2mm;
+    font-size: 8pt;
+    margin-bottom: 1mm;
   }
 
   .qr-print-info {
-    font-size: 10px;
-    font-weight: 600;
-    color: #6b7280;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    margin-bottom: 3mm;
+    font-size: 6.5pt;
+    margin-bottom: 1.5mm;
   }
 
   .qr-print-details {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 1mm;
+    gap: 0.5mm;
   }
 
   .qr-print-detail {
-    display: flex;
-    justify-content: space-between;
-    padding: 1mm 2mm;
-    background: #f9fafb;
-    border-radius: 2px;
+    padding: 0.5mm 1.5mm;
   }
 
   .qr-print-detail-label {
-    font-size: 7px;
-    font-weight: 800;
-    color: #9ca3af;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-size: 5.5pt;
   }
 
   .qr-print-detail-value {
-    font-size: 8px;
-    font-weight: 700;
-    color: #374151;
-    max-width: 60%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: right;
+    font-size: 6pt;
   }
 
   .qr-print-footer {
-    margin-top: 3mm;
-    font-size: 7px;
-    color: #9ca3af;
+    margin-top: 1.5mm;
+    font-size: 5.5pt;
   }
 }
 
