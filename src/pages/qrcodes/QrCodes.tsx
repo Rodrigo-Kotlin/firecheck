@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import {
   Search,
@@ -45,6 +46,7 @@ function useQrCache(ids: string[]): Record<string, string> {
 
 export default function QrCodes() {
   const { equipments } = useAppStore();
+  const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
   const [filterTipo, setFilterTipo] = useState('');
@@ -55,7 +57,6 @@ export default function QrCodes() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
   const [viewTarget, setViewTarget] = useState<Equipment | null>(null);
-  const [printQueue, setPrintQueue] = useState<string[]>([]);
 
   const uniqueSetores = useMemo(
     () => [...new Set(equipments.map((e) => e.setor))].sort(),
@@ -129,21 +130,10 @@ export default function QrCodes() {
 
   const handlePrintSelected = () => {
     if (selected.size === 0) return;
-    setPrintQueue(Array.from(selected));
-    setTimeout(() => window.print(), 600);
+    const params = new URLSearchParams();
+    Array.from(selected).forEach((id) => params.append('id', id));
+    navigate(`/qrcodes/imprimir?${params.toString()}`);
   };
-
-  useEffect(() => {
-    if (printQueue.length > 0) {
-      const handler = () => setPrintQueue([]);
-      window.addEventListener('afterprint', handler, { once: true });
-      return () => window.removeEventListener('afterprint', handler);
-    }
-  }, [printQueue]);
-
-  const printItems = printQueue.length > 0
-    ? equipments.filter((e) => printQueue.includes(e.id))
-    : [];
 
   return (
     <div className="space-y-4 sm:space-y-6 pb-24">
@@ -373,10 +363,7 @@ export default function QrCodes() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setPrintQueue([eq.id]);
-                    setTimeout(() => window.print(), 600);
-                  }}
+                  onClick={() => navigate(`/qrcodes/imprimir?id=${encodeURIComponent(eq.id)}`)}
                   className="flex-1 h-9 flex items-center justify-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-gray-500 bg-gray-50 border border-gray-100 hover:bg-primary/5 hover:text-primary hover:border-primary/30 rounded-lg transition-all"
                 >
                   <Printer className="w-3.5 h-3.5" />
@@ -440,13 +427,6 @@ export default function QrCodes() {
             </div>
             <QrCodePrintCard equipment={viewTarget} onClose={() => setViewTarget(null)} />
           </div>
-        </div>
-      )}
-
-      {/* Print area */}
-      {printItems.length > 0 && (
-        <div className="print-only">
-          <QrCodePrintCard equipments={printItems} />
         </div>
       )}
     </div>

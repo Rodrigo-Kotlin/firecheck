@@ -17,6 +17,7 @@ const DetalhesEquipamento = lazy(() => import('./pages/equipamentos/DetalhesEqui
 const Inspecionar = lazy(() => import('./pages/inspecionar/Inspecionar'));
 const ScanQr = lazy(() => import('./pages/scan/ScanQr'));
 const QrCodes = lazy(() => import('./pages/qrcodes/QrCodes'));
+const QrCodesImprimir = lazy(() => import('./pages/qrcodes/QrCodesImprimir'));
 const PlanoDeAcao = lazy(() => import('./pages/planodeacao/PlanoDeAcao'));
 const Configuracoes = lazy(() => import('./pages/configuracoes/Configuracoes'));
 const AdminUsuarios = lazy(() => import('./pages/admin/AdminUsuarios'));
@@ -67,6 +68,8 @@ export default function App() {
           <Route path="/cadastro" element={<Cadastro />} />
           <Route path="/recuperar-senha" element={<RecuperarSenha />} />
           <Route path="/redefinir-senha" element={<RedefinirSenha />} />
+
+          <Route path="/qrcodes/imprimir" element={<QrCodesImprimir />} />
 
           <Route path="/" element={<AppLayout />}>
             <Route index element={<Dashboard />} />
