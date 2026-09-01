@@ -4,7 +4,7 @@ import { Printer, ArrowLeft } from 'lucide-react';
 import { useAppStore } from '../../store';
 import QRCodePrintLabel from '../../components/QRCodePrintLabel';
 
-const QR_PER_PAGE = 9;
+const QR_PER_PAGE = 12;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const pages: T[][] = [];

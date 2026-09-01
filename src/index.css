@@ -1454,7 +1454,7 @@ input[type="checkbox"], input[type="radio"] {
   padding: 0.5rem;
 }
 
-/* --- Print page wrapper (groups of 9 for batch) --- */
+/* --- Print page wrapper (groups of 12 for batch) --- */
 .qr-print-page {
   display: contents;
 }
@@ -1627,12 +1627,12 @@ input[type="checkbox"], input[type="radio"] {
     padding: 0 !important;
   }
 
-  /* 3 columns × 3 rows = 9 per A4 page */
+  /* 3 columns × 4 rows = 12 per A4 page */
   .qr-print-page {
     display: grid !important;
     grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(3, 1fr);
-    gap: 3mm;
+    grid-template-rows: repeat(4, 1fr);
+    gap: 2.5mm;
     width: 100%;
     box-sizing: border-box;
     page-break-after: always;
@@ -1644,7 +1644,7 @@ input[type="checkbox"], input[type="radio"] {
     break-after: auto;
   }
 
-  /* Compact card for print — 3×3 layout */
+  /* Compact card for print — 3×4 layout */
   .qr-print-card {
     display: flex !important;
     flex-direction: column;
@@ -1653,9 +1653,9 @@ input[type="checkbox"], input[type="radio"] {
     max-width: none;
     width: 100%;
     margin: 0;
-    padding: 2mm;
-    border: 1px solid #d1d5db;
-    border-radius: 4px;
+    padding: 1.5mm 1.5mm 1mm;
+    border: 0.5px solid #d1d5db;
+    border-radius: 3px;
     text-align: center;
     box-sizing: border-box;
     break-inside: avoid;
@@ -1664,37 +1664,37 @@ input[type="checkbox"], input[type="radio"] {
   }
 
   .qr-print-topbar {
-    height: 1.5mm;
-    margin-bottom: 1mm;
-    border-radius: 1mm;
+    height: 1.2mm;
+    margin-bottom: 0.8mm;
+    border-radius: 0.6mm;
   }
 
   .qr-print-brand {
     display: flex;
     flex-direction: column;
     align-items: center;
-    margin-bottom: 1mm;
+    margin-bottom: 0.6mm;
   }
 
   .qr-print-brand-name {
-    font-size: 7.5pt;
+    font-size: 6.5pt;
     font-weight: 700;
     letter-spacing: 0.04em;
-    line-height: 1.1;
+    line-height: 1.05;
     margin: 0;
   }
 
   .qr-print-brand-sub {
-    font-size: 5.5pt;
+    font-size: 4.8pt;
     font-weight: 600;
-    margin-top: 0.3mm;
-    line-height: 1.1;
+    margin-top: 0.2mm;
+    line-height: 1.05;
   }
 
   .qr-print-qr {
-    width: 20mm;
-    height: 20mm;
-    margin: 1.5mm 0;
+    width: 17mm;
+    height: 17mm;
+    margin: 1mm 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1715,47 +1715,47 @@ input[type="checkbox"], input[type="radio"] {
 
   .qr-print-tag {
     font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-    font-size: 7pt;
+    font-size: 6pt;
     font-weight: 700;
-    margin: 1mm 0 0.5mm 0;
-    line-height: 1.1;
+    margin: 0.5mm 0 0.3mm 0;
+    line-height: 1.05;
   }
 
   .qr-print-info {
-    font-size: 6pt;
+    font-size: 5pt;
     font-weight: 600;
     color: #6b7280;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    margin: 0 0 1mm 0;
-    line-height: 1.1;
+    margin: 0 0 0.5mm 0;
+    line-height: 1.05;
   }
 
   .qr-print-details {
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 0.3mm;
+    gap: 0.2mm;
   }
 
   .qr-print-detail {
     display: flex;
     justify-content: space-between;
-    padding: 0.3mm 1mm;
+    padding: 0.2mm 0.8mm;
     background: #f9fafb;
-    border-radius: 2px;
+    border-radius: 1.5px;
   }
 
   .qr-print-detail-label {
-    font-size: 5.3pt;
+    font-size: 4.5pt;
     font-weight: 800;
     color: #9ca3af;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.05em;
   }
 
   .qr-print-detail-value {
-    font-size: 5.5pt;
+    font-size: 4.8pt;
     font-weight: 700;
     color: #374151;
     max-width: 60%;
@@ -1766,10 +1766,10 @@ input[type="checkbox"], input[type="radio"] {
   }
 
   .qr-print-footer {
-    margin-top: 1mm;
-    font-size: 5pt;
+    margin-top: 0.5mm;
+    font-size: 4.5pt;
     color: #9ca3af;
-    line-height: 1.1;
+    line-height: 1.05;
   }
 }
 
