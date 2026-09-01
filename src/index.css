@@ -832,39 +832,7 @@ input[type="checkbox"], input[type="radio"] {
   background: #FAFAFA;
 }
 
-/* ===== Print rules ===== */
-@media print {
-  body {
-    background: white !important;
-    color: black !important;
-  }
-  .no-print,
-  .app-sidebar,
-  .sidebar-backdrop,
-  .app-bottom-nav,
-  .app-top-bar,
-  header.page-header,
-  .sticky {
-    display: none !important;
-  }
-  .app-main,
-  .app-content {
-    margin: 0 !important;
-    padding: 0 !important;
-    max-width: 100% !important;
-  }
-  .print-area {
-    display: block;
-  }
-  .qr-label {
-    border: 1px solid #111111;
-    box-shadow: none;
-    page-break-inside: avoid;
-  }
-  @page {
-    margin: 1cm;
-  }
-}
+/* ===== Print rules (legacy – kept minimal, main block below) ===== */
 
 /* ===== Toaster ===== */
 .toaster {
@@ -1479,83 +1447,155 @@ input[type="checkbox"], input[type="radio"] {
   color: #6B7280;
 }
 
-/* --- Print grid --- */
+/* --- Print grid (screen: flex column for preview) --- */
 .qr-label-grid {
-  display: flex !important;
+  display: flex;
   flex-direction: column;
   align-items: center;
   gap: 1rem;
   padding: 0.5rem;
 }
 
+/* --- Print page wrapper (groups of 6 for batch) --- */
+.qr-print-page {
+  display: contents;
+}
+
 /* ===== Print styles ===== */
 
 @media print {
-  /* Hide everything except the print area */
-  body * {
-    visibility: hidden;
-  }
-  .print-only,
-  .print-only * {
-    display: block !important;
-    visibility: visible !important;
-  }
-  .print-area,
-  .print-area *,
-  .qr-label-grid,
-  .qr-label-grid *,
-  .qr-label-print,
-  .qr-label-print * {
-    visibility: visible !important;
-  }
-
-  /* Reset page */
   @page {
     size: A4 portrait;
-    margin: 12mm 10mm 10mm 10mm;
+    margin: 10mm;
   }
 
   html, body {
-    margin: 0;
-    padding: 0;
-    background: white;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    width: 210mm;
   }
 
-  /* Grid: 3 columns on A4 landscape or 2 columns portrait */
-  .qr-label-grid {
-    display: grid !important;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 6mm 4mm;
-    padding: 0;
-    align-items: start;
-  }
-
-  .qr-label-print {
-    max-width: none;
-    border: 1px solid #ccc;
-    border-radius: 0;
-    box-shadow: none;
-    margin: 0;
-  }
-
+  /* Hide all non-print elements via display:none (no space occupied) */
   .no-print,
-  .no-print * {
+  .no-print *,
+  .app-shell,
+  .app-sidebar,
+  .sidebar-backdrop,
+  .app-bottom-nav,
+  header.page-header,
+  header.page-header *,
+  .sticky,
+  .toaster,
+  .toaster * {
     display: none !important;
   }
 
-  /* Ensure no orphan labels */
-  .qr-label-print {
-    break-inside: avoid;
-    page-break-inside: avoid;
+  /* Hide app layout containers — these cause blank pages if they occupy space */
+  .app-content {
+    display: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: auto !important;
+    height: auto !important;
+    overflow: visible !important;
   }
 
-  /* Last row left-aligned if odd count */
-  .qr-label-grid > :last-child:nth-child(3n-2):last-child {
-    grid-column: 1;
+  .app-main {
+    display: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+  }
+
+  /* Show print containers */
+  .print-only {
+    display: block !important;
+  }
+
+  .print-area {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Print page: 2-column x 3-row grid = 6 QR codes per A4 page */
+  .qr-print-page {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(3, auto);
+    gap: 6mm;
+    width: 100%;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .qr-print-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  /* Hide the flex grid wrapper in print — pages handle their own grid */
+  .qr-label-grid {
+    display: contents !important;
+  }
+
+  /* Label card adjustments for print */
+  .qr-label-print {
+    max-width: none;
+    width: 100%;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    box-shadow: none;
+    margin: 0;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .ql-qr {
+    width: 100px;
+    height: 100px;
+  }
+
+  .ql-code {
+    font-size: 10px;
+  }
+
+  .ql-type {
+    font-size: 8px;
+  }
+
+  .ql-detail-label {
+    font-size: 7px;
+  }
+
+  .ql-detail-value {
+    font-size: 8px;
+  }
+
+  .ql-brand-name {
+    font-size: 11px;
+  }
+
+  .ql-brand-sub {
+    font-size: 7px;
+  }
+
+  .ql-footer {
+    font-size: 6px;
   }
 }
 
-/* Responsive adjustment: fewer columns on very small viewports */
+/* Responsive: single column on very small viewports (screen only) */
 @media (max-width: 480px) {
   .qr-label-grid {
     grid-template-columns: 1fr;
