@@ -832,8 +832,6 @@ input[type="checkbox"], input[type="radio"] {
   background: #FAFAFA;
 }
 
-/* ===== Print rules (legacy – kept minimal, main block below) ===== */
-
 /* ===== Toaster ===== */
 .toaster {
   position: fixed;
@@ -1461,7 +1459,20 @@ input[type="checkbox"], input[type="radio"] {
   display: contents;
 }
 
+/* ===== Dedicated print page (outside AppLayout) ===== */
+
+.qr-print-root {
+  min-height: 100vh;
+  background: #f9fafb;
+}
+
+.qr-print-content {
+  padding: 16px;
+}
+
 /* ===== Print styles ===== */
+/* No global body * { display:none } or visibility:hidden — the print page
+   lives outside AppLayout so there is nothing to hide. */
 
 @media print {
   @page {
@@ -1469,68 +1480,42 @@ input[type="checkbox"], input[type="radio"] {
     margin: 10mm;
   }
 
-  html, body {
+  html, body, #root {
     margin: 0 !important;
     padding: 0 !important;
-    background: #fff !important;
-    width: 210mm;
+    background: #ffffff !important;
+    width: auto !important;
+    min-height: auto !important;
+    height: auto !important;
+    overflow: visible !important;
   }
 
-  /* Hide all non-print elements via display:none (no space occupied) */
+  /* Hide screen-only UI (print page header buttons, etc.) */
   .no-print,
-  .no-print *,
-  .app-shell,
-  .app-sidebar,
-  .sidebar-backdrop,
-  .app-bottom-nav,
-  header.page-header,
-  header.page-header *,
-  .sticky,
-  .toaster,
-  .toaster * {
+  .no-print * {
     display: none !important;
   }
 
-  /* Hide app layout containers — these cause blank pages if they occupy space */
-  .app-content {
-    display: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
+  /* Print page root — clean white background */
+  .qr-print-root {
     min-height: auto !important;
-    height: auto !important;
-    overflow: visible !important;
-  }
-
-  .app-main {
-    display: none !important;
-    margin: 0 !important;
+    background: #ffffff !important;
     padding: 0 !important;
-    max-width: none !important;
   }
 
-  /* Show print containers */
-  .print-only {
-    display: block !important;
-  }
-
-  .print-area {
-    display: block !important;
-    position: static !important;
-    width: 100% !important;
-    margin: 0 !important;
+  .qr-print-content {
     padding: 0 !important;
-    min-height: auto !important;
-    height: auto !important;
-    overflow: visible !important;
   }
 
-  /* Print page: 2-column x 3-row grid = 6 QR codes per A4 page */
+  /* 2-column x 3-row grid = 6 QR codes per A4 page */
   .qr-print-page {
     display: grid !important;
     grid-template-columns: repeat(2, 1fr);
-    grid-template-rows: repeat(3, auto);
+    grid-template-rows: repeat(3, 1fr);
     gap: 6mm;
     width: 100%;
+    min-height: calc(297mm - 20mm);
+    box-sizing: border-box;
     page-break-after: always;
     break-after: page;
   }
@@ -1540,58 +1525,129 @@ input[type="checkbox"], input[type="radio"] {
     break-after: auto;
   }
 
-  /* Hide the flex grid wrapper in print — pages handle their own grid */
-  .qr-label-grid {
-    display: contents !important;
-  }
-
-  /* Label card adjustments for print */
-  .qr-label-print {
-    max-width: none;
-    width: 100%;
+  /* Individual print card */
+  .qr-print-card {
+    display: flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 82mm;
+    padding: 5mm;
     border: 1px solid #d1d5db;
-    border-radius: 4px;
-    box-shadow: none;
-    margin: 0;
+    border-radius: 6px;
+    text-align: center;
+    box-sizing: border-box;
     break-inside: avoid;
     page-break-inside: avoid;
+  }
+
+  .qr-print-topbar {
+    width: 100%;
+    height: 4px;
+    background: #dc2626;
+    border-radius: 3px;
+    margin-bottom: 3mm;
+  }
+
+  .qr-print-brand {
     display: flex;
     flex-direction: column;
     align-items: center;
-    text-align: center;
+    margin-bottom: 3mm;
   }
 
-  .ql-qr {
-    width: 100px;
-    height: 100px;
+  .qr-print-brand-name {
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #dc2626;
   }
 
-  .ql-code {
+  .qr-print-brand-sub {
+    font-size: 8px;
+    font-weight: 600;
+    color: #9ca3af;
+    margin-top: 1px;
+  }
+
+  .qr-print-qr {
+    width: 32mm;
+    height: 32mm;
+    margin-bottom: 4mm;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .qr-print-qr img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .qr-print-placeholder {
+    width: 80%;
+    height: 80%;
+    border: 2px dashed #d1d5db;
+    border-radius: 4px;
+  }
+
+  .qr-print-tag {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: #111827;
+    margin-bottom: 2mm;
+  }
+
+  .qr-print-info {
     font-size: 10px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 3mm;
   }
 
-  .ql-type {
-    font-size: 8px;
+  .qr-print-details {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1mm;
   }
 
-  .ql-detail-label {
+  .qr-print-detail {
+    display: flex;
+    justify-content: space-between;
+    padding: 1mm 2mm;
+    background: #f9fafb;
+    border-radius: 2px;
+  }
+
+  .qr-print-detail-label {
     font-size: 7px;
+    font-weight: 800;
+    color: #9ca3af;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
   }
 
-  .ql-detail-value {
+  .qr-print-detail-value {
     font-size: 8px;
+    font-weight: 700;
+    color: #374151;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
   }
 
-  .ql-brand-name {
-    font-size: 11px;
-  }
-
-  .ql-brand-sub {
+  .qr-print-footer {
+    margin-top: 3mm;
     font-size: 7px;
-  }
-
-  .ql-footer {
-    font-size: 6px;
+    color: #9ca3af;
   }
 }
 
