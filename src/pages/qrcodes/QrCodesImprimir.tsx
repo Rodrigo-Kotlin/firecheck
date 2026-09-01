@@ -61,7 +61,7 @@ export default function QrCodesImprimir() {
     <div className="qr-print-root">
       <header className="no-print" style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff' }}>
         <h1 style={{ fontSize: '14px', fontWeight: 700, color: '#111827' }}>
-          Impressão de QR Codes
+          EFETIVA SST — Impressão de QR Codes
           <span style={{ fontWeight: 400, color: '#6b7280', marginLeft: 8, fontSize: 12 }}>
             ({equipmentsToPrint.length} etiqueta{equipmentsToPrint.length !== 1 ? 's' : ''})
           </span>
