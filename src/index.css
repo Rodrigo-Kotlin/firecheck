@@ -1454,7 +1454,7 @@ input[type="checkbox"], input[type="radio"] {
   padding: 0.5rem;
 }
 
-/* --- Print page wrapper (groups of 6 for batch) --- */
+/* --- Print page wrapper (groups of 9 for batch) --- */
 .qr-print-page {
   display: contents;
 }
@@ -1627,13 +1627,14 @@ input[type="checkbox"], input[type="radio"] {
     padding: 0 !important;
   }
 
-  /* 2 columns × 3 rows = 6 per A4 page */
+  /* 3 columns × 3 rows = 9 per A4 page */
   .qr-print-page {
     display: grid !important;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     grid-template-rows: repeat(3, 1fr);
-    gap: 4mm;
+    gap: 3mm;
     width: 100%;
+    box-sizing: border-box;
     page-break-after: always;
     break-after: page;
   }
@@ -1643,73 +1644,132 @@ input[type="checkbox"], input[type="radio"] {
     break-after: auto;
   }
 
-  /* Compact card for print */
+  /* Compact card for print — 3×3 layout */
   .qr-print-card {
+    display: flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
     max-width: none;
     width: 100%;
     margin: 0;
-    padding: 2.5mm 3mm;
-    border: 0.5pt solid #d1d5db;
-    border-radius: 3px;
+    padding: 2mm;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    text-align: center;
+    box-sizing: border-box;
     break-inside: avoid;
     page-break-inside: avoid;
+    overflow: hidden;
   }
 
   .qr-print-topbar {
-    height: 2mm;
-    margin-bottom: 1.5mm;
+    height: 1.5mm;
+    margin-bottom: 1mm;
     border-radius: 1mm;
   }
 
   .qr-print-brand {
-    margin-bottom: 1.5mm;
-  }
-
-  .qr-print-brand-name {
-    font-size: 9pt;
-    letter-spacing: 0.1em;
-  }
-
-  .qr-print-brand-sub {
-    font-size: 6pt;
-    margin-top: 0.5mm;
-  }
-
-  .qr-print-qr {
-    width: 24mm;
-    height: 24mm;
-    margin-bottom: 1.5mm;
-  }
-
-  .qr-print-tag {
-    font-size: 8pt;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     margin-bottom: 1mm;
   }
 
+  .qr-print-brand-name {
+    font-size: 7.5pt;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1.1;
+    margin: 0;
+  }
+
+  .qr-print-brand-sub {
+    font-size: 5.5pt;
+    font-weight: 600;
+    margin-top: 0.3mm;
+    line-height: 1.1;
+  }
+
+  .qr-print-qr {
+    width: 20mm;
+    height: 20mm;
+    margin: 1.5mm 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .qr-print-qr img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .qr-print-placeholder {
+    width: 80%;
+    height: 80%;
+    border: 2px dashed #d1d5db;
+    border-radius: 4px;
+  }
+
+  .qr-print-tag {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 7pt;
+    font-weight: 700;
+    margin: 1mm 0 0.5mm 0;
+    line-height: 1.1;
+  }
+
   .qr-print-info {
-    font-size: 6.5pt;
-    margin-bottom: 1.5mm;
+    font-size: 6pt;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 0 0 1mm 0;
+    line-height: 1.1;
   }
 
   .qr-print-details {
-    gap: 0.5mm;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3mm;
   }
 
   .qr-print-detail {
-    padding: 0.5mm 1.5mm;
+    display: flex;
+    justify-content: space-between;
+    padding: 0.3mm 1mm;
+    background: #f9fafb;
+    border-radius: 2px;
   }
 
   .qr-print-detail-label {
-    font-size: 5.5pt;
+    font-size: 5.3pt;
+    font-weight: 800;
+    color: #9ca3af;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
   }
 
   .qr-print-detail-value {
-    font-size: 6pt;
+    font-size: 5.5pt;
+    font-weight: 700;
+    color: #374151;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
   }
 
   .qr-print-footer {
-    margin-top: 1.5mm;
-    font-size: 5.5pt;
+    margin-top: 1mm;
+    font-size: 5pt;
+    color: #9ca3af;
+    line-height: 1.1;
   }
 }
 
