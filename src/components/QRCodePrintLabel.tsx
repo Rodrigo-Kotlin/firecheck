@@ -17,7 +17,7 @@ export default function QRCodePrintLabel({ equipment }: { equipment: Equipment }
     QRCode.toDataURL(equipment.id, {
       errorCorrectionLevel: 'H',
       margin: 1,
-      width: 256,
+      width: 512,
       color: { dark: '#111111', light: '#FFFFFF' },
     })
       .then((u) => { if (!cancelled) setQrUrl(u); })
