@@ -87,6 +87,17 @@ export interface DbPlanoAcao {
   deleted_by: string | null;
 }
 
+/** Linha da tabela `public.fotos_inspecao` (metadados de evidência). */
+export interface DbFotoInspecao {
+  id: string;
+  inspection_id: string;
+  storage_path: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  uploaded_at: string;
+  created_by: string | null;
+}
+
 const emptyToUndef = (v: string | null | undefined): string | undefined =>
   v === null || v === undefined || v === '' ? undefined : v;
 

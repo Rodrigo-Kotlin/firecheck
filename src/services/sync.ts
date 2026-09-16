@@ -22,8 +22,10 @@
  * report.
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { db } from '../db';
-import { fetchEquipments, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById, softDeleteEquipment, applyEquipmentInspectionStatusRemote, type ServiceResult } from './equipmentService';
+import { db, type LocalInspectionPhoto } from '../db';
+import {
+  fetchEquipments, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById, softDeleteEquipment, applyEquipmentInspectionStatusRemote, type ServiceResult,
+} from './equipmentService';
 import { fetchInspections, upsertInspection } from './inspectionService';
 import {
   fetchActionPlans,
@@ -37,7 +39,9 @@ import {
   dbToInspection,
   equipmentToDb,
   inspectionToDb,
+  type DbFotoInspecao,
 } from './mappers';
+import { getInspectionPhotoBlob, mimeToExtension, uploadInspectionPhotoBlob, removeInspectionPhotoObject } from './photoService';
 import type { Equipment } from '../types';
 import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
 
@@ -72,6 +76,16 @@ export interface SyncReport {
   pullApReconciled: number;
   pullApError: boolean;
   pullApEmpty: boolean;
+
+  // -- Detalhamento de fotos de inspeção --
+  pushPhotoOk: number;
+  pushPhotoErrors: number;
+  /** Fotos adiadas porque a inspeção pai ainda não existe remotamente. */
+  pushPhotoSkipped: number;
+  pullPhotoImported: number;
+  pullPhotoReconciled: number;
+  pullPhotoError: boolean;
+  pullPhotoEmpty: boolean;
 }
 
 function skip(reason: string): SyncReport {
@@ -85,6 +99,9 @@ function skip(reason: string): SyncReport {
     pushApOk: 0, pushApErrors: 0,
     pullApImported: 0, pullApReconciled: 0,
     pullApError: false, pullApEmpty: false,
+    pushPhotoOk: 0, pushPhotoErrors: 0, pushPhotoSkipped: 0,
+    pullPhotoImported: 0, pullPhotoReconciled: 0,
+    pullPhotoError: false, pullPhotoEmpty: false,
   };
 }
 
@@ -660,6 +677,132 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
 }
 
 // ---------------------------------------------------------------------------
+// PHOTOS (push)
+// ---------------------------------------------------------------------------
+
+/**
+ * Push inspection photos to Supabase Storage + `fotos_inspecao`.
+ *
+ * Ordering guarantees:
+ *   • Runs AFTER inspections are pushed (see syncAll): a photo is only sent
+ *     when its parent inspection already exists remotely as `sincronizado`,
+ *     otherwise it is `skipped` (stays pending for the next round).
+ *   • `sincronizado` flips to true ONLY after both the storage object and the
+ *     metadata row are confirmed. On storage failure the Blob is preserved
+ *     and `syncError` is recorded for the next attempt.
+ *   • Idempotent: if a previous attempt uploaded the object but died before
+ *     the metadata write, the known `storagePath` skips the re-upload and we
+ *     simply retry the `fotos_inspecao` upsert.
+ *   • Local-only deletes (`syncAction: 'delete'`) remove both the object and
+ *     the metadata row, then delete the local row.
+ */
+async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; errors: number; skipped: number }> {
+  let pushed = 0;
+  let errors = 0;
+  let skipped = 0;
+
+  const pending = await db.fotos.filter((p) => !p.sincronizado).toArray();
+  if (import.meta.env.DEV && pending.length > 0) {
+    console.log(`[sync] pushInspectionPhotos: ${pending.length} pendentes (${pending.map(p => p.id).join(', ')})`);
+  }
+
+  for (const photo of pending) {
+    // 1) Local-only delete
+    if (photo.syncAction === 'delete') {
+      try {
+        if (supabase) {
+          if (photo.storagePath) {
+            await removeInspectionPhotoObject(photo.storagePath);
+          }
+          await supabase.from('fotos_inspecao').delete().eq('id', photo.id);
+        }
+        await db.fotos.delete(photo.id);
+        pushed++;
+        if (import.meta.env.DEV) console.log('[sync] Foto %s removida do Supabase', photo.id);
+      } catch (err) {
+        console.error('[sync.pushInspectionPhotos] falha ao remover foto', { id: photo.id, err });
+        errors++;
+      }
+      continue;
+    }
+
+    // 2) Parent inspection must exist and be synced remotely first
+    const insp = await db.inspecoes.get(photo.inspectionId);
+    if (!insp || !insp.sincronizado || insp.pendingDelete) {
+      skipped++;
+      continue;
+    }
+
+    // 3) Storage path starts with the owner uid
+    const sessionData = supabase ? await supabase.auth.getSession() : null;
+    const uid = sessionData?.data?.session?.user?.id ?? userId;
+    if (!uid) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      const ext = mimeToExtension(photo.mimeType || 'image/jpeg');
+      const path =
+        photo.storagePath ??
+        `${uid}/${photo.inspectionId}/${photo.id}.${ext}`;
+
+      if (!photo.storagePath) {
+        // Upload object (upsert keeps retries idempotent)
+        const blob = getInspectionPhotoBlob(photo);
+        const up = await uploadInspectionPhotoBlob(path, blob);
+        if (!up.ok) throw new Error(up.error?.message ?? 'Falha ao enviar foto.');
+      }
+
+      // 4) Metadata row (idempotent upsert on id)
+      const { error: metaError } = await supabase!.from('fotos_inspecao').upsert(
+        {
+          id: photo.id,
+          inspection_id: photo.inspectionId,
+          storage_path: path,
+          mime_type: photo.mimeType ?? 'image/jpeg',
+          size_bytes: photo.size ?? null,
+          uploaded_at: new Date().toISOString(),
+          created_by: uid,
+        },
+        { onConflict: 'id' },
+      );
+      if (metaError) throw metaError;
+
+      // 5) Only now confirm locally
+      await db.fotos.update(photo.id, {
+        sincronizado: true,
+        syncAction: undefined,
+        syncError: undefined,
+        storagePath: path,
+        remoteId: photo.id,
+        updatedAt: new Date().toISOString(),
+      });
+      pushed++;
+      if (import.meta.env.DEV) {
+        console.log('[sync] Foto %s sincronizada: %s (%d bytes)', photo.id, path, photo.size ?? 0);
+      }
+    } catch (err) {
+      const message = (err as { message?: string; code?: string })?.message
+        ?? (err as { code?: string })?.code
+        ?? 'upload-failed';
+      console.error('[sync.pushInspectionPhotos] falha ao enviar foto', { id: photo.id, message });
+      await db.fotos.update(photo.id, {
+        sincronizado: false,
+        syncError: String(message).slice(0, 200),
+        updatedAt: new Date().toISOString(),
+      });
+      errors++;
+    }
+  }
+
+  if (import.meta.env.DEV) {
+    console.log(`[sync] pushInspectionPhotos final: pushed=${pushed} errors=${errors} skipped=${skipped}`);
+  }
+  return { pushed, errors, skipped };
+}
+
+// ---------------------------------------------------------------------------
 // PULL
 // ---------------------------------------------------------------------------
 
@@ -940,6 +1083,80 @@ async function pullActionPlans(): Promise<PullResult> {
 }
 
 // ---------------------------------------------------------------------------
+// PHOTOS (pull) — metadata-only
+// ---------------------------------------------------------------------------
+
+/**
+ * Import `fotos_inspecao` rows from the cloud.
+ *
+ * This is metadata-only: image bytes are only downloaded on demand (future
+ * detail views). Rules:
+ *   • Local rows with unsynced changes (sincronizado:false / syncAction) are
+ *     always preserved.
+ *   • Remote rows are only materialised when the parent inspection exists
+ *     locally (no orphan photo rows).
+ *   • Locally-synced rows get their remote metadata refreshed.
+ *   • No orphan reconciliation: a local synced photo whose remote row is gone
+ *     is kept (evidence must never be destroyed by a sync race).
+ */
+async function pullInspectionPhotos(): Promise<PullResult> {
+  if (import.meta.env.DEV) console.log('[sync] pullInspectionPhotos...');
+  if (!supabase) {
+    return { imported: 0, reconciled: 0, error: true, empty: false };
+  }
+  const { data, error } = await supabase.from('fotos_inspecao').select('*');
+  if (error) {
+    console.error('[sync] pullInspectionPhotos erro: preservando fotos locais');
+    return { imported: 0, reconciled: 0, error: true, empty: false };
+  }
+
+  const rows = (data ?? []) as DbFotoInspecao[];
+  const now = new Date().toISOString();
+  let imported = 0;
+
+  for (const row of rows) {
+    const local = await db.fotos.get(row.id);
+    if (local) {
+      if (local.sincronizado) {
+        await db.fotos.update(row.id, {
+          storagePath: row.storage_path,
+          remoteId: row.id,
+          sincronizado: true,
+          syncError: undefined,
+          size: row.size_bytes ?? local.size,
+          mimeType: row.mime_type ?? local.mimeType,
+          updatedAt: now,
+        });
+      }
+      continue;
+    }
+
+    const insp = await db.inspecoes.get(row.inspection_id);
+    if (!insp || insp.pendingDelete) continue;
+
+    await db.fotos.put({
+      id: row.id,
+      inspectionId: row.inspection_id,
+      mimeType: row.mime_type ?? 'image/jpeg',
+      size: row.size_bytes ?? undefined,
+      storagePath: row.storage_path,
+      remoteId: row.id,
+      sincronizado: true,
+      syncAction: undefined,
+      createdAt: row.uploaded_at ? new Date(row.uploaded_at).toISOString() : now,
+      updatedAt: now,
+    } as LocalInspectionPhoto);
+    imported++;
+  }
+
+  if (import.meta.env.DEV) {
+    console.log('[sync] pullInspectionPhotos final: cloud=%d imported=%d empty=%s',
+      rows.length, imported, rows.length === 0 ? 'true' : 'false');
+  }
+  return { imported, reconciled: 0, error: false, empty: rows.length === 0 };
+}
+
+// ---------------------------------------------------------------------------
 // PUBLIC API
 // ---------------------------------------------------------------------------
 
@@ -979,12 +1196,17 @@ export async function syncAll(
   let pushEqOk = 0;
   let pushInsOk = 0;
   let pushErrors = 0;
+  let pushed = 0;
   let pulled = 0;
   let deleted = 0;
   let errors = 0;
 
   let pushApOk = 0;
   let pushApErrors = 0;
+
+  let pushPhotoOk = 0;
+  let pushPhotoErrors = 0;
+  let pushPhotoSkipped = 0;
 
   let pullEqImported = 0;
   let pullEqReconciled = 0;
@@ -996,6 +1218,11 @@ export async function syncAll(
   let pullInsError = false;
   let pullInsEmpty = false;
 
+  let pullPhotoImported = 0;
+  let pullPhotoReconciled = 0;
+  let pullPhotoError = false;
+  let pullPhotoEmpty = false;
+
   let pullApImported = 0;
   let pullApReconciled = 0;
   let pullApError = false;
@@ -1005,12 +1232,17 @@ export async function syncAll(
     if (!options.pullOnly) {
       const eqR = await pushEquipments(options.userId);
       const insR = await pushInspections(options.userId);
+      const phR = await pushInspectionPhotos(options.userId);
       const apR = await pushActionPlans(options.userId);
       pushEqOk = eqR.ok;
       pushInsOk = insR.ok;
+      pushPhotoOk = phR.pushed;
+      pushPhotoErrors = phR.errors;
+      pushPhotoSkipped = phR.skipped;
       pushApOk = apR.ok;
       pushApErrors = apR.errors;
-      pushErrors = eqR.errors + insR.errors + apR.errors;
+      pushErrors = eqR.errors + insR.errors + phR.errors + apR.errors;
+      pushed = pushEqOk + pushInsOk + pushPhotoOk + pushApOk;
       deleted += eqR.deleted + insR.deleted + apR.deleted;
       errors += pushErrors;
     }
@@ -1018,6 +1250,7 @@ export async function syncAll(
     if (!options.pushOnly) {
       const eqP = await pullEquipments();
       const insP = await pullInspections();
+      const phP = await pullInspectionPhotos();
       const apP = await pullActionPlans();
 
       pullEqImported = eqP.imported;
@@ -1030,13 +1263,18 @@ export async function syncAll(
       pullInsError = insP.error;
       pullInsEmpty = insP.empty;
 
+      pullPhotoImported = phP.imported;
+      pullPhotoReconciled = phP.reconciled;
+      pullPhotoError = phP.error;
+      pullPhotoEmpty = phP.empty;
+
       pullApImported = apP.imported;
       pullApReconciled = apP.reconciled;
       pullApError = apP.error;
       pullApEmpty = apP.empty;
 
-      pulled += eqP.imported + insP.imported + apP.imported;
-      if (eqP.error || insP.error || apP.error) errors++;
+      pulled = eqP.imported + insP.imported + phP.imported + apP.imported;
+      if (eqP.error || insP.error || phP.error || apP.error) errors++;
     }
   } catch (err) {
     console.error('[sync] exceção durante syncAll:', err);
@@ -1045,8 +1283,8 @@ export async function syncAll(
     if (import.meta.env.DEV) {
       console.log('[sync] ===== RESUMO =====');
       console.log('[sync] ' +
-        `Push: eq=${pushEqOk} ins=${pushInsOk} ap=${pushApOk} errors=${pushErrors} | ` +
-        `Pull: eq=${pullEqImported}(${pullEqReconciled}) ins=${pullInsImported}(${pullInsReconciled}) ap=${pullApImported}(${pullApReconciled}) | ` +
+        `Push: eq=${pushEqOk} ins=${pushInsOk} photo=${pushPhotoOk}(skip=${pushPhotoSkipped}) ap=${pushApOk} errors=${pushErrors} | ` +
+        `Pull: eq=${pullEqImported}(${pullEqReconciled}) ins=${pullInsImported}(${pullInsReconciled}) photo=${pullPhotoImported}(${pullPhotoReconciled}) ap=${pullApImported}(${pullApReconciled}) | ` +
         `Delete=${deleted} Erros=${errors}`);
     }
     _syncInProgress = false;
@@ -1054,7 +1292,7 @@ export async function syncAll(
   }
 
   return {
-    pushed: pushEqOk + pushInsOk + pushApOk,
+    pushed,
     pulled,
     deleted,
     errors,
@@ -1076,16 +1314,33 @@ export async function syncAll(
     pullApReconciled,
     pullApError,
     pullApEmpty,
+    pushPhotoOk,
+    pushPhotoErrors,
+    pushPhotoSkipped,
+    pullPhotoImported,
+    pullPhotoReconciled,
+    pullPhotoError,
+    pullPhotoEmpty,
   };
 }
 
 /** Counts the rows that still need to be pushed — surfaced in the UI.
- *  Includes conflict rows (syncConflict === true) since they block sync. */
+ *  Includes conflict rows (syncConflict === true) since they block sync.
+ *  Photos whose parent inspection is pending delete (or missing) are not
+ *  counted — they cannot be pushed until the inspection exists remotely. */
 export async function pendingSyncCount(): Promise<number> {
   const eqs = await db.equipamentos.filter((e) => !e.sincronizado || !!e.pendingDelete).count();
   const ins = await db.inspecoes.filter((i) => !i.sincronizado || !!i.pendingDelete).count();
   const aps = await db.planosAcao.filter((p) => !p.sincronizado || !!p.pendingDelete).count();
-  return eqs + ins + aps;
+
+  const pendingPhotos = await db.fotos.filter((p) => !p.sincronizado).toArray();
+  let photos = 0;
+  for (const p of pendingPhotos) {
+    const insp = await db.inspecoes.get(p.inspectionId);
+    if (insp && !insp.pendingDelete) photos++;
+  }
+
+  return eqs + ins + aps + photos;
 }
 
 /** Counts rows in conflict (syncConflict === true) for UI badges. */

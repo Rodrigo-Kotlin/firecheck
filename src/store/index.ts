@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus } from '../types';
-import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan } from '../db';
+import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan, type LocalInspectionPhoto } from '../db';
 import { syncAll, pendingSyncCount, conflictCount } from '../services/sync';
 import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById } from '../services/equipmentService';
 import { carregarInspecoes } from '../services/inspectionService';
@@ -25,6 +25,27 @@ export interface EquipmentResult {
   ok: boolean;
   mode: 'local' | 'cloud';
   message?: string;
+}
+
+/** Foto já comprimida (Blob) a ser anexada a uma inspeção. */
+export interface InspectionPhotoInput {
+  blob: Blob;
+  mimeType: string;
+  width: number;
+  height: number;
+  size: number;
+}
+
+/** Resultado granular do salvamento da inspeção (+ foto). A inspeção e a foto
+ *  são persistidas atomicamente no IndexedDB — nenhum sucesso é reportado
+ *  antes de ambas serem gravadas. */
+export interface SaveInspectionResult {
+  ok: boolean;
+  /** Instrui se a inspeção foi persistida (com ou sem foto). */
+  inspectionSaved: boolean;
+  /** false quando a foto falhou (ex.: quota do IndexedDB). */
+  photoSaved: boolean;
+  error?: string;
 }
 
 function inferCriticidade(inspectionObs: string, eqTipo: string): import('../types').Criticidade {
@@ -139,9 +160,10 @@ interface AppState {
     status: EquipmentStatus;
     observacoes?: string;
     userId?: string;
-    photoBase64?: string | null;
+    /** Foto comprimida (Blob) a anexar — opcional. */
+    photo?: InspectionPhotoInput | null;
     dataProximaInspecao?: string;
-  }) => Promise<string>;
+  }) => Promise<SaveInspectionResult>;
   addEquipment: (eq: Equipment) => Promise<EquipmentResult>;
   updateEquipment: (id: string, updates: Partial<Equipment>) => Promise<EquipmentResult>;
   addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'> & { status?: ActionPlanStatus }) => void;
@@ -726,43 +748,57 @@ export const useAppStore = create<AppState>()(
             userId,
           };
 
-          // 1. Save inspection to Dexie
+          // 1. Persist inspeção + foto (se houver) + status do equipamento
+          //    atomicamente. Sem falso sucesso: se qualquer gravação falhar,
+          //    a transação reverte e retornamos o resultado granular.
+          let inspectionSaved = false;
+          let photoSaved = true;
           try {
-            await db.inspecoes.put({ ...stamped, sincronizado: false } as LocalInspection);
-          } catch (err) {
-            console.error('[store.addInspection] erro ao persistir inspeção no Dexie:', err);
-            throw Error('Falha ao salvar inspeção no banco local.', { cause: err });
-          }
+            await db.transaction('rw', db.inspecoes, db.fotos, db.equipamentos, async () => {
+              await db.inspecoes.put({ ...stamped, sincronizado: false } as LocalInspection);
+              inspectionSaved = true;
 
-          // 2. Save photo to Dexie if provided
-          if (data.photoBase64) {
-            try {
-              await db.fotos.put({
-                id,
-                inspectionId: id,
-                base64: data.photoBase64,
-              });
-            } catch (err) {
-              console.error('[store.addInspection] erro ao persistir foto no Dexie:', err);
-            }
-          }
-
-          // 3. Update equipment in Dexie
-          try {
-            await db.equipamentos.where('id').equals(data.equipmentId).modify((eq) => {
-              eq.status = data.status;
-              eq.sincronizado = false;
-              eq.statusUpdatePending = true;
-              eq.updatedAt = new Date().toISOString();
-              if (data.dataProximaInspecao) {
-                eq.dataProximaInspecao = data.dataProximaInspecao;
+              if (data.photo) {
+                const now = new Date().toISOString();
+                await db.fotos.put({
+                  id: `FOTO-${crypto.randomUUID()}`,
+                  inspectionId: id,
+                  blob: data.photo.blob,
+                  mimeType: data.photo.mimeType,
+                  width: data.photo.width,
+                  height: data.photo.height,
+                  size: data.photo.size,
+                  sincronizado: false,
+                  syncAction: 'create',
+                  createdAt: now,
+                  updatedAt: now,
+                } as LocalInspectionPhoto);
+                photoSaved = true;
               }
+
+              await db.equipamentos.where('id').equals(data.equipmentId).modify((eq) => {
+                eq.status = data.status;
+                eq.sincronizado = false;
+                eq.statusUpdatePending = true;
+                eq.updatedAt = new Date().toISOString();
+                if (data.dataProximaInspecao) {
+                  eq.dataProximaInspecao = data.dataProximaInspecao;
+                }
+              });
             });
           } catch (err) {
-            console.error('[store.addInspection] erro ao atualizar equipamento no Dexie:', err);
+            console.error('[store.addInspection] erro ao persistir inspeção no Dexie:', err);
+            return {
+              ok: false,
+              inspectionSaved,
+              photoSaved,
+              error: inspectionSaved
+                ? 'A inspeção foi salva, mas houve um problema com a foto.'
+                : 'Falha ao salvar inspeção no banco local.',
+            };
           }
 
-          // 4. Update Zustand state
+          // 2. Update Zustand state
           let actionPlanId: string | null = null;
           set((state) => {
             const updatedInspections = [stamped, ...state.inspections];
@@ -816,10 +852,10 @@ export const useAppStore = create<AppState>()(
             };
           });
 
-          // 5. Trigger sync once
+          // 3. Trigger sync once
           void runSync().then(() => get().refreshPendingCount());
 
-          return id;
+          return { ok: true, inspectionSaved: true, photoSaved };
         },
 
         addActionPlan: (plan) => {
