@@ -690,9 +690,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
  *   • `sincronizado` flips to true ONLY after both the storage object and the
  *     metadata row are confirmed. On storage failure the Blob is preserved
  *     and `syncError` is recorded for the next attempt.
- *   • Idempotent: if a previous attempt uploaded the object but died before
- *     the metadata write, the known `storagePath` skips the re-upload and we
- *     simply retry the `fotos_inspecao` upsert.
+ *   • Idempotent: `storagePath` is written to Dexie immediately after the
+ *     upload is confirmed, so a metadata failure keeps `sincronizado` false
+ *     but already records the path — the next sync skips the re-upload and
+ *     simply retries the `fotos_inspecao` upsert.
  *   • Local-only deletes (`syncAction: 'delete'`) remove both the object and
  *     the metadata row, then delete the local row.
  */
@@ -752,6 +753,15 @@ async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; 
         const blob = getInspectionPhotoBlob(photo);
         const up = await uploadInspectionPhotoBlob(path, blob);
         if (!up.ok) throw new Error(up.error?.message ?? 'Falha ao enviar foto.');
+
+        // Persistir storagePath assim que o upload é confirmado: se o upsert
+        // de `fotos_inspecao` falhar logo abaixo, o próximo sync sabe que o
+        // objeto já existe e só repete o upsert de metadados — sem reenviar
+        // bytes (banda e tempo preservados).
+        await db.fotos.update(photo.id, {
+          storagePath: path,
+          updatedAt: new Date().toISOString(),
+        });
       }
 
       // 4) Metadata row (idempotent upsert on id)

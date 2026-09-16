@@ -3,7 +3,6 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import {
   compressInspectionImage,
-  blobToDataUrl,
   PHOTO_MAX_WIDTH,
 } from '../../services/photoService';
 import { showToast } from '../../hooks/useToasts';
@@ -190,14 +189,19 @@ const EQUIPMENT_STATUS_CONFIGS: Record<
 // The actual compression/resize/encode pipeline lives in
 // `compressInspectionImage()` (services/photoService.ts) and returns a Blob
 // (not base64) so the bytes can go straight into IndexedDB without a second
-// base64 round-trip. We only keep UI-level concerns here: validation, loading
-// state, error display and the offline hint.
+// base64 round-trip. The preview is an Object URL (`URL.createObjectURL`) that
+// the owner screen revokes when the draft is replaced, removed or unmounted.
+// We only keep UI-level concerns here: validation, loading state, error
+// display and the offline hint.
 // ---------------------------------------------------------------------------
 
-/** Foto já processada, pronta para preview + persistência. */
+/** Foto já processada, pronta para preview + persistência. O preview usa uma
+ *  Object URL do Blob (`URL.createObjectURL`) — nunca uma string Base64. */
 interface PhotoDraft {
   blob: Blob;
-  dataUrl: string;
+  /** Object URL para o `<img>` de preview. É revogada quando a foto é
+   *  trocada/removida ou a tela desmonta. */
+  previewUrl: string;
   mimeType: string;
   width: number;
   height: number;
@@ -211,6 +215,21 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Cria uma Object URL para o preview do Blob (sem representação em Base64). */
+function createPreviewUrl(blob: Blob): string {
+  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    throw new Error('Este navegador não suporta pré-visualização de imagem.');
+  }
+  return URL.createObjectURL(blob);
+}
+
+/** Revoga uma Object URL quando ela sai de uso (troca, remoção ou unmount). */
+function revokePreviewUrl(url: string | null | undefined): void {
+  if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    URL.revokeObjectURL(url);
+  }
 }
 
 type PhotoCaptureProps = {
@@ -253,10 +272,9 @@ function PhotoCapture({ value, onChange, disabled = false, online, onProcessingC
     onProcessingChange?.(true);
     try {
       const compressed = await compressInspectionImage(file);
-      const dataUrl = await blobToDataUrl(compressed.blob);
       onChange({
         blob: compressed.blob,
-        dataUrl,
+        previewUrl: createPreviewUrl(compressed.blob),
         mimeType: compressed.mimeType,
         width: compressed.width,
         height: compressed.height,
@@ -295,7 +313,7 @@ function PhotoCapture({ value, onChange, disabled = false, online, onProcessingC
       <div className="space-y-2">
         <div className="relative rounded-xl overflow-hidden border border-gray-100 bg-gray-50">
           <img
-            src={value.dataUrl}
+            src={value.previewUrl}
             alt="Evidência fotográfica da inspeção"
             className="w-full h-48 sm:h-56 object-cover"
           />
@@ -532,6 +550,17 @@ export default function Inspecionar() {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Object URL lifecycle: revogar assim que o preview é trocado/removido ou a
+  // tela desmonta. O cleanup captura o URL da renderização anterior — nunca é
+  // revogado um URL que o `<img>` ainda está usando (StrictMode não é afetado:
+  // a URL só é criada em interação do usuário, após a montagem inicial).
+  const photoPreviewUrl = photoDraft?.previewUrl;
+  useEffect(() => {
+    return () => {
+      revokePreviewUrl(photoPreviewUrl);
+    };
+  }, [photoPreviewUrl]);
 
   const selectedEquipment = equipments.find((e) => e.id === eqId);
 

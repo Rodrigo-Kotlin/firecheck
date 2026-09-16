@@ -2,7 +2,7 @@
 
 > Documento de referência para IAs e desenvolvedores.
 > Leia antes de sugerir mudanças ou iniciar novas sessões.
-> Última atualização: 2026-06-22 · Prompt 08 (Resolução manual de conflitos + seleção de inspetor nas inspeções) concluído.
+> Última atualização: 2026-09-16 · Prompt 09 (Fotos de inspeção — Blob, ObjectURL, Storage, storagePath-first) concluído.
 
 ---
 
@@ -264,6 +264,27 @@ As migrations ficam em `supabase/migrations/`. **Nunca editar migrations antigas
 | `0012_clean_sync_metadata_from_dados_tecnicos.sql` | Remove metadados de sync vazados em `dados_tecnicos` | Corretiva |
 | `0013_add_soft_delete_to_planos_acao.sql` | `deleted_at`, `deleted_by` em planos_acao | Aditiva |
 | `0014_normalize_equipment_qrcode_fields.sql` | Normaliza `qr_code` para refletir `id` (TAG oficial) | Corretiva (Prompt 05) |
+| `0015_create_soft_delete_equipment_rpc.sql` | RPC de soft delete de equipamento | Aditiva |
+| `0016_harden_soft_delete_equipment_rpc.sql` | Reforço de segurança do RPC de soft delete | Corretiva |
+| `0017_fotos_inspecao_storage_policies.sql` | Fotos de inspeção: bucket `inspection-photos` + policies por pasta/owner + colunas `mime_type/size_bytes/created_by` | Aditiva (Prompt 09) |
+
+> **DEPENDÊNCIA FUTURA**: ao implementar inspeções compartilhadas entre
+> contas distintas, substituir a autorização de fotos baseada apenas na
+> pasta/owner por autorização baseada na permissão sobre a inspeção
+> correspondente. A próxima migration disponível é `0018_...`
+> (provavelmente permissões compartilhadas de inspeções).
+
+### Fotos de inspeção
+
+- Blob no Dexie;
+- ObjectURL no preview (`URL.createObjectURL`, revogada em troca/remoção/unmount);
+- Storage remoto (`inspection-photos`, bucket não-público);
+- retry idempotente;
+- storagePath persistido antes do metadata upsert;
+- Base64 somente legado (`legacyBase64`, `blobToDataUrl`/`dataUrlToBlob` mantidos);
+- migration atual das fotos = `0017`;
+- próxima migration disponível = `0018`;
+- compartilhamento de fotos entre contas depende do futuro modelo de inspeções compartilhadas.
 
 ---
 
@@ -536,7 +557,25 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 **Fallback em UI de histórico/relatórios**: `inspecao.inspetor || profile.nome || user.email || 'Não informado'` — não implementado nesta etapa pois o fluxo existente já exibe `insp.inspetor` diretamente (válido tanto para inspeções novas quanto antigas).
 
-`npm run lint`: 0 erros, 1 warning pré-existente (mesmo).
+### Prompt 09 — Fotos de inspeção (captura Blob + Storage + hardening pre-merge)
+
+**Branch**: `fix/firecheck-fotos-inspecao`  
+**Status**: concluído  
+**Objetivo**: estabilizar captura, compressão (Blob, sem Base64 no novo fluxo), persistência local (Dexie v6) e sincronização (Supabase Storage + `fotos_inspecao`) das fotos de inspeção.
+
+**Principais entregas**:
+- `compressInspectionImage()` (Blob pipeline) com `createImageBitmap` + orientação EXIF, resize para 1280px, cap de 25 MP no canvas, WebP com fallback JPEG e loop de qualidade ≤ 800 KB.
+- Schema Dexie v6: `LocalInspectionPhoto` (`blob`, `sincronizado`, `syncAction`, `storagePath`); upgrade migra fotos `base64` → `legacyBase64` e as marca pendentes de sync.
+- `addInspection()` com transação `'rw'` atômica (inspeção + foto + equipamento) e `SaveInspectionResult` — sucesso só é reportado após o commit; em rollback a mensagem é única ("Nenhuma alteração foi concluída").
+- `pushInspectionPhotos()` / `pullInspectionPhotos()`: push eq → ins → fotos → planos; `storagePath` persistido no Dexie imediatamente após o upload (retry só refaz o upsert de metadados); `sincronizado` só após storage + metadados confirmados.
+- Preview via Object URL (`URL.createObjectURL`) com revogação em troca/remoção/unmount; Base64 somente legado.
+- Migration `0017` (bucket `inspection-photos` + policies por pasta/owner + colunas de metadados). Próxima migration disponível = `0018`.
+- Extensão de Storage derivada do MIME (`mimeToExtension`: jpeg→.jpg, webp→.webp, png→.png).
+- Zustand só é atualizado após o commit da transação Dexie.
+
+**Riscos registrados**: fotos 48 MP precisam validação em dispositivo real (cap limita o canvas, não o decode inicial); compartilhamento de fotos entre contas depende do futuro modelo de inspeções compartilhadas; download remoto sob demanda ainda sem UI (pull é metadata-only).
+
+`npm run lint`: 0 erros, 2 warnings pré-existentes (NovoEquipamento e EditarEquipamento — `react-hooks/incompatible-library` no `watch()` do RHF).  
 `npm run build`: tsc + vite build sem erros.
 
 ---
@@ -555,7 +594,8 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Concluída |
 | `fix/firecheck-06-auto-sync-confiavel` | Concluída |
 | `fix/firecheck-07-controle-conflitos-updated-at` | Concluída |
-| `fix/firecheck-08-resolucao-manual-conflitos` | Ativa (resolução manual de conflitos + seleção de inspetor) |
+| `fix/firecheck-08-resolucao-manual-conflitos` | Concluída |
+| `fix/firecheck-fotos-inspecao` | Ativa (fotos de inspeção — aguardando merge) |
 
 ---
 
@@ -810,12 +850,15 @@ Máquina de estados: `unavailable` → `available` → `installed`. Detecta iOS 
 8. **Planos de ação** têm RLS que precisa ser revisada — atualmente usam `user_id` mas a policy pode não estar alinhada com a de equipamentos.
 9. **Scanner** busca no Supabase apenas por `findEquipmentById` (precisa do código exato) — não faz busca fuzzy.
 10. **Fotos grandes** (>5 MB) em base64 no IndexedDB podem estourar quota do browser.
+11. **Fotos 48 MP** precisam validação em dispositivo real — o cap de 25 MP limita o canvas, mas o decode inicial ainda aloca a resolução original.
+12. **Fotos compartilhadas entre contas** dependem do futuro modelo de inspeções compartilhadas (política por inspeção, não por pasta/owner) — ver DEPENDÊNCIA FUTURA na seção 7.
+13. **Download de fotos remotas sob demanda** ainda não tem UI — o pull é metadata-only.
 
 ---
 
 ## 19. Próximos Passos Recomendados
 
-1. **Prompt 09 — Testes finais e deploy**:
+1. **Prompt 10 — Testes finais e deploy**:
    - Testar multiusuário completo:
      - Admin cria equipamento.
      - Usuário comum inspeciona.
@@ -982,6 +1025,7 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at + UI de conflito | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store, badge "Conflito" em equipamentos/planos, alerta em detalhes, painel Dashboard, indicador Sidebar | Concluído | Prompt 08 — resolução manual de conflito (forçar sync ou descartar alteração local) |
 | 2026-06-21 | `fix/firecheck-08-resolucao-manual-conflitos` | Resolução manual de conflitos + auditoria PWA | `resolveEquipmentConflictKeepLocal/UseRemote`, `resolveActionPlanConflictKeepLocal/UseRemote`, UI de resolução em DetalhesEquipamento e PlanoDeAcao, auditoria migrations (14 seguras), SW/PWA (navigateFallback + NetworkOnly), listeners (sem duplicatas), console.log sanitizados (12 em DEV guard), lint 0 erros, build ok | Concluído | --- |
 | 2026-06-22 | `fix/firecheck-08-resolucao-manual-conflitos` | Seleção de inspetor nas inspeções | `src/config/inspectors.ts` com 4 inspetores fixos; select obrigatório em `Inspecionar.tsx`; persistência em localStorage do último inspetor; `inspetor` agora envia nome selecionado em vez de `user?.nome`; nenhuma migration necessária (coluna já existia); lint 0 erros, build ok | Concluído | Revisão para main |
+| 2026-09-16 | `fix/firecheck-fotos-inspecao` | Fotos de inspeção — captura Blob + Storage | `compressInspectionImage` (pipeline Blob), Dexie v6 com `LocalInspectionPhoto` (migração `base64`→`legacyBase64`), transação atômica + `SaveInspectionResult`, `pushInspectionPhotos`/`pullInspectionPhotos`, preview via Object URL com revogação, storagePath-first no retry, migration `0017` | Concluído | Merge em `main` (Prompt 10 — testes finais e deploy) |
 
 ---
 
@@ -989,7 +1033,7 @@ Sempre que iniciar nova sessão neste projeto:
 
 - [ ] `npm run lint` sem erros.
 - [ ] `npm run build` OK.
-- [ ] Todas as migrations (`0001`–`0014`) aplicadas no Supabase remoto.
+- [ ] Todas as migrations (`0001`–`0017`) aplicadas no Supabase remoto.
 - [ ] Cadastro de equipamento sem duplicidade (local + remoto).
 - [ ] Inspeção sem duplicidade no histórico.
 - [ ] Status por inspeção persiste entre usuários (RPC).

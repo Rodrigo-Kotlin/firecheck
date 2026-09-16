@@ -749,14 +749,13 @@ export const useAppStore = create<AppState>()(
           };
 
           // 1. Persist inspeção + foto (se houver) + status do equipamento
-          //    atomicamente. Sem falso sucesso: se qualquer gravação falhar,
-          //    a transação reverte e retornamos o resultado granular.
-          let inspectionSaved = false;
-          let photoSaved = true;
+          //    atomicamente. A transação só é considerada sucesso quando termina
+          //    sem lançar exceção — se qualquer gravação falhar, o Dexie reverte
+          //    TUDO (inspeção não existe, equipamento inalterado) e retornamos
+          //    o resultado granular sem falso sucesso.
           try {
             await db.transaction('rw', db.inspecoes, db.fotos, db.equipamentos, async () => {
               await db.inspecoes.put({ ...stamped, sincronizado: false } as LocalInspection);
-              inspectionSaved = true;
 
               if (data.photo) {
                 const now = new Date().toISOString();
@@ -773,7 +772,6 @@ export const useAppStore = create<AppState>()(
                   createdAt: now,
                   updatedAt: now,
                 } as LocalInspectionPhoto);
-                photoSaved = true;
               }
 
               await db.equipamentos.where('id').equals(data.equipmentId).modify((eq) => {
@@ -790,11 +788,9 @@ export const useAppStore = create<AppState>()(
             console.error('[store.addInspection] erro ao persistir inspeção no Dexie:', err);
             return {
               ok: false,
-              inspectionSaved,
-              photoSaved,
-              error: inspectionSaved
-                ? 'A inspeção foi salva, mas houve um problema com a foto.'
-                : 'Falha ao salvar inspeção no banco local.',
+              inspectionSaved: false,
+              photoSaved: !data.photo,
+              error: 'Não foi possível salvar a inspeção no dispositivo. Nenhuma alteração foi concluída.',
             };
           }
 
@@ -855,7 +851,7 @@ export const useAppStore = create<AppState>()(
           // 3. Trigger sync once
           void runSync().then(() => get().refreshPendingCount());
 
-          return { ok: true, inspectionSaved: true, photoSaved };
+          return { ok: true, inspectionSaved: true, photoSaved: true };
         },
 
         addActionPlan: (plan) => {

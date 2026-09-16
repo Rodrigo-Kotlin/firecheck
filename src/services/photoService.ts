@@ -35,8 +35,11 @@ export const PHOTO_MAX_QUALITY = 0.82;
  *  in this budget. */
 export const PHOTO_TARGET_MAX_BYTES = 800 * 1024;
 
-/** Hard cap on decoded pixels (20–25 MP). Prevents the 48 MP photos found on
- *  modern phones from exhausting memory during decode / canvas painting. */
+/** Hard limit on the *painted* surface (20–25 MP): bounds the canvas used for
+ *  drawing and the final encoded image. It does NOT bound the memory spike of
+ *  the initial decode itself — a 48 MP source is still decoded at full
+ *  resolution before this cap is applied. Behavior on 48 MP photos must be
+ *  validated on a real device. */
 export const PHOTO_MAX_MEGAPIXELS = 25;
 
 export type CompressedMime = 'image/jpeg' | 'image/webp';
@@ -165,8 +168,9 @@ async function encodeSmallestWithinBudget(
  *     platforms that can decode it; it is simply not advertised in the UI.
  *   - Always downscales the longest edge to `maxDimension` (default 1280 px).
  *     Images already smaller are never upscaled. Images above
- *     {@link PHOTO_MAX_MEGAPIXELS} are scaled down proportionally to protect
- *     memory.
+ *     {@link PHOTO_MAX_MEGAPIXELS} are scaled down proportionally to cap the
+ *     painted surface. The initial decode itself may still briefly spike at
+ *     the source resolution (see {@link PHOTO_MAX_MEGAPIXELS}).
  *   - Encodes to `image/webp` when supported, otherwise `image/jpeg`.
  *   - Iterates quality steps from {@link PHOTO_QUALITY} down to
  *     {@link PHOTO_MIN_QUALITY} looking for an output ≤ 800 KB.
