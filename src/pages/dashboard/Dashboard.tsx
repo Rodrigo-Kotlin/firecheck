@@ -1,12 +1,19 @@
-import { useNavigate } from 'react-router-dom';
+import { useMemo } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { Plus, QrCode, AlertTriangle, ShieldAlert, ArrowRight, TrendingUp, ClipboardList, CheckCircle2, Package, Clock, AlertOctagon } from 'lucide-react';
 import { isAdmin } from '../../services/permissions';
+import { getEquipmentDashboardGroups, type EquipmentDashboardView } from '../../utils/equipmentFilters';
 import type { LucideIcon } from 'lucide-react';
 
 export default function Dashboard() {
-  const { user, stats, equipments, actionPlans, conflictCounts, setCurrentTab } = useAppStore();
+  const { user, stats, equipments, inspections, actionPlans, conflictCounts, setCurrentTab } = useAppStore();
   const navigate = useNavigate();
+
+  const dashboardGroups = useMemo(
+    () => getEquipmentDashboardGroups(equipments, inspections),
+    [equipments, inspections],
+  );
 
   const alertEquipments = equipments.filter(eq => eq.status === 'vencido' || eq.status === 'pendente').slice(0, 3);
 
@@ -78,12 +85,8 @@ export default function Dashboard() {
     ? user.nome.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase()
     : 'FC';
 
-  const safeTotal = stats.total > 0 ? stats.total : 1;
-  const pctOfTotal = (n: number) => Math.round((n / safeTotal) * 100);
-  const hasData = stats.total > 0;
-
-  const statusCards: {
-    key: string;
+  const kpiCards: {
+    view: EquipmentDashboardView;
     label: string;
     value: number;
     color: string;
@@ -91,46 +94,51 @@ export default function Dashboard() {
     icon: LucideIcon;
     iconBg: string;
     sub: string;
+    href: string;
   }[] = [
     {
-      key: 'total',
-      label: 'Total',
-      value: stats.total,
+      view: 'registered',
+      label: 'Cadastrados',
+      value: dashboardGroups.registered.length,
       color: 'text-gray-700',
       accent: 'border-l-gray-300',
       icon: Package,
       iconBg: 'bg-gray-100 text-gray-500',
-      sub: 'Equipamentos cadastrados',
+      sub: 'Equipamentos ativos',
+      href: '/equipamentos?view=registered',
     },
     {
-      key: 'emDia',
+      view: 'inspected',
+      label: 'Inspecionados',
+      value: dashboardGroups.inspected.length,
+      color: 'text-blue-600',
+      accent: 'border-l-blue-500',
+      icon: ClipboardList,
+      iconBg: 'bg-blue-50 text-blue-600',
+      sub: 'Com ao menos 1 inspeção',
+      href: '/equipamentos?view=inspected',
+    },
+    {
+      view: 'up-to-date',
       label: 'Em Dia',
-      value: stats.emDia,
+      value: dashboardGroups.upToDate.length,
       color: 'text-success',
       accent: 'border-l-success',
       icon: CheckCircle2,
       iconBg: 'bg-green-50 text-success',
-      sub: hasData ? `${pctOfTotal(stats.emDia)}% do total` : 'Sem dados',
+      sub: 'Última inspeção regular',
+      href: '/equipamentos?view=up-to-date',
     },
     {
-      key: 'pendentes',
+      view: 'pending',
       label: 'Pendentes',
-      value: stats.pendentes,
+      value: dashboardGroups.pending.length,
       color: 'text-pending',
       accent: 'border-l-pending',
       icon: Clock,
       iconBg: 'bg-amber-50 text-pending',
-      sub: hasData ? `${pctOfTotal(stats.pendentes)}% do total` : 'Sem dados',
-    },
-    {
-      key: 'vencidos',
-      label: 'Vencidos',
-      value: stats.vencidos,
-      color: 'text-critical',
-      accent: 'border-l-critical',
-      icon: ShieldAlert,
-      iconBg: 'bg-red-50 text-critical',
-      sub: hasData ? `${pctOfTotal(stats.vencidos)}% do total` : 'Sem dados',
+      sub: 'Exigem atenção',
+      href: '/equipamentos?view=pending',
     },
   ];
 
@@ -225,14 +233,17 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* KPI cards — 2-col on mobile, 4-col on desktop */}
+      {/* KPI cards — 2-col on mobile, 4-col on desktop. Clicáveis: abrem a
+          listagem de equipamentos já filtrada pela visão correspondente. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {statusCards.map(card => {
+        {kpiCards.map(card => {
           const Icon = card.icon;
           return (
-            <div
-              key={card.key}
-              className={`kpi-card border-l-[3px] ${card.accent}`}
+            <Link
+              key={card.view}
+              to={card.href}
+              aria-label={`Ver equipamentos ${card.label.toLowerCase()}`}
+              className={`kpi-card border-l-[3px] ${card.accent} cursor-pointer no-underline hover:border-gray-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary active:scale-[0.99]`}
             >
               <div className="flex items-start justify-between gap-2">
                 <span className="label-uppercase">{card.label}</span>
@@ -242,7 +253,11 @@ export default function Dashboard() {
               </div>
               <span className={`kpi-card__value ${card.color}`}>{card.value}</span>
               <span className="kpi-card__sub">{card.sub}</span>
-            </div>
+              <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-primary">
+                Ver equipamentos
+                <ArrowRight className="w-3.5 h-3.5" />
+              </span>
+            </Link>
           );
         })}
       </div>

@@ -2,7 +2,7 @@
 
 > Documento de referência para IAs e desenvolvedores.
 > Leia antes de sugerir mudanças ou iniciar novas sessões.
-> Última atualização: 2026-09-16 · Prompt 09 (Fotos de inspeção — Blob, ObjectURL, Storage, storagePath-first) concluído.
+> Última atualização: 2026-09-16 · Prompt 10 (Dashboard clicável e filtros) concluído.
 
 ---
 
@@ -580,6 +580,32 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 ---
 
+### Prompt 10 — Dashboard clicável e filtros (KPIs confiáveis + drill-down)
+
+**Branches**: `fix/firecheck-fotos-inspecao` (base consolidada) → `feat/firecheck-dashboard-filtros`  
+**Status**: concluído  
+**Objetivo**: transformar os cards do Dashboard em KPIs operacionais clicáveis (CADASTRADOS, INSPECIONADOS, EM DIA, PENDENTES) que abrem `/equipamentos?view=...`, com fonte única de verdade garantindo contagem do card == contagem da lista.
+
+**Principais entregas**:
+- `src/utils/equipmentFilters.ts` (criado): selectors puros compartilhados por Dashboard e `Equipamentos.tsx` — `getEquipmentDashboardGroups()`, `getLatestInspectionForEquipment()`, `getDashboardGroupByView()`, `isEquipmentDashboardView()`, `EquipmentDashboardView` (`registered | inspected | up-to-date | pending`).
+- **Definições finais** (matriz real `EquipmentStatus`):
+  - Ativo = sem `pendingDelete` e sem `deletedAt`.
+  - CADASTRADOS = todos os ativos.
+  - INSPECIONADOS = ativos com ≥ 1 inspeção (distintos).
+  - EM DIA = ativo + tem inspeção + última condição `regular` + próxima inspeção não vencida (`status === 'regular'` sozinho não basta).
+  - PENDENTES = ativo + (nunca inspecionado OU última condição `pendente`/`vencido` OU próxima inspeção vencida). Disjunto de EM DIA por construção.
+- **Data civil**: comparações em `YYYY-MM-DD` (string) — `normalizeYmd()`/`getTodayYmd()` evitam o bug de fuso do `new Date('YYYY-MM-DD')`.
+- Dashboard: 4 cards clicáveis via `<Link>` (aria-label, hover, `focus-visible`, botão "Ver equipamentos →") apontando para `/equipamentos?view=...`.
+- `Equipamentos.tsx`: lê `view` (inválida é ignorada), título contextual ("Em dia", "Pendentes"…), contador `X de Y itens`, botão "Limpar filtro" (remove só `view`, preserva `q`), busca movida para query `?q=` aplicada SOBRE o conjunto do view, chips de categoria existentes mantidos, empty states por visão, breadcrumb de contagem refletindo `filtered.length`.
+- Nenhuma gravação de status, nenhuma migration (0018 continua reservada), nenhuma alteração em fotos/sync/RPC/RLS.
+
+**Nota (limitação documentada)**: a entidade `Inspection` não possui `createdAt` na app — o desempate de "última inspeção" com mesma data usa `id` (determinístico e constante entre Dashboard e lista).
+
+`npm run lint`: 0 erros, 2 warnings pré-existentes (mesmos do Prompt 09).  
+`npm run build`: tsc + vite build sem erros.
+
+---
+
 ## 10. Branches de Trabalho
 
 | Branch | Status |
@@ -596,6 +622,7 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 | `fix/firecheck-07-controle-conflitos-updated-at` | Concluída |
 | `fix/firecheck-08-resolucao-manual-conflitos` | Concluída |
 | `fix/firecheck-fotos-inspecao` | Ativa (fotos de inspeção — aguardando merge) |
+| `feat/firecheck-dashboard-filtros` | Ativa (dashboard clicável e filtros — aguardando merge) |
 
 ---
 
@@ -858,7 +885,7 @@ Máquina de estados: `unavailable` → `available` → `installed`. Detecta iOS 
 
 ## 19. Próximos Passos Recomendados
 
-1. **Prompt 10 — Testes finais e deploy**:
+1. **Prompt 11 — Testes finais e deploy**:
    - Testar multiusuário completo:
      - Admin cria equipamento.
      - Usuário comum inspeciona.
@@ -1025,7 +1052,8 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at + UI de conflito | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store, badge "Conflito" em equipamentos/planos, alerta em detalhes, painel Dashboard, indicador Sidebar | Concluído | Prompt 08 — resolução manual de conflito (forçar sync ou descartar alteração local) |
 | 2026-06-21 | `fix/firecheck-08-resolucao-manual-conflitos` | Resolução manual de conflitos + auditoria PWA | `resolveEquipmentConflictKeepLocal/UseRemote`, `resolveActionPlanConflictKeepLocal/UseRemote`, UI de resolução em DetalhesEquipamento e PlanoDeAcao, auditoria migrations (14 seguras), SW/PWA (navigateFallback + NetworkOnly), listeners (sem duplicatas), console.log sanitizados (12 em DEV guard), lint 0 erros, build ok | Concluído | --- |
 | 2026-06-22 | `fix/firecheck-08-resolucao-manual-conflitos` | Seleção de inspetor nas inspeções | `src/config/inspectors.ts` com 4 inspetores fixos; select obrigatório em `Inspecionar.tsx`; persistência em localStorage do último inspetor; `inspetor` agora envia nome selecionado em vez de `user?.nome`; nenhuma migration necessária (coluna já existia); lint 0 erros, build ok | Concluído | Revisão para main |
-| 2026-09-16 | `fix/firecheck-fotos-inspecao` | Fotos de inspeção — captura Blob + Storage | `compressInspectionImage` (pipeline Blob), Dexie v6 com `LocalInspectionPhoto` (migração `base64`→`legacyBase64`), transação atômica + `SaveInspectionResult`, `pushInspectionPhotos`/`pullInspectionPhotos`, preview via Object URL com revogação, storagePath-first no retry, migration `0017` | Concluído | Merge em `main` (Prompt 10 — testes finais e deploy) |
+| 2026-09-16 | `fix/firecheck-fotos-inspecao` | Fotos de inspeção — captura Blob + Storage | `compressInspectionImage` (pipeline Blob), Dexie v6 com `LocalInspectionPhoto` (migração `base64`→`legacyBase64`), transação atômica + `SaveInspectionResult`, `pushInspectionPhotos`/`pullInspectionPhotos`, preview via Object URL com revogação, storagePath-first no retry, migration `0017` | Concluído | Merge em `main` (Prompt 11 — testes finais e deploy) |
+| 2026-09-16 | `feat/firecheck-dashboard-filtros` | Dashboard clicável e filtros (KPIs confiáveis + drill-down) | `src/utils/equipmentFilters.ts` (fonte única de verdade: `getEquipmentDashboardGroups`, `getLatestInspectionForEquipment`, `getDashboardGroupByView`); 4 cards clicáveis (CADASTRADOS, INSPECIONADOS, EM DIA, PENDENTES) → `/equipamentos?view=...`; busca `?q=` sobre o conjunto do view; títulos contextuais, "Limpar filtro", empty states por visão; data civil `YYYY-MM-DD` (sem bug de fuso); sem migration/backend/fotos; lint 0 erros, build ok | Concluído | Merge em `main` (Prompt 11 — testes finais e deploy) |
 
 ---
 
