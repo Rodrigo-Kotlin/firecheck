@@ -771,9 +771,11 @@ export default function Relatorios() {
 
   const hasActiveFilters = !!search || !!dateFilter || statusFilter !== 'Todos';
 
-  const handleDeleteInspection = () => {
+  const handleDeleteInspection = async () => {
     if (!deleteTarget) return;
-    deleteInspection(deleteTarget);
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    await deleteInspection(target);
     showToast({ kind: 'success', title: 'Relatório excluído.' });
   };
 

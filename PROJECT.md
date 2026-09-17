@@ -292,7 +292,7 @@ As migrations ficam em `supabase/migrations/`. **Nunca editar migrations antigas
 | `0015_create_soft_delete_equipment_rpc.sql` | RPC de soft delete de equipamento | Aditiva |
 | `0016_harden_soft_delete_equipment_rpc.sql` | Reforço de segurança do RPC de soft delete | Corretiva |
 | `0017_fotos_inspecao_storage_policies.sql` | Fotos de inspeção: bucket `inspection-photos` + policies por pasta/owner + colunas `mime_type/size_bytes/created_by` | Aditiva (Prompt 09) |
-| `0018_shared_inspection_permissions_and_audit.sql` | Inspeções compartilhadas: colunas `updated_by`/`updated_by_name` + trigger de auditoria `inspecoes_audit`, autores (quem edita = `updated_by`, quem cria = `user_id` fixado), RLS SELECT/INSERT/UPDATE (admin e inspetores) e DELETE (admin apenas), storage SELECT compartilhado, RPC `recalculate_equipment_from_latest_inspection` | Aditiva (Prompt 11) |
+| `0018_shared_inspection_permissions_and_audit.sql` | Inspeções compartilhadas: colunas `updated_by`/`updated_by_name` + trigger de auditoria `inspecoes_audit` (imutáveis + `updated_at`/`updated_by`/`updated_by_name`), autores (quem edita = `updated_by`, quem cria = `user_id` fixado), RLS SELECT/INSERT/UPDATE (admin e inspetores) e DELETE (admin apenas), SELECT de `fotos_inspecao` e do Storage compartilhado via `can_access_inspection(inspection_id)`, remoção defensiva das policies amplas de Storage, RPC `recalculate_equipment_from_latest_inspection` (ordem data/created_at/id, `UNAUTH`/`PFORB`/`NOEQPT`/`BADTRIG`, `p_next` só pela vencedora) | Aditiva (Prompt 11/12) |
 
 > A dependência futura descrita na versão anterior deste arquivo (autorizar fotos
 > por permissão sobre a inspeção, e não por pasta/owner) foi implementada na
@@ -644,11 +644,12 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 **Migration `0018`** (idempotente):
 - Colunas `updated_by uuid`, `updated_by_name text` em `public.inspecoes` + índices.
-- `is_inspector_or_admin()`; `can_access_inspection(storage_path text)` (join `fotos_inspecao.storage_path = storage.objects.name`).
+- `is_inspector_or_admin()` (papel em `profiles.role`); `can_access_inspection(p_inspection_id text)` (inspeção existe + usuário autorizado). No Storage, a policy compartilhada casa `fotos_inspecao.storage_path = storage.objects.name` e então chama o helper pelo `inspection_id`.
 - Trigger `inspecoes_audit`: BEFORE INSERT força `user_id = auth.uid()` e `created_at`; BEFORE UPDATE grava `updated_at = now()`, `updated_by = auth.uid()`, `updated_by_name = coalesce(new, old)` e RAISE `IMMUT` exceção se `id/equipment_id/user_id/inspetor/created_at` mudarem.
 - RLS inspecoes: SELECT/INSERT (admin + inspetores), UPDATE (mesmo autores, sem ownership), DELETE (admin apenas). Novas RLS destruídas e recriadas (drop policy if exists) para segurança.
 - Storage `inspection-photos`: policy compartilhada `p_storage_select_shared` via `can_access_inspection`.
-- RPC `recalculate_equipment_from_latest_inspection(p_equipment_id, p_next_inspection_date, p_trigger_inspection_id)` — recalcula status/datas pela inspeção mais recente (`data DESC, updated_at DESC, id DESC`); aplica `p_next` só quando o trigger é a inspeção vencedora; sem inspeções → `applied:false` (não altera nada). Destrói a função antiga e recreia com `ARGUMENT'` protegido.
+- RPC `recalculate_equipment_from_latest_inspection(p_equipment_id, p_next_inspection_date, p_trigger_inspection_id)` — recalcula status/datas pela inspeção mais recente com ordem determinística **`data DESC, created_at DESC, id DESC`** (`updated_at` NÃO define cronologia operacional); valida autenticação (`UNAUTH`), `is_inspector_or_admin()` (`PFORB`), existência do equipamento (`NOEQPT`) e que o trigger existe e pertence ao equipamento (`BADTRIG`); aplica `p_next` só quando `p_next IS NOT NULL AND p_trigger IS NOT NULL AND p_trigger = vencedora`; equipamento soft-deleted → `applied:false` (não ressuscita status); sem inspeções → `applied:false`. `revoke ... from public` + `grant execute ... to authenticated`.
+- Storage: além da policy compartilhada, remove defensivamente as policies legadas amplas `p_storage_select/insert/update/delete` (0001/0003) — em banco com 0017 aplicada é no-op; mutações seguem owner/admin.
 
 **Frontend**:
 - `Inspection` ganhou campos de auditoria e de conflito (`types/index.ts`); `LocalInspection` estendida + **Dexie v7** (índices `syncAction, syncConflict, updatedAt`) com upgrade vazio preservando dados.
@@ -659,11 +660,11 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 - Páginas: `DetalheInspecao.tsx` (read-only com rastreabilidade, banner de conflito com KeepLocal/UseRemote e fotos sob demanda) e `EditarInspecao.tsx` (data civil com regex `^\d{4}-\d{2}-\d{2}$`, status 4 opções, observações, editor obrigatório com prefill localStorage) + rotas `/inspecoes/:id` e `/inspecoes/:id/editar` em `App.tsx`.
 - `DetalhesEquipamento.tsx`: badge "Editada", linha "Editada por", Eye → detalhe da inspeção e lápis → editar.
 - `Relatorios.tsx`: pill "Conflito" + botões de resolução no histórico; `Dashboard.tsx`/`Sidebar.tsx`: `conflictCounts.inspections`.
-- `store/index.ts`: `updateInspection` (`InspectionSaveResult {ok, mode:'local'|'cloud', conflict?, message?}`) com recalc local apenas se a inspeção editada for a mais recente; `resolveInspectionConflictKeepLocal/UseRemote`; guardas de permissão em `deleteInspection`/`addInspection`.
+- `store/index.ts`: `updateInspection` (`InspectionSaveResult {ok, mode:'local'|'cloud', conflict?, message?}`) com **pipeline único** — persiste Dexie/Zustand, dispara `await runSync()` e relê `db.inspecoes.get(id)` para decidir `cloud`/`conflict`/`local` (sem writer direto concorrente); `deleteInspection` é `async` e segue a ordem obrigatória (Dexie `pendingDelete`/`syncAction:'delete'` → Zustand → `await runSync()` → refresh de contadores); `resolveInspectionConflictKeepLocal/UseRemote`; guardas de permissão em `deleteInspection`/`addInspection`.
 
-**Regras de engenharia aplicadas**: datas civis nunca passam por `new Date('YYYY-MM-DD')`; CAS usa o `updated_at` remoto exato (microssegundos) sem reformatação; sem UPDATE direto do Supabase dentro de páginas (tudo via store/services); sucesso exige `.select().maybeSingle()`; conflitos não contam como erros de sync.
+**Regras de engenharia aplicadas**: datas civis nunca passam por `new Date('YYYY-MM-DD')`; CAS usa o `updated_at` remoto exato (microssegundos) sem reformatação; **todo UPDATE remoto de inspeção é CAS** (`.eq('updated_at', base).select('*').maybeSingle()`) — quando não há base (registro legado) o serviço faz `fetchInspectionRowById` e adota o `updated_at` remoto como base (nunca UPDATE cego); ordem de exclusão: persistir `pendingDelete`/`syncAction:'delete'` antes de sincronizar; sem UPDATE direto do Supabase dentro de páginas (tudo via store/services); sucesso exige `.select().maybeSingle()`; conflitos não contam como erros de sync.
 
-**Validação**: `npm run lint` 0 erros (2 warnings pré-existentes) e `npm run build` OK. Migration `0018` criada localmente — **aplicação remota pendente** (sem CLI autenticado). Simulação standalone de concorrência/CAS é o método de validação previsto para o Prompt 12.
+**Validação**: `npm run lint` 0 erros (2 warnings pré-existentes) e `npm run build` OK. Scripts de validação: `scripts/simulate-inspection-cas.mjs` (standalone, sem credenciais — 9 checagens `[PASS]`) e `scripts/validate-inspection-sharing.mjs` (integração RLS/CAS/RPC/fotos com clientes anon autenticados; requer `.env.test.local`). Migration `0018` criada e revisada localmente — **aplicação remota pendente** (aguarda confirmação explícita/CLI autenticado).
 
 ## 10. Branches de Trabalho
 

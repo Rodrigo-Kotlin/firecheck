@@ -109,8 +109,9 @@ export interface UpdateInspectionRemoteInput {
   observacoes?: string;
   /** Nome operacional de quem está editando (obrigatório na UI). */
   updatedByName?: string;
-  /** updated_at remoto conhecido na última sincronização. Quando ausente,
-   *  faz um update simples para estabelecer a base (registro legado). */
+  /** updated_at remoto conhecido na última sincronização. Quando ausente
+   *  (registro legado), a base é obtida por um fetch imediatamente antes do
+   *  UPDATE — NUNCA fazemos UPDATE sem CAS. */
   syncBaseUpdatedAt?: string | null;
 }
 
@@ -131,17 +132,51 @@ export type InspectionUpdateResult =
       current?: Inspection | null;
     };
 
-/** Update an inspection with optimistic concurrency control.
+/** Update an inspection with optimistic concurrency control (CAS).
  *
- *  If `syncBaseUpdatedAt` is provided, the UPDATE is conditioned on the remote
- *  `updated_at` still matching it (`WHERE id = ? AND updated_at = base`). A
- *  denied CAS is reported as `conflict` (remote changed) or `not_found` (remote
- *  deleted), with `current` populated from a fresh fetch when possible. */
+ *  O UPDATE é SEMPRE condicionado ao `updated_at` remoto
+ *  (`WHERE id = ? AND updated_at = base`). Nunca existe "blind update":
+ *  - base conhecida (`syncBaseUpdatedAt`) → CAS direto;
+ *  - base ausente (registro legado) → fetch do remoto, adota
+ *    `remote.updated_at` como base e então executa o CAS. Se o remoto mudar
+ *    entre o fetch e o UPDATE, o CAS retorna zero linhas → conflito.
+ *
+ *  CAS negado é reportado como `conflict` (remoto mudou) ou `not_found`
+ *  (remoto excluído), com `current` preenchido por um fetch. */
 export async function updateInspectionRemote(
   input: UpdateInspectionRemoteInput,
 ): Promise<InspectionUpdateResult> {
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+  }
+
+  // 1. Resolver a base do CAS — nunca UPDATE sem base.
+  let base =
+    typeof input.syncBaseUpdatedAt === 'string' && input.syncBaseUpdatedAt.length > 0
+      ? input.syncBaseUpdatedAt
+      : null;
+
+  if (!base) {
+    const remote = await fetchInspectionRowById(input.id);
+    if (remote.error) {
+      return { ok: false, code: 'network', message: remote.error };
+    }
+    if (!remote.found || !remote.row) {
+      return {
+        ok: false,
+        code: 'not_found',
+        message: 'Esta inspeção foi excluída no servidor.',
+        current: null,
+      };
+    }
+    base = remote.row.updated_at ?? null;
+    if (!base) {
+      return {
+        ok: false,
+        code: 'network',
+        message: 'Servidor não retornou a versão da inspeção — tente novamente.',
+      };
+    }
   }
 
   const payload: Record<string, unknown> = {
@@ -151,19 +186,14 @@ export async function updateInspectionRemote(
   };
   if (input.updatedByName) payload.updated_by_name = input.updatedByName;
 
-  let query = supabase
+  // 2. CAS obrigatório — base exata (microssegundos preservados, sem Date).
+  const { data, error } = await supabase
     .from('inspecoes')
     .update(payload)
     .eq('id', input.id)
-    .select('*');
-
-  const hasBase = typeof input.syncBaseUpdatedAt === 'string' && input.syncBaseUpdatedAt.length > 0;
-  if (hasBase) {
-    // Base exata (microssegundos preservados) — nunca reformatar via Date.
-    query = query.eq('updated_at', input.syncBaseUpdatedAt as string);
-  }
-
-  const { data, error } = await query.maybeSingle();
+    .eq('updated_at', base)
+    .select('*')
+    .maybeSingle();
 
   if (error) {
     if (error.code === '42501') {
@@ -180,13 +210,7 @@ export async function updateInspectionRemote(
     return { ok: true, row: data as DbInspecao };
   }
 
-  // Nenhuma linha afetada: o CAS falhou OU o registro não existe (ou permissão
-  // silenciosa). Consulta o remoto para distinguir conflito de exclusão.
-  if (!hasBase) {
-    // Update simples sem base não deveria "não afetar linha", salvo exclusão.
-    return { ok: false, code: 'not_found', message: 'Inspeção não encontrada no servidor (pode ter sido excluída).' };
-  }
-
+  // 3. Nenhuma linha: o CAS falhou. Distingue conflito de exclusão/existência.
   const remote = await fetchInspectionRowById(input.id);
   if (remote.error) {
     return { ok: false, code: 'network', message: remote.error };

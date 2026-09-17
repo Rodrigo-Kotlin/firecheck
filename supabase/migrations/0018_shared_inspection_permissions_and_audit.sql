@@ -17,8 +17,11 @@
 --    mantendo o bucket privado e sem ampliar mutações.
 -- 5. Nova RPC `recalculate_equipment_from_latest_inspection` substitui a
 --    aplicação cega de status: recria o status do equipamento a partir da
---    inspeção mais recente (ordem determinística data DESC, updated_at DESC,
---    id DESC) — nunca regride por edição de inspeção antiga.
+--    inspeção mais recente (ordem determinística data DESC, created_at DESC,
+--    id DESC) — nunca regride por edição de inspeção antiga. `updated_at`
+--    (auditoria/CAS/conflito) NÃO participa da cronologia operacional.
+--    Somente admin e inspetores podem executá-la. A próxima inspeção só muda
+--    quando o trigger é a inspeção vencedora do equipamento.
 --
 -- Idempotente: pode ser re-aplicado no SQL Editor do Supabase.
 -- =============================================================================
@@ -133,6 +136,9 @@ create trigger trg_inspecoes_audit
   before insert or update on public.inspecoes
   for each row execute function public.inspecoes_audit();
 
+-- SECURITY DEFINER: nenhum papel precisa de EXECUTE direto (só o trigger chama).
+revoke all on function public.inspecoes_audit() from public;
+
 -- ---------------------------------------------------------------------------
 -- 4. RLS DE `inspecoes`
 -- ---------------------------------------------------------------------------
@@ -175,10 +181,26 @@ create policy "p_fotos_select" on public.fotos_inspecao
 -- ---------------------------------------------------------------------------
 -- 6. STORAGE — SELECT compartilhado, bucket continua privado
 -- ---------------------------------------------------------------------------
--- A policy atual (0017) limita a pasta do dono; mantemos administrativo +
--- própria pasta para objetos legados sem registro e adicionamos acesso
--- via `fotos_inspecao.storage_path = storage.objects.name` quando o usuário
--- pode acessar a inspeção correspondente (join pelo registro, não pelo path).
+-- Auditoria das policies de `storage.objects` criadas na 0017:
+--   p_storage_select_owner  → SELECT: admin OU pasta do próprio uid
+--   p_storage_insert_owner  → INSERT: admin OU pasta do próprio uid
+--   p_storage_update_owner  → UPDATE: admin OU pasta do próprio uid
+--   p_storage_delete_owner  → DELETE: admin OU pasta do próprio uid
+-- Policies permissivas do PostgreSQL combinam por OR. A `p_storage_select_owner`
+-- NÃO é bypass para outros perfis: ela só libera a pasta do próprio uid (jamais
+-- a pasta de outro inspetor). Portanto é mantida como fallback de objetos
+-- legados sem registro em `fotos_inspecao`, e a nova policy compartilhada é
+-- adicionada por OR: SELECT = admin OR pasta-dono OR inspeção acessível.
+-- As mutações (INSERT/UPDATE/DELETE) permanecem owner/admin — não ampliadas.
+
+-- Remoção defensiva de policies legadas amplas (0001/0003). Em um banco com a
+-- 0017 aplicada estas já não existem; o drop é idempotente e garante que
+-- nenhuma SELECT de bucket inteiro sobreviva, e que INSERT/UPDATE/DELETE
+-- continuem restritos ao dono (`*_owner`, da 0017).
+drop policy if exists "p_storage_select" on storage.objects;
+drop policy if exists "p_storage_insert" on storage.objects;
+drop policy if exists "p_storage_update" on storage.objects;
+drop policy if exists "p_storage_delete" on storage.objects;
 
 drop policy if exists "p_storage_select_shared" on storage.objects;
 create policy "p_storage_select_shared" on storage.objects
@@ -202,13 +224,17 @@ on conflict (id) do update set public = false;
 -- ---------------------------------------------------------------------------
 -- Substitui a aplicação cega de `apply_equipment_inspection_status`:
 -- o status do equipamento é sempre derivado da inspeção mais recente válida
--- (ordem determinística: data DESC, updated_at DESC, id DESC), então a edição
--- de uma inspeção antiga NUNCA regride o status operacional.
+-- (ordem determinística: data DESC, created_at DESC, id DESC — `updated_at`
+-- NÃO define cronologia operacional), então a edição de uma inspeção antiga
+-- NUNCA regride o status operacional.
 --
--- `p_trigger_inspection_id`: inspeção que originou a chamada. Quando ela é a
--- mais recente e `p_next_inspection_date` é informado, a próxima inspeção é
--- atualizada (fluxo de criação de inspeção nova). Caso contrário o valor de
--- `data_proxima_inspecao` é preservado.
+-- `p_trigger_inspection_id`: inspeção que originou a chamada. A próxima
+-- inspeção só é atualizada quando TODAS as condições valem:
+--   p_next_inspection_date IS NOT NULL
+--   AND p_trigger_inspection_id IS NOT NULL
+--   AND p_trigger_inspection_id = inspeção vencedora
+--   AND essa inspeção pertence a p_equipment_id
+-- Caso contrário `data_proxima_inspecao` é preservada.
 
 create or replace function public.recalculate_equipment_from_latest_inspection(
   p_equipment_id          text,
@@ -232,12 +258,38 @@ begin
     raise exception 'Usuario nao autenticado.' using errcode = 'UNAUTH';
   end if;
 
-  -- 2. Inspeção mais recente e válida (ordem determinística)
+  -- 2. Autorização: somente admin/inspetor executam alteração operacional.
+  if not public.is_inspector_or_admin() then
+    raise exception 'Acesso negado: role nao autorizada.' using errcode = 'PFORB';
+  end if;
+
+  -- 3. Equipamento deve existir. Soft-deleted (`deleted_at` não nulo) ainda
+  --    existe e é tratado adiante com `applied:false` (sem ressuscitar status).
+  if not exists (
+    select 1 from public.equipamentos e
+    where e.id = p_equipment_id
+  ) then
+    raise exception 'Equipamento inexistente.' using errcode = 'NOEQPT';
+  end if;
+
+  -- 4. Trigger de referência (se informado) deve existir e pertencer ao
+  --    equipamento — rejeita trigger de outro equipamento.
+  if p_trigger_inspection_id is not null then
+    if not exists (
+      select 1 from public.inspecoes i
+      where i.id = p_trigger_inspection_id
+        and i.equipment_id = p_equipment_id
+    ) then
+      raise exception 'Inspecao de referencia invalida para o equipamento.' using errcode = 'BADTRIG';
+    end if;
+  end if;
+
+  -- 5. Inspeção mais recente e válida (ordem determinística — sem updated_at)
   select i.id, i.data, i.status
     into v_inspection_id, v_ultima, v_status
   from public.inspecoes i
   where i.equipment_id = p_equipment_id
-  order by i.data desc, i.updated_at desc, i.id desc
+  order by i.data desc, i.created_at desc, i.id desc
   limit 1;
 
   if not found then
@@ -253,13 +305,16 @@ begin
     );
   end if;
 
-  -- 3. Aplicar somente campos operacionais derivados da inspeção mais recente
+  -- 6. Aplicar somente campos operacionais derivados da inspeção mais recente.
+  --    data_proxima_inspecao muda APENAS quando o trigger é a vencedora E
+  --    pertence ao equipamento E p_next foi informado.
   update public.equipamentos e
      set status               = v_status,
          data_ultima_inspecao = v_ultima,
          data_proxima_inspecao = case
            when p_next_inspection_date is not null
-            and (p_trigger_inspection_id is null or p_trigger_inspection_id = v_inspection_id)
+            and p_trigger_inspection_id is not null
+            and p_trigger_inspection_id = v_inspection_id
            then p_next_inspection_date
            else e.data_proxima_inspecao
          end
@@ -268,7 +323,7 @@ begin
    returning e.updated_at, e.status, e.data_ultima_inspecao, e.data_proxima_inspecao
    into v_updated_at, v_status, v_ultima, v_proxima;
 
-  -- 4. Equipamento inexistente/excluído
+  -- 7. Equipamento inexistente/excluído
   if not found then
     return jsonb_build_object(
       'equipment_id', p_equipment_id,
@@ -281,7 +336,7 @@ begin
     );
   end if;
 
-  -- 5. Resultado
+  -- 8. Resultado
   return jsonb_build_object(
     'equipment_id', p_equipment_id,
     'applied', true,

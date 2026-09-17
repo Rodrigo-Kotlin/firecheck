@@ -73,19 +73,38 @@ export function isYmdBefore(a: string, b: string): boolean {
 // Classificação por inspeção
 // ---------------------------------------------------------------------------
 
-/** Compara duas inspeções: data (desc) e desempate determinístico por `id`.
- *  O modelo de dados não possui `createdAt` na entidade `Inspection`, então o
- *  desempate usa o `id` — determinístico e constante entre Dashboard e lista. */
+/** Converte um timestamp ISO em epoch ms; `null` quando ausente/ilegível.
+ *  `created_at`/`createdAt` são timestamps completos (com fuso) — a conversão
+ *  via `Date.parse` é segura (o bug de fuso só afeta datas civis
+ *  `YYYY-MM-DD`, que não são usadas aqui). */
+function parseTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const n = Date.parse(value);
+  return Number.isNaN(n) ? null : n;
+}
+
+/** Compara duas inspeções para eleger a operacionalmente mais recente:
+ *  1. `data` (desc); 2. `createdAt` (desc, quando disponível em ambas);
+ *  3. `id` (desc) como desempate determinístico final.
+ *  `updated_at` NUNCA participa da cronologia operacional — ele representa
+ *  apenas auditoria/CAS/conflito. Uma edição administrativa de uma inspeção
+ *  antiga não pode movê-la para o topo da ordenação. */
 function compareInspectionsLatest(a: Inspection, b: Inspection): number {
   const da = normalizeYmd(a.data) ?? a.data;
   const db = normalizeYmd(b.data) ?? b.data;
   if (da !== db) return da > db ? 1 : -1;
-  // Mesma data: desempate estável (maior id vence — arbitrário, porém fixo).
+  const ta = parseTimestamp(a.createdAt);
+  const tb = parseTimestamp(b.createdAt);
+  if (ta !== null && tb !== null && ta !== tb) return ta > tb ? 1 : -1;
+  // Mesma data e mesmo created_at (ou created_at ausente em algum): desempate
+  // determinístico final por id (maior id vence).
   if (a.id !== b.id) return a.id < b.id ? -1 : 1;
   return 0;
 }
 
 /** Última (mais recente) inspeção de um equipamento — `null` se não houver.
+ *  Ordenação: `data` DESC → `created_at` DESC (quando disponível) → `id` DESC.
+ *  `updated_at` (auditoria/CAS) não define cronologia operacional.
  *  As inspeções já chegam da store sem tombstones (`pendingDelete` filtrado
  *  em `carregarInspecoes`/`runSync`). */
 export function getLatestInspectionForEquipment(

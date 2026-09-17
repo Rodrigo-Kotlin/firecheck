@@ -495,11 +495,29 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       toSync = { ...insp, userId };
     }
 
-    const isCreate = insp.syncAction === 'create' || !insp.syncBaseUpdatedAt;
+    const hasBase = typeof insp.syncBaseUpdatedAt === 'string' && insp.syncBaseUpdatedAt.length > 0;
     const rpcEquipmentId = insp.equipmentId;
     const localEq = await db.equipamentos.get(rpcEquipmentId);
 
-    if (isCreate) {
+    // CREATE apenas para inspeções explicitamente novas (syncAction='create').
+    // Registro legado SEM base não pode virar upsert cego: consultamos o remoto
+    // para decidir entre CAS update (existe) e create (nunca enviado).
+    let treatAsCreate = insp.syncAction === 'create';
+    if (!treatAsCreate && !hasBase) {
+      const probe = await fetchInspectionById(insp.id);
+      if (probe.ok) {
+        treatAsCreate = false;
+      } else if (probe.code === 'not_found') {
+        treatAsCreate = true;
+      } else {
+        // Falha de rede na sondagem: não arrisca um write — tenta na próxima.
+        console.error('[sync] Sondagem remota falhou para inspeção %s — %s', insp.id, probe.message);
+        errors++;
+        continue;
+      }
+    }
+
+    if (treatAsCreate) {
       // CREATE — upsert idempotente com confirmação de linha.
       const created = await upsertInspection(toSync);
       if (!created.ok || !created.row) {

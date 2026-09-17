@@ -187,7 +187,7 @@ interface AppState {
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
   deleteActionPlan: (id: string) => void;
   deleteEquipment: (id: string) => void;
-  deleteInspection: (id: string) => void;
+  deleteInspection: (id: string) => Promise<void>;
   updateConfig: (updates: Partial<AppConfig>) => void;
   loadUsers: () => Promise<void>;
   setUserRole: (id: string, role: 'admin' | 'inspector') => Promise<void>;
@@ -793,96 +793,24 @@ export const useAppStore = create<AppState>()(
             }));
           }
 
-          // Push imediato quando online (CAS), como em updateEquipment.
-          if (isSupabaseConfigured && supabase && navigator.onLine) {
-            const result = await updateInspectionRemote({
-              id,
-              data: safeUpdates.data ?? current.data,
-              status: safeUpdates.status as EquipmentStatus,
-              observacoes: safeUpdates.observacoes || undefined,
-              updatedByName: updates.updatedByName,
-              syncBaseUpdatedAt: current.syncBaseUpdatedAt,
-            });
+          // Pipeline ÚNICO de envio remoto: a alteração já está no Dexie
+          // (sincronizado=false, syncAction='update') e no Zustand. O push é
+          // SEMPRE feito por runSync() → pushInspections() — não existe writer
+          // direto concorrente competindo pela mesma linha de inspeção.
+          await runSync();
 
-            if (result.ok) {
-              await db.inspecoes.update(id, {
-                sincronizado: true,
-                syncAction: undefined,
-                syncError: undefined,
-                syncConflict: false,
-                syncConflictReason: undefined,
-                remoteUpdatedAtAtConflict: null,
-                syncBaseUpdatedAt: result.row.updated_at,
-                updatedAt: result.row.updated_at,
-                updatedBy: result.row.updated_by ?? undefined,
-                updatedByName: result.row.updated_by_name ?? updates.updatedByName,
-              });
-
-              // Recalcula o status remoto do equipamento.
-              const rpc = await recalculateEquipmentFromLatestInspectionRemote(
-                current.equipmentId,
-                undefined,
-                id,
-              );
-              if (rpc.ok && rpc.data) {
-                const rpcData = rpc.data as Record<string, unknown>;
-                await db.equipamentos.update(current.equipmentId, {
-                  sincronizado: true,
-                  statusUpdatePending: undefined,
-                  status: typeof rpcData.status === 'string' ? (rpcData.status as EquipmentStatus) : undefined,
-                  dataUltimaInspecao: typeof rpcData.data_ultima_inspecao === 'string' ? rpcData.data_ultima_inspecao : undefined,
-                  updatedAt: typeof rpcData.updated_at === 'string' ? rpcData.updated_at : now,
-                } as Partial<LocalEquipment>);
-                set((state) => ({
-                  equipments: state.equipments.map((e) =>
-                    e.id === current.equipmentId
-                      ? {
-                          ...e,
-                          status: typeof rpcData.status === 'string' ? (rpcData.status as EquipmentStatus) : e.status,
-                          dataUltimaInspecao: typeof rpcData.data_ultima_inspecao === 'string' ? rpcData.data_ultima_inspecao : e.dataUltimaInspecao,
-                        }
-                      : e,
-                  ),
-                }));
-              } else {
-                // Equipamento fica pendente de recálculo para a próxima rodada.
-                await db.equipamentos.update(current.equipmentId, {
-                  sincronizado: false,
-                  statusUpdatePending: true,
-                });
-              }
-
-              await get().refreshPendingCount();
-              await get().refreshConflictCount();
-              return { ok: true, mode: 'cloud' };
-            }
-
-            if (result.code === 'conflict' || result.code === 'not_found') {
-              const reason = result.code === 'not_found'
-                ? 'Esta inspeção foi excluída no servidor. Revise as versões antes de continuar.'
-                : 'Esta inspeção foi alterada em outro dispositivo depois da última sincronização. Revise as versões antes de continuar.';
-              await db.inspecoes.update(id, {
-                sincronizado: false,
-                syncAction: 'update',
-                syncConflict: true,
-                syncConflictReason: reason,
-                remoteUpdatedAtAtConflict: result.current?.updatedAt ?? null,
-                syncError: 'conflict',
-              });
-              await get().refreshPendingCount();
-              await get().refreshConflictCount();
-              return { ok: true, mode: 'local', conflict: true, message: reason };
-            }
-
+          const fresh = await db.inspecoes.get(id);
+          if (fresh?.syncConflict) {
             return {
               ok: true,
               mode: 'local',
-              message: 'Alteração salva neste dispositivo. Será sincronizada quando houver conexão.',
+              conflict: true,
+              message: fresh.syncConflictReason
+                ?? 'Esta inspeção foi alterada em outro dispositivo depois da última sincronização.',
             };
           }
-
-          if (isSupabaseConfigured) {
-            void runSync().then(() => get().refreshPendingCount());
+          if (fresh?.sincronizado) {
+            return { ok: true, mode: 'cloud' };
           }
           return {
             ok: true,
@@ -1047,17 +975,30 @@ export const useAppStore = create<AppState>()(
           void runSync().then(() => get().refreshPendingCount());
         },
 
-        deleteInspection: (id) => {
+        deleteInspection: async (id) => {
           // Guarda de permissão: somente ADMIN pode excluir inspeções.
           if (!canDeleteInspection(get().user, { userId: get().inspections.find((i) => i.id === id)?.userId })) {
             console.warn('[store.deleteInspection] Sem permissão para excluir inspeção — admin apenas.');
             return;
           }
+
+          // Ordem obrigatória (sem race): primeiro persiste a intenção de
+          // exclusão no Dexie, SOMENTE DEPOIS reflete na UI e dispara o sync.
+          // O push nunca pode iniciar antes de pendingDelete/syncAction
+          // estarem gravados.
+          await db.inspecoes.update(id, {
+            pendingDelete: true,
+            sincronizado: false,
+            syncAction: 'delete',
+          });
+
           set((state) => ({
             inspections: state.inspections.filter((i) => i.id !== id),
           }));
-          void db.inspecoes.update(id, { pendingDelete: true, sincronizado: false, syncAction: 'delete' });
-          void runSync().then(() => get().refreshPendingCount());
+
+          await runSync();
+          await get().refreshPendingCount();
+          await get().refreshConflictCount();
         },
 
         addInspection: async (data) => {
