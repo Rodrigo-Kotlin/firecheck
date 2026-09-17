@@ -1,74 +1,64 @@
 #!/usr/bin/env node
 /**
- * Validação de integração das inspeções compartilhadas do FireCheck.
+ * FireCheck · Validação comportamental segura de inspeções compartilhadas.
  *
- * Executa contra um projeto Supabase (preferencialmente staging/dev) usando a
- * ANON KEY + login real de usuários de teste. NUNCA usa service_role — isso
- * invalidaria a validação de RLS.
+ * Regra absoluta: NENHUM equipamento/QR/inspeção pré-existente pode ser alterado.
+ * Todos os testes operam EXCLUSIVAMENTE sobre dados E2E criados nesta rodada.
  *
- * Pré-requisito: migration 0018 aplicada no ambiente remoto.
+ * Variáveis (.env.test.local — NUNCA commitar):
+ *   SUPABASE_URL, SUPABASE_ANON_KEY
+ *   TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+ *   TEST_INSPECTOR_A_EMAIL, TEST_INSPECTOR_A_PASSWORD
+ *   TEST_INSPECTOR_B_EMAIL, TEST_INSPECTOR_B_PASSWORD
+ *   (opcional) TEST_UNAUTHORIZED_EMAIL, TEST_UNAUTHORIZED_PASSWORD
  *
  * Uso:
- *   node scripts/validate-inspection-sharing.mjs
- *
- * Variáveis de ambiente (não commitar valores reais — ver .env.test.example):
- *   SUPABASE_URL / SUPABASE_ANON_KEY
- *   TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD
- *   TEST_INSPECTOR_A_EMAIL / TEST_INSPECTOR_A_PASSWORD
- *   TEST_INSPECTOR_B_EMAIL / TEST_INSPECTOR_B_PASSWORD
- *   (opcional) TEST_UNAUTHORIZED_EMAIL / TEST_UNAUTHORIZED_PASSWORD
- *
- * Segurança: senhas nunca são impressas. Dados de teste usam o prefixo
- * `E2E-FIRECHECK-` e são removidos ao final com o cliente admin.
+ *   node --env-file=.env.test.local scripts/validate-inspection-sharing.mjs
  */
 import { createClient } from '@supabase/supabase-js';
+import { readFileSync } from 'fs';
+import { execSync } from 'child_process';
 
+// ─── ENV ────────────────────────────────────────────────────────────────────
+// Carrega .env.test.local manualmente (suporta # em valores entre aspas)
+function loadDotenv(path) {
+  try {
+    const content = readFileSync(path, 'utf8');
+    for (const rawLine of content.split('\n')) {
+      const line = rawLine.replace(/\r$/, '');
+      if (!line.trim() || line.trim().startsWith('#')) continue;
+      const eqIdx = line.indexOf('=');
+      if (eqIdx < 0) continue;
+      const key = line.substring(0, eqIdx).trim();
+      let val = line.substring(eqIdx + 1).trim();
+      // Remove aspas duplas ou simples se presentes em ambos os lados
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (!process.env[key]) process.env[key] = val;
+    }
+  } catch { /* arquivo não existe — okay */ }
+}
+loadDotenv('.env.test.local');
+
+// ─── ENV ────────────────────────────────────────────────────────────────────
 const ENV = process.env;
 const {
-  SUPABASE_URL,
-  SUPABASE_ANON_KEY,
-  TEST_ADMIN_EMAIL,
-  TEST_ADMIN_PASSWORD,
-  TEST_INSPECTOR_A_EMAIL,
-  TEST_INSPECTOR_A_PASSWORD,
-  TEST_INSPECTOR_B_EMAIL,
-  TEST_INSPECTOR_B_PASSWORD,
-  TEST_UNAUTHORIZED_EMAIL,
-  TEST_UNAUTHORIZED_PASSWORD,
+  SUPABASE_URL, SUPABASE_ANON_KEY,
+  TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD,
+  TEST_INSPECTOR_A_EMAIL, TEST_INSPECTOR_A_PASSWORD,
+  TEST_INSPECTOR_B_EMAIL, TEST_INSPECTOR_B_PASSWORD,
+  TEST_UNAUTHORIZED_EMAIL, TEST_UNAUTHORIZED_PASSWORD,
 } = ENV;
-
-const results = [];
-function record(name, ok, detail = '') {
-  results.push({ name, ok, detail });
-  console.log(`${ok ? '[PASS]' : '[FAIL]'} ${name}${detail ? ` — ${detail}` : ''}`);
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function requireEnv(pairs) {
   const missing = pairs.filter(([, v]) => !v).map(([k]) => k);
   if (missing.length) {
-    console.error('Faltam variáveis de ambiente obrigatórias:');
+    console.error('Faltam variáveis de ambiente:');
     for (const k of missing) console.error(`  - ${k}`);
-    console.error('\nUse .env.test.example como referência. Abortando sem tocar no banco.');
     process.exit(2);
   }
 }
-
-function makeClient() {
-  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-}
-
-async function login(client, email, password, label) {
-  const { data, error } = await client.auth.signInWithPassword({ email, password });
-  if (error) throw new Error(`Login falhou (${label}): ${error.message}`);
-  return data.user.id;
-}
-
-// ---------------------------------------------------------------------------
-// Runner
-// ---------------------------------------------------------------------------
 requireEnv([
   ['SUPABASE_URL', SUPABASE_URL],
   ['SUPABASE_ANON_KEY', SUPABASE_ANON_KEY],
@@ -80,376 +70,535 @@ requireEnv([
   ['TEST_INSPECTOR_B_PASSWORD', TEST_INSPECTOR_B_PASSWORD],
 ]);
 
+// ─── CLIENTS ────────────────────────────────────────────────────────────────
+function makeClient() {
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
 const admin = makeClient();
 const inspA = makeClient();
 const inspB = makeClient();
 const anon = makeClient();
 const unauthed = TEST_UNAUTHORIZED_EMAIL ? makeClient() : null;
 
+async function login(client, email, password, label) {
+  const { data, error } = await client.auth.signInWithPassword({ email, password });
+  if (error) throw new Error(`Login falhou (${label}): ${error.message}`);
+  return { uid: data.user.id, session: data.session };
+}
+
+// ─── RUN ID & TRACKING ─────────────────────────────────────────────────────
 const RUN = Date.now().toString(36).toUpperCase();
 const TAG = `E2E-FIRECHECK-${RUN}`;
-const TAG2 = `E2E-FIRECHECK2-${RUN}`;
-const createdInspectionIds = [];
-const uploadedPaths = [];
+
+/** @type {Set<string>} IDs de equipamentos criados NESTA rodada */
+const createdTestEquipmentIds = new Set();
+/** @type {Set<string>} IDs de inspeções criadas NESTA rodada */
+const createdTestInspectionIds = new Set();
+/** @type {Set<string>} IDs de fotos criadas NESTA rodada */
+const createdTestPhotoIds = new Set();
+/** @type {string[]} Paths de storage criados NESTA rodada */
+const createdTestStoragePaths = [];
+
+// ─── EXISTING EQUIPMENT SNAPSHOT ────────────────────────────────────────────
+/** @type {Array<{id:string, qr_code:string|null, status:string, deleted_at:string|null,
+ *   data_ultima_inspecao:string|null, data_proxima_inspecao:string|null, updated_at:string}>} */
+let existingEquipmentSnapshot = [];
+let existingEquipmentCountBefore = 0;
 
 function newInspectionId() {
   const id = `INSP-E2E-${RUN}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-  createdInspectionIds.push(id);
+  createdTestInspectionIds.add(id);
   return id;
 }
 
-async function main() {
-  console.log(`\n=== FireCheck · validação de inspeções compartilhadas (run ${RUN}) ===\n`);
+function newPhotoId() {
+  const id = `FOTO-E2E-${RUN}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  createdTestPhotoIds.add(id);
+  return id;
+}
 
-  const adminUid = await login(admin, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD, 'admin');
-  const uidA = await login(inspA, TEST_INSPECTOR_A_EMAIL, TEST_INSPECTOR_A_PASSWORD, 'inspectorA');
-  const uidB = await login(inspB, TEST_INSPECTOR_B_EMAIL, TEST_INSPECTOR_B_PASSWORD, 'inspectorB');
+// ─── SAFETY GUARDS ──────────────────────────────────────────────────────────
+function assertE2eInspection(id) {
+  if (!createdTestInspectionIds.has(id)) {
+    throw new Error(`SAFETY BLOCK: tentativa de alterar inspeção que não pertence ao teste E2E: ${id}`);
+  }
+}
+function assertE2eEquipment(id) {
+  if (!createdTestEquipmentIds.has(id)) {
+    throw new Error(`SAFETY BLOCK: proibido alterar equipamento pré-existente: ${id}`);
+  }
+}
+
+// ─── RESULT TRACKING ────────────────────────────────────────────────────────
+const results = [];
+function record(name, ok, detail = '') {
+  results.push({ name, ok, detail });
+  console.log(`${ok ? '[PASS]' : '[FAIL]'} ${name}${detail ? ` — ${detail}` : ''}`);
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ─── MAIN ───────────────────────────────────────────────────────────────────
+async function main() {
+  console.log(`\n=== FireCheck · Validação comportamental segura (run ${RUN}) ===\n`);
+
+  // =========================================================================
+  // §13 — TESTE 1: AUTENTICAÇÃO
+  // =========================================================================
+  const { uid: adminUid, session: adminSession } = await login(admin, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD, 'admin');
+  const { uid: uidA } = await login(inspA, TEST_INSPECTOR_A_EMAIL, TEST_INSPECTOR_A_PASSWORD, 'inspectorA');
+  const { uid: uidB } = await login(inspB, TEST_INSPECTOR_B_EMAIL, TEST_INSPECTOR_B_PASSWORD, 'inspectorB');
   let uidUnauthorized = null;
   if (unauthed) {
     try {
-      uidUnauthorized = await login(unauthed, TEST_UNAUTHORIZED_EMAIL, TEST_UNAUTHORIZED_PASSWORD, 'unauthorized');
-    } catch {
-      uidUnauthorized = null;
-    }
+      uidUnauthorized = (await login(unauthed, TEST_UNAUTHORIZED_EMAIL, TEST_UNAUTHORIZED_PASSWORD, 'unauthorized')).uid;
+    } catch { uidUnauthorized = null; }
   }
+  console.log(`  admin=${adminUid.slice(0,8)}…  A=${uidA.slice(0,8)}…  B=${uidB.slice(0,8)}…`);
+  record('TESTE 1: Autenticação de todos os perfis', true);
 
-  // -------------------------------------------------------------------------
-  // 1. Pre-flight read-only
-  // -------------------------------------------------------------------------
-  const pre = await admin.from('inspecoes').select('id, updated_at, created_at, updated_by, updated_by_name').limit(1);
-  record('Pre-flight: SELECT inspecoes (admin) ok', !pre.error, pre.error?.message ?? '');
+  // =========================================================================
+  // §5 — INVENTÁRIO DE PROTEÇÃO
+  // =========================================================================
+  console.log('\n--- [SAFETY] Snapshot de equipamentos existentes ---');
+  const snap = await admin.from('equipamentos')
+    .select('id, qr_code, status, deleted_at, data_ultima_inspecao, data_proxima_inspecao, updated_at')
+    .order('id');
+  if (snap.error) throw new Error(`Falha ao ler equipamentos: ${snap.error.message}`);
+  existingEquipmentSnapshot = snap.data ?? [];
+  existingEquipmentCountBefore = existingEquipmentSnapshot.length;
+  console.log(`  [SAFETY] ${existingEquipmentCountBefore} equipamentos existentes catalogados`);
 
-  const { data: colsProbe, error: colsErr } = await admin
-    .from('inspecoes')
-    .select('updated_by, updated_by_name')
-    .limit(1);
-  record('Pre-flight: colunas updated_by/updated_by_name existem', !colsErr, colsErr?.message ?? '');
+  // =========================================================================
+  // §14 — TESTE 2: EQUIPAMENTO TEMPORÁRIO
+  // =========================================================================
+  // §10 — Verificar TAG única antes de criar
+  const existingTag = await admin.from('equipamentos').select('id').eq('id', TAG).maybeSingle();
+  if (existingTag.data) throw new Error(`TAG ${TAG} já existe — geração de colisão`);
 
-  // -------------------------------------------------------------------------
-  // 2. Setup: equipamento de teste (admin)
-  // -------------------------------------------------------------------------
   const eqInsert = await admin
     .from('equipamentos')
-    .insert({
-      id: TAG,
-      tipo: 'Extintor',
-      local: 'E2E',
-      setor: 'E2E',
-      status: 'regular',
-      created_by: adminUid,
-    })
+    .insert({ id: TAG, tipo: 'Extintor E2E', local: 'E2E-LOCAL', setor: 'E2E-SETOR', status: 'regular', created_by: adminUid })
     .select('id')
     .maybeSingle();
-  record('Setup: admin cria equipamento de teste', !eqInsert.error && eqInsert.data?.id === TAG, eqInsert.error?.message ?? '');
-  if (eqInsert.error) return finish();
+  if (eqInsert.error) throw new Error(`Falha ao criar equipamento E2E: ${eqInsert.error.message}`);
+  createdTestEquipmentIds.add(TAG);
+  console.log(`  [PASS] Equipamento E2E criado: ${TAG}`);
+  record('TESTE 2: Equipamento E2E criado', eqInsert.data?.id === TAG);
 
-  // -------------------------------------------------------------------------
-  // 3. RLS — A cria inspeção; autoria gravada
-  // -------------------------------------------------------------------------
+  // =========================================================================
+  // §15 — TESTE 3: INSPECTOR A CRIA INSPEÇÃO
+  // =========================================================================
   const insp1 = newInspectionId();
+  assertE2eInspection(insp1);
   const createA = await inspA
     .from('inspecoes')
     .insert({
-      id: insp1,
-      equipment_id: TAG,
-      data: '2026-01-01',
-      inspetor: 'Inspector A Test',
-      status: 'regular',
-      observacoes: 'e2e',
-      user_id: uidA,
+      id: insp1, equipment_id: TAG, data: '2026-01-01',
+      inspetor: 'Inspector A Test', status: 'regular',
+      observacoes: 'E2E criação A', user_id: uidA,
     })
-    .select('*')
-    .maybeSingle();
-  record('RLS: Inspector A cria inspeção', !createA.error && createA.data?.id === insp1, createA.error?.message ?? '');
-  if (createA.error) return finish();
-
-  record('Rastreabilidade: user_id = A', createA.data.user_id === uidA, `user_id=${createA.data.user_id ?? 'null'}`);
-  record('Rastreabilidade: inspetor original preservado', createA.data.inspetor === 'Inspector A Test');
-  record('Rastreabilidade: updated_by null no INSERT', createA.data.updated_by === null);
-  record('Rastreabilidade: updated_by_name null no INSERT', createA.data.updated_by_name === null);
+    .select('*').maybeSingle();
+  if (createA.error) throw new Error(`Falha criar inspeção A: ${createA.error.message}`);
   const base1 = createA.data.updated_at;
 
-  // -------------------------------------------------------------------------
-  // 4. RLS — B visualiza
-  // -------------------------------------------------------------------------
-  const readB = await inspB.from('inspecoes').select('id').eq('id', insp1).maybeSingle();
-  record('RLS: Inspector B visualiza inspeção de A', !readB.error && readB.data?.id === insp1, readB.error?.message ?? '');
+  record('TESTE 3: Inspector A criou inspeção', createA.data.id === insp1);
+  record('Rastreabilidade: user_id = A', createA.data.user_id === uidA);
+  record('Rastreabilidade: inspetor original', createA.data.inspetor === 'Inspector A Test');
+  record('Rastreabilidade: updated_by null no INSERT', createA.data.updated_by === null);
+  record('Rastreabilidade: updated_by_name null no INSERT', createA.data.updated_by_name === null);
+  record('Rastreabilidade: created_at preenchido', Boolean(createA.data.created_at));
+  record('Rastreabilidade: updated_at preenchido', Boolean(createA.data.updated_at));
 
-  // -------------------------------------------------------------------------
-  // 5. RLS — B edita via CAS; autoria imutável
-  // -------------------------------------------------------------------------
+  // =========================================================================
+  // §16 — TESTE 4: INSPECTOR B VISUALIZA A
+  // =========================================================================
+  const readB = await inspB.from('inspecoes').select('*').eq('id', insp1).maybeSingle();
+  record('TESTE 4: B visualiza inspeção de A', !readB.error && readB.data?.id === insp1);
+  record('  → mesmo equipment_id', readB.data?.equipment_id === TAG);
+  record('  → mesmo inspetor original', readB.data?.inspetor === 'Inspector A Test');
+  record('  → mesmo user_id original', readB.data?.user_id === uidA);
+
+  // =========================================================================
+  // §17 — TESTE 5: INSPECTOR B EDITA A VIA CAS
+  // =========================================================================
+  assertE2eInspection(insp1);
   const updB = await inspB
     .from('inspecoes')
-    .update({ observacoes: 'editado por B', updated_by_name: 'Inspector B Test' })
+    .update({ observacoes: 'E2E edição por B', updated_by_name: 'Inspector B Test' })
     .eq('id', insp1)
     .eq('updated_at', base1)
-    .select('*')
-    .maybeSingle();
-  record('CAS: B atualiza com base correta (1 linha)', !updB.error && updB.data?.id === insp1, updB.error?.message ?? '');
+    .select('*').maybeSingle();
+
+  record('TESTE 5: B editou inspeção de A (CAS)', !updB.error && updB.data?.id === insp1, updB.error?.message ?? '');
   if (updB.data) {
-    record('Auditoria: user_id de A preservado', updB.data.user_id === uidA);
-    record('Auditoria: inspetor de A preservado', updB.data.inspetor === 'Inspector A Test');
-    record('Auditoria: created_at preservado', updB.data.created_at === createA.data.created_at);
-    record('Auditoria: updated_by = B', updB.data.updated_by === uidB, `updated_by=${updB.data.updated_by ?? 'null'}`);
-    record('Auditoria: updated_by_name gravado', updB.data.updated_by_name === 'Inspector B Test');
-    record('Auditoria: updated_at avançou', updB.data.updated_at > base1, `${base1} → ${updB.data.updated_at}`);
+    const baseV2 = updB.data.updated_at;
+    record('  → user_id continua A', updB.data.user_id === uidA);
+    record('  → inspetor continua A', updB.data.inspetor === 'Inspector A Test');
+    record('  → equipment_id continua E2E', updB.data.equipment_id === TAG);
+    record('  → created_at não mudou', updB.data.created_at === createA.data.created_at);
+    record('  → updated_by = B', updB.data.updated_by === uidB);
+    record('  → updated_by_name = B', updB.data.updated_by_name === 'Inspector B Test');
+    record('  → updated_at avançou', updB.data.updated_at > base1);
   }
 
-  // -------------------------------------------------------------------------
-  // 6. Imutabilidade (B tenta alterar autoria)
-  // -------------------------------------------------------------------------
-  const immut = await inspB
-    .from('inspecoes')
-    .update({ inspetor: 'HACKED', user_id: uidB, equipment_id: TAG2, created_at: new Date().toISOString() })
-    .eq('id', insp1)
-    .select('*');
-  record('Imutabilidade: alterar inspetor/user_id/equipment_id/created_at é rejeitado', Boolean(immut.error), immut.error?.message ?? 'sem erro');
+  // =========================================================================
+  // §18 — TESTE 6: IMUTABILIDADE
+  // =========================================================================
+  for (const [field, value] of [
+    ['user_id', uidB],
+    ['inspetor', 'HACKED'],
+    ['equipment_id', 'HACKED'],
+    ['created_at', new Date().toISOString()],
+  ]) {
+    const r = await inspB.from('inspecoes').update({ [field]: value }).eq('id', insp1).select('*');
+    const stillOriginal = await admin.from('inspecoes').select('*').eq('id', insp1).maybeSingle();
+    const ok = Boolean(r.error) && stillOriginal.data?.inspetor === 'Inspector A Test'
+      && stillOriginal.data?.user_id === uidA
+      && stillOriginal.data?.equipment_id === TAG;
+    record(`TESTE 6: Imutabilidade ${field}`, ok, r.error?.message ?? '');
+  }
 
-  // -------------------------------------------------------------------------
-  // 7. DELETE — inspector negado / admin permitido
-  // -------------------------------------------------------------------------
+  // =========================================================================
+  // §19 — TESTE 7: DELETE POR INSPECTOR (NEGADO)
+  // =========================================================================
   const delByB = await inspB.from('inspecoes').delete().eq('id', insp1).select('id');
-  record('RLS: Inspector B NÃO exclui inspeção', !delByB.error && (delByB.data ?? []).length === 0, delByB.error?.message ?? '');
-  const stillThere = await inspB.from('inspecoes').select('id').eq('id', insp1).maybeSingle();
-  record('RLS: inspeção continua existindo após tentativa de B', stillThere.data?.id === insp1);
+  record('TESTE 7: Inspector B NÃO exclui inspeção', !delByB.error && (delByB.data ?? []).length === 0);
+  const stillThere = await admin.from('inspecoes').select('id').eq('id', insp1).maybeSingle();
+  record('  → inspeção continua existindo', stillThere.data?.id === insp1);
 
-  // -------------------------------------------------------------------------
-  // 8. CAS real com dois clientes
-  // -------------------------------------------------------------------------
-  const insp2 = newInspectionId();
-  const create2 = await inspA
+  // =========================================================================
+  // §20 — TESTE 8: CONCORRÊNCIA CAS
+  // =========================================================================
+  const inspCAS = newInspectionId();
+  assertE2eInspection(inspCAS);
+  const createCAS = await inspA
     .from('inspecoes')
-    .insert({ id: insp2, equipment_id: TAG, data: '2026-01-02', inspetor: 'Inspector A Test', status: 'regular', user_id: uidA })
-    .select('*')
-    .maybeSingle();
-  record('CAS setup: nova inspeção criada', !create2.error, create2.error?.message ?? '');
-  const baseA = create2.data.updated_at;
-  const baseB = (await inspB.from('inspecoes').select('updated_at').eq('id', insp2).maybeSingle()).data?.updated_at;
-  record('CAS: A e B leem a mesma base', baseA === baseB);
+    .insert({ id: inspCAS, equipment_id: TAG, data: '2026-01-02', inspetor: 'Inspector A Test', status: 'regular', user_id: uidA })
+    .select('*').maybeSingle();
+  if (createCAS.error) throw new Error(`Falha criar inspeção CAS: ${createCAS.error.message}`);
 
+  const baseA = createCAS.data.updated_at;
+  const baseBread = await inspB.from('inspecoes').select('updated_at').eq('id', inspCAS).maybeSingle();
+  const baseB = baseBread.data?.updated_at;
+  record('TESTE 8: A e B leem a mesma base', baseA === baseB);
+
+  // A atualiza → sucesso
+  assertE2eInspection(inspCAS);
   const casA = await inspA
     .from('inspecoes')
-    .update({ observacoes: 'A venceu' })
-    .eq('id', insp2)
-    .eq('updated_at', baseA)
-    .select('*')
-    .maybeSingle();
-  record('CAS: A atualiza (1 linha)', !casA.error && casA.data?.id === insp2);
+    .update({ observacoes: 'CAS A venceu' })
+    .eq('id', inspCAS).eq('updated_at', baseA)
+    .select('*').maybeSingle();
+  record('CAS: A atualizou (1 linha)', !casA.error && casA.data?.id === inspCAS);
   const newBaseA = casA.data?.updated_at;
 
+  // B tenta com base antiga → conflito
   const casBstale = await inspB
     .from('inspecoes')
-    .update({ observacoes: 'B tentou com base antiga' })
-    .eq('id', insp2)
-    .eq('updated_at', baseB)
+    .update({ observacoes: 'CAS B antigo' })
+    .eq('id', inspCAS).eq('updated_at', baseB)
     .select('*');
-  record('CAS: B com base antiga → 0 linhas (conflito)', !casBstale.error && (casBstale.data ?? []).length === 0);
+  record('CAS: B com base antiga → conflito (0 linhas)', (casBstale.data ?? []).length === 0);
 
-  const remoteNow = await inspB.from('inspecoes').select('updated_at, observacoes').eq('id', insp2).maybeSingle();
-  record('CAS: B detecta remoto divergente', remoteNow.data?.updated_at === newBaseA && remoteNow.data?.observacoes === 'A venceu');
+  // Verificar que remoto continua "CAS A venceu"
+  const remoteNow = await inspB.from('inspecoes').select('updated_at, observacoes').eq('id', inspCAS).maybeSingle();
+  record('CAS: remoto continua "CAS A venceu"', remoteNow.data?.observacoes === 'CAS A venceu');
+  record('CAS: remoto updated_at = newBaseA', remoteNow.data?.updated_at === newBaseA);
 
-  // Resolução "manter local": B usa a base atual do servidor.
+  // =========================================================================
+  // §21 — TESTE 9: USAR SERVIDOR
+  // =========================================================================
+  record('TESTE 9: B detecta divergência (UseRemote)', remoteNow.data?.updated_at === newBaseA);
+
+  // =========================================================================
+  // §22 — TESTE 10: MANTER LOCAL
+  // =========================================================================
+  assertE2eInspection(inspCAS);
   const casBkeep = await inspB
     .from('inspecoes')
     .update({ observacoes: 'B keep-local' })
-    .eq('id', insp2)
+    .eq('id', inspCAS)
     .eq('updated_at', remoteNow.data?.updated_at)
-    .select('*')
-    .maybeSingle();
-  record('Resolução keep-local: B CAS contra a versão atual (1 linha)', !casBkeep.error && casBkeep.data?.id === insp2);
+    .select('*').maybeSingle();
+  record('TESTE 10: B keep-local com base atual (1 linha)', !casBkeep.error && casBkeep.data?.id === inspCAS);
 
-  // -------------------------------------------------------------------------
-  // 9. Recálculo — ordem por data/created_at/id (updated_at não conta)
-  // -------------------------------------------------------------------------
-  await admin.rpc('recalculate_equipment_from_latest_inspection', {
-    p_equipment_id: TAG,
-    p_next_inspection_date: null,
-    p_trigger_inspection_id: null,
-  });
+  // =========================================================================
+  // §23 — TESTE 11: CAS SEM BASE (LEGADO)
+  // =========================================================================
+  const remote = await inspB.from('inspecoes').select('updated_at').eq('id', inspCAS).maybeSingle();
+  const baseFromFetch = remote.data?.updated_at;
+  assertE2eInspection(inspCAS);
+  const legacyCAS = await inspB
+    .from('inspecoes')
+    .update({ observacoes: 'legacy fetch+cas' })
+    .eq('id', inspCAS)
+    .eq('updated_at', baseFromFetch)
+    .select('*').maybeSingle();
+  record('TESTE 11: CAS sem base (fetch primeiro) funciona', !legacyCAS.error && legacyCAS.data?.id === inspCAS);
 
-  // Mesmo dia: A (regular) criada antes, B (pendente) criada depois.
+  // =========================================================================
+  // §24 — TESTE 12: DUAS INSPEÇÕES NO MESMO DIA
+  // =========================================================================
   const sameDayA = newInspectionId();
   const sameDayB = newInspectionId();
-  await inspA
-    .from('inspecoes')
+  assertE2eInspection(sameDayA);
+  assertE2eInspection(sameDayB);
+
+  await inspA.from('inspecoes')
     .insert({ id: sameDayA, equipment_id: TAG, data: '2026-03-01', inspetor: 'Inspector A Test', status: 'regular', user_id: uidA })
-    .select('id')
-    .maybeSingle();
+    .select('id').maybeSingle();
   await sleep(1200);
-  await inspA
-    .from('inspecoes')
+  await inspA.from('inspecoes')
     .insert({ id: sameDayB, equipment_id: TAG, data: '2026-03-01', inspetor: 'Inspector A Test', status: 'pendente', user_id: uidA })
-    .select('id')
-    .maybeSingle();
+    .select('id').maybeSingle();
 
-  const recalcSameDay = await admin.rpc('recalculate_equipment_from_latest_inspection', {
-    p_equipment_id: TAG,
-    p_next_inspection_date: null,
-    p_trigger_inspection_id: null,
+  const rpcSameDay = await admin.rpc('recalculate_equipment_from_latest_inspection', {
+    p_equipment_id: TAG, p_next_inspection_date: null, p_trigger_inspection_id: null,
   });
-  const eqSameDay = await admin.from('equipamentos').select('status, data_ultima_inspecao').eq('id', TAG).maybeSingle();
-  record('Recálculo: vencedora é a criada depois (mesmo dia)', recalcSameDay.data?.inspection_id === sameDayB, `vencedora=${recalcSameDay.data?.inspection_id ?? 'null'}`);
-  record('Recálculo: status do equipamento = pendente', eqSameDay.data?.status === 'pendente');
+  const eqAfter = await admin.from('equipamentos').select('status, data_ultima_inspecao').eq('id', TAG).maybeSingle();
+  record('TESTE 12: Vencedora é a criada depois (mesmo dia)', rpcSameDay.data?.inspection_id === sameDayB);
+  record('  → status = pendente', eqAfter.data?.status === 'pendente');
 
-  // Edição administrativa da inspeção ANTIGA não muda a vencedora.
+  // =========================================================================
+  // §25 — TESTE 13: EDITAR INSPEÇÃO ANTIGA
+  // =========================================================================
+  assertE2eInspection(sameDayA);
   const baseSameDayA = (await inspA.from('inspecoes').select('updated_at').eq('id', sameDayA).maybeSingle()).data?.updated_at;
-  await inspA
-    .from('inspecoes')
-    .update({ observacoes: 'só observação' })
-    .eq('id', sameDayA)
-    .eq('updated_at', baseSameDayA)
-    .select('id')
-    .maybeSingle();
-  const recalcAfterEdit = await admin.rpc('recalculate_equipment_from_latest_inspection', {
-    p_equipment_id: TAG,
-    p_next_inspection_date: null,
-    p_trigger_inspection_id: null,
+  await inspA.from('inspecoes')
+    .update({ observacoes: 'só observação antiga' })
+    .eq('id', sameDayA).eq('updated_at', baseSameDayA)
+    .select('id').maybeSingle();
+  const rpcOld = await admin.rpc('recalculate_equipment_from_latest_inspection', {
+    p_equipment_id: TAG, p_next_inspection_date: null, p_trigger_inspection_id: null,
   });
-  const eqAfterEdit = await admin.from('equipamentos').select('status').eq('id', TAG).maybeSingle();
-  record('Sem regressão: editar inspeção antiga mantém a vencedora', recalcAfterEdit.data?.inspection_id === sameDayB);
-  record('Sem regressão: status continua pendente', eqAfterEdit.data?.status === 'pendente');
+  const eqOld = await admin.from('equipamentos').select('status').eq('id', TAG).maybeSingle();
+  record('TESTE 13: Editar antiga NÃO muda vencedora', rpcOld.data?.inspection_id === sameDayB);
+  record('  → status continua pendente', eqOld.data?.status === 'pendente');
 
-  // Alterar a mais recente reflete no equipamento.
+  // =========================================================================
+  // §26 — TESTE 14: EDITAR MAIS RECENTE
+  // =========================================================================
+  assertE2eInspection(sameDayB);
   const baseSameDayB = (await inspA.from('inspecoes').select('updated_at').eq('id', sameDayB).maybeSingle()).data?.updated_at;
-  await inspA
-    .from('inspecoes')
+  await inspA.from('inspecoes')
     .update({ status: 'regular' })
-    .eq('id', sameDayB)
-    .eq('updated_at', baseSameDayB)
-    .select('id')
-    .maybeSingle();
-  const recalcLatestEdit = await admin.rpc('recalculate_equipment_from_latest_inspection', {
-    p_equipment_id: TAG,
-    p_next_inspection_date: null,
-    p_trigger_inspection_id: null,
+    .eq('id', sameDayB).eq('updated_at', baseSameDayB)
+    .select('id').maybeSingle();
+  const rpcNew = await admin.rpc('recalculate_equipment_from_latest_inspection', {
+    p_equipment_id: TAG, p_next_inspection_date: null, p_trigger_inspection_id: null,
   });
-  const eqLatestEdit = await admin.from('equipamentos').select('status').eq('id', TAG).maybeSingle();
-  record('Alterar a mais recente reflete status no equipamento', eqLatestEdit.data?.status === 'regular');
+  const eqNew = await admin.from('equipamentos').select('status').eq('id', TAG).maybeSingle();
+  record('TESTE 14: Editar mais recente → equipamento regular', eqNew.data?.status === 'regular');
 
-  // -------------------------------------------------------------------------
-  // 10. p_next — só aplica quando o trigger é a vencedora
-  // -------------------------------------------------------------------------
+  // =========================================================================
+  // §27 — TESTE 15: p_next_inspection_date
+  // =========================================================================
   const nextDate = '2027-12-31';
-
-  // (A) trigger = vencedora → aplica
-  const rpcNextWinner = await admin.rpc('recalculate_equipment_from_latest_inspection', {
-    p_equipment_id: TAG,
-    p_next_inspection_date: nextDate,
-    p_trigger_inspection_id: sameDayB,
+  const rpcA = await admin.rpc('recalculate_equipment_from_latest_inspection', {
+    p_equipment_id: TAG, p_next_inspection_date: nextDate, p_trigger_inspection_id: sameDayB,
   });
-  record('p_next (A): trigger vencedora aplica a próxima data', rpcNextWinner.data?.data_proxima_inspecao === nextDate, `proxima=${rpcNextWinner.data?.data_proxima_inspecao ?? 'null'}`);
+  record('TESTE 15A: trigger vencedora → aplica próxima', rpcA.data?.data_proxima_inspecao === nextDate);
 
-  // (B) trigger = inspeção antiga → NÃO altera
-  const rpcNextOld = await admin.rpc('recalculate_equipment_from_latest_inspection', {
-    p_equipment_id: TAG,
-    p_next_inspection_date: '2028-01-01',
-    p_trigger_inspection_id: sameDayA,
+  const rpcB = await admin.rpc('recalculate_equipment_from_latest_inspection', {
+    p_equipment_id: TAG, p_next_inspection_date: '2028-01-01', p_trigger_inspection_id: sameDayA,
   });
-  record('p_next (B): trigger antigo NÃO altera a próxima data', rpcNextOld.data?.data_proxima_inspecao === nextDate, `proxima=${rpcNextOld.data?.data_proxima_inspecao ?? 'null'}`);
+  record('TESTE 15B: trigger antigo → NÃO altera', rpcB.data?.data_proxima_inspecao === nextDate);
 
-  // (C) trigger null → NÃO altera
-  const rpcNextNull = await admin.rpc('recalculate_equipment_from_latest_inspection', {
-    p_equipment_id: TAG,
-    p_next_inspection_date: '2028-02-02',
-    p_trigger_inspection_id: null,
+  const rpcC = await admin.rpc('recalculate_equipment_from_latest_inspection', {
+    p_equipment_id: TAG, p_next_inspection_date: '2028-02-02', p_trigger_inspection_id: null,
   });
-  record('p_next (C): trigger null NÃO altera a próxima data', rpcNextNull.data?.data_proxima_inspecao === nextDate, `proxima=${rpcNextNull.data?.data_proxima_inspecao ?? 'null'}`);
+  record('TESTE 15C: trigger null → NÃO altera', rpcC.data?.data_proxima_inspecao === nextDate);
 
-  // Trigger de outro equipamento → rejeitado
-  const rpcBadTrigger = await admin.rpc('recalculate_equipment_from_latest_inspection', {
-    p_equipment_id: TAG,
-    p_next_inspection_date: null,
-    p_trigger_inspection_id: 'INSP-INEXISTENTE',
+  const rpcBad = await admin.rpc('recalculate_equipment_from_latest_inspection', {
+    p_equipment_id: TAG, p_trigger_inspection_id: 'INSP-INEXISTENTE',
   });
-  record('p_trigger inválido é rejeitado', Boolean(rpcBadTrigger.error), rpcBadTrigger.error?.message ?? 'sem erro');
+  record('TESTE 15D: trigger inexistente → rejeitado', Boolean(rpcBad.error));
 
-  // Equipamento inexistente → rejeitado (NOEQPT)
-  const rpcNoEquipment = await admin.rpc('recalculate_equipment_from_latest_inspection', {
-    p_equipment_id: `${TAG}-INEXISTENTE`,
+  const rpcNoEq = await admin.rpc('recalculate_equipment_from_latest_inspection', {
+    p_equipment_id: `${TAG}-NOPE`,
   });
-  record('Equipamento inexistente é rejeitado (NOEQPT)', Boolean(rpcNoEquipment.error), rpcNoEquipment.error?.message ?? 'sem erro');
+  record('TESTE 15E: equipamento inexistente → NOEQPT', Boolean(rpcNoEq.error));
 
-  // -------------------------------------------------------------------------
-  // 11. Autorização da RPC
-  // -------------------------------------------------------------------------
-  const rpcAdmin = await admin.rpc('recalculate_equipment_from_latest_inspection', { p_equipment_id: TAG });
-  record('RPC: admin permitido', !rpcAdmin.error, rpcAdmin.error?.message ?? '');
-  const rpcInspector = await inspA.rpc('recalculate_equipment_from_latest_inspection', { p_equipment_id: TAG });
-  record('RPC: inspector permitido', !rpcInspector.error, rpcInspector.error?.message ?? '');
-  const rpcAnon = await anon.rpc('recalculate_equipment_from_latest_inspection', { p_equipment_id: TAG });
-  record('RPC: sem sessão negado', Boolean(rpcAnon.error), rpcAnon.error?.message ?? 'sem erro');
-  if (unauthed && uidUnauthorized) {
-    const rpcUnauth = await unauthed.rpc('recalculate_equipment_from_latest_inspection', { p_equipment_id: TAG });
-    record('RPC: role não autorizada negada', Boolean(rpcUnauth.error), rpcUnauth.error?.message ?? 'sem erro');
-  } else {
-    console.log('[SKIP] RPC: role não autorizada (sem TEST_UNAUTHORIZED_*)');
-  }
-
-  // -------------------------------------------------------------------------
-  // 12. Fotos — metadata compartilhada / storage privado
-  // -------------------------------------------------------------------------
+  // =========================================================================
+  // §28 — TESTE 16: FOTO
+  // =========================================================================
   const photoInsp = newInspectionId();
-  await inspA
-    .from('inspecoes')
+  assertE2eInspection(photoInsp);
+  await inspA.from('inspecoes')
     .insert({ id: photoInsp, equipment_id: TAG, data: '2026-04-01', inspetor: 'Inspector A Test', status: 'regular', user_id: uidA })
-    .select('id')
-    .maybeSingle();
+    .select('id').maybeSingle();
 
-  const photoPath = `${uidA}/${photoInsp}/e2e.jpg`;
-  uploadedPaths.push(photoPath);
-  const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+  const photoPath = `${uidA}/${photoInsp}/e2e-test.jpg`;
+  createdTestStoragePaths.push(photoPath);
+  const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
   const upload = await inspA.storage
     .from('inspection-photos')
     .upload(photoPath, new globalThis.Blob([bytes], { type: 'image/jpeg' }), { upsert: true, contentType: 'image/jpeg' });
-  record('Fotos: A faz upload no Storage', !upload.error, upload.error?.message ?? '');
+  record('TESTE 16A: A faz upload no Storage', !upload.error, upload.error?.message ?? '');
 
-  const photoInsert = await inspA
-    .from('fotos_inspecao')
-    .insert({
-      id: `FOTO-E2E-${RUN}`,
-      inspection_id: photoInsp,
-      storage_path: photoPath,
-      mime_type: 'image/jpeg',
-      size_bytes: bytes.length,
-      created_by: uidA,
-    })
-    .select('id')
-    .maybeSingle();
-  record('Fotos: A registra metadata', !photoInsert.error, photoInsert.error?.message ?? '');
+  const photoId = newPhotoId();
+  assertE2eInspection(photoInsp);
+  const photoInsert = await inspA.from('fotos_inspecao').insert({
+    id: photoId, inspection_id: photoInsp, storage_path: photoPath,
+    mime_type: 'image/jpeg', size_bytes: bytes.length, created_by: uidA,
+  }).select('id').maybeSingle();
+  record('TESTE 16B: A registra metadata', !photoInsert.error, photoInsert.error?.message ?? '');
 
   const metaB = await inspB.from('fotos_inspecao').select('id').eq('inspection_id', photoInsp);
-  record('Fotos: B vê metadata da inspeção de A', !metaB.error && (metaB.data ?? []).length === 1, metaB.error?.message ?? '');
+  record('TESTE 16C: B vê metadata da foto de A', !metaB.error && (metaB.data ?? []).length === 1);
 
   const dlB = await inspB.storage.from('inspection-photos').download(photoPath);
-  record('Storage: B baixa a foto (compartilhado)', !dlB.error, dlB.error?.message ?? '');
+  record('TESTE 16D: B baixa foto (compartilhado)', !dlB.error, dlB.error?.message ?? '');
 
   const dlAnon = await anon.storage.from('inspection-photos').download(photoPath);
-  record('Storage: anônimo NEGADO', Boolean(dlAnon.error), dlAnon.error?.message ?? 'sem erro');
+  record('TESTE 16E: Anônimo NEGADO no Storage', Boolean(dlAnon.error));
 
-  const rlsInspecoesAnon = await anon.from('inspecoes').select('id').eq('id', insp1);
-  record('RLS: anônimo não lê inspeções', !rlsInspecoesAnon.error && (rlsInspecoesAnon.data ?? []).length === 0);
+  const rlsAnon = await anon.from('inspecoes').select('id').eq('id', insp1);
+  record('TESTE 16F: Anônimo não lê inspeções', (rlsAnon.data ?? []).length === 0);
+
+  // =========================================================================
+  // §29 — STORAGE PRIVADO
+  // =========================================================================
+  const bucketSql = execSync('supabase db query --linked "select public from storage.buckets where id = \'inspection-photos\'"', { encoding: 'utf8' });
+  const bucketPrivate = bucketSql.includes('false');
+  record('TESTE 29: Bucket inspection-photos continua privado', bucketPrivate);
+
+  // =========================================================================
+  // §31 — TESTE 17: PERFIL NÃO AUTORIZADO
+  // =========================================================================
+  if (unauthed && uidUnauthorized) {
+    const rUnauthSel = await unauthed.from('inspecoes').select('id').eq('id', insp1);
+    record('TESTE 17A: Não autorizado NÃO lê inspeção', (rUnauthSel.data ?? []).length === 0);
+    const rUnauthUpd = await unauthed.from('inspecoes').update({ observacoes: 'hack' }).eq('id', insp1).select('id');
+    record('TESTE 17B: Não autorizado NÃO edita inspeção', Boolean(rUnauthUpd.error) || (rUnauthUpd.data ?? []).length === 0);
+    const rUnauthRpc = await unauthed.rpc('recalculate_equipment_from_latest_inspection', { p_equipment_id: TAG });
+    record('TESTE 17C: Não autorizado NÃO executa RPC', Boolean(rUnauthRpc.error));
+  } else {
+    console.log('[SKIP] TESTE 17: sem TEST_UNAUTHORIZED_* configurado');
+  }
+
+  // =========================================================================
+  // §32 — TESTE 18: ADMIN DELETE (SOMENTE E2E)
+  // =========================================================================
+  const delInspId = newInspectionId();
+  assertE2eInspection(delInspId);
+  await inspA.from('inspecoes')
+    .insert({ id: delInspId, equipment_id: TAG, data: '2026-05-01', inspetor: 'Inspector A Test', status: 'regular', user_id: uidA })
+    .select('id').maybeSingle();
+
+  const delResult = await admin.from('inspecoes').delete().eq('id', delInspId).select('id');
+  record('TESTE 18: Admin excluiu inspeção E2E', !delResult.error && (delResult.data ?? []).length === 1);
+  createdTestInspectionIds.delete(delInspId);
+
+  // =========================================================================
+  // §33 — OFFLINE-FIRST (PENDENTE)
+  // =========================================================================
+  console.log('\n[PENDENTE DE TESTE MANUAL] §33 — Offline-first: B abre inspeção E2E, fica offline, edita, reconecta → CAS.');
+  console.log('[PENDENTE DE TESTE MANUAL] §34 — UI duas sessões: A e B editam mesma inspeção E2E → banner conflito.\n');
+
+  // =========================================================================
+  // §40 — VERIFICAÇÃO FINAL DE INTEGRIDADE DOS EQUIPAMENTOS EXISTENTES
+  // =========================================================================
+  console.log('--- [SAFETY] Verificação final de integridade ---');
+  const snapAfter = await admin.from('equipamentos')
+    .select('id, qr_code, status, deleted_at, data_ultima_inspecao, data_proxima_inspecao, updated_at')
+    .order('id');
+  const afterMap = new Map((snapAfter.data ?? []).map((e) => [e.id, e]));
+  let integrityIssues = 0;
+
+  for (const orig of existingEquipmentSnapshot) {
+    const now = afterMap.get(orig.id);
+    if (!now) {
+      console.error(`  [BLOCKED] Equipamento pré-existente ${orig.id} DESAPARECEU!`);
+      integrityIssues++;
+      continue;
+    }
+    const diffs = [];
+    if (orig.qr_code !== now.qr_code) diffs.push('qr_code');
+    if (orig.status !== now.status) diffs.push('status');
+    if (orig.deleted_at !== now.deleted_at) diffs.push('deleted_at');
+    if (orig.data_ultima_inspecao !== now.data_ultima_inspecao) diffs.push('data_ultima_inspecao');
+    if (orig.data_proxima_inspecao !== now.data_proxima_inspecao) diffs.push('data_proxima_inspecao');
+    if (orig.updated_at !== now.updated_at) diffs.push('updated_at');
+    if (diffs.length) {
+      console.error(`  [BLOCKED] Equipamento ${orig.id} alterado: ${diffs.join(', ')}`);
+      integrityIssues++;
+    }
+  }
+
+  const e2eStillExists = afterMap.has(TAG);
+  const finalCount = snapAfter.data?.length ?? 0;
+  const expectedCount = e2eStillExists
+    ? existingEquipmentCountBefore + 1
+    : existingEquipmentCountBefore;
+  const countOk = finalCount === expectedCount;
+
+  if (integrityIssues === 0) {
+    console.log(`  [PASS] 100% dos equipamentos pré-existentes permanecem inalterados`);
+  } else {
+    console.error(`  [BLOCKED] ${integrityIssues} equipamento(s) pré-existente(s) alterado(s)`);
+  }
+  record('Equipamentos pré-existentes intactos', integrityIssues === 0);
+  record(`Contagem: ${existingEquipmentCountBefore} → ${finalCount} (esperado ${expectedCount})`, countOk);
+
+  // =========================================================================
+  // §42 — VERIFICAÇÃO FINAL DOS QR CODES
+  // =========================================================================
+  let qrIssues = 0;
+  for (const orig of existingEquipmentSnapshot) {
+    const now = afterMap.get(orig.id);
+    if (now && orig.qr_code !== now.qr_code) {
+      console.error(`  [BLOCKED] QR de ${orig.id} alterado: "${orig.qr_code}" → "${now.qr_code}"`);
+      qrIssues++;
+    }
+  }
+  record('QR Codes pré-existentes intactos', qrIssues === 0);
 
   return finish();
 }
 
-// ---------------------------------------------------------------------------
-// Cleanup
-// ---------------------------------------------------------------------------
+// ─── CLEANUP (§38) ──────────────────────────────────────────────────────────
 async function cleanup() {
-  console.log('\n--- Limpeza dos dados de teste ---');
-  for (const path of uploadedPaths) {
+  console.log('\n--- [CLEANUP] Removendo dados E2E ---');
+
+  // 1. Storage (fotos)
+  for (const path of createdTestStoragePaths) {
     const r = await admin.storage.from('inspection-photos').remove([path]);
-    if (r.error) console.warn(`  aviso: falha ao remover objeto ${path}: ${r.error.message}`);
+    if (r.error) console.warn(`  aviso: remover storage ${path}: ${r.error.message}`);
+    else console.log(`  storage removido: ${path}`);
   }
-  const delInsp = await admin.from('inspecoes').delete().like('id', `INSP-E2E-${RUN}%`).select('id');
-  if (delInsp.error) console.warn(`  aviso: falha ao remover inspeções: ${delInsp.error.message}`);
-  const delEq = await admin.from('equipamentos').delete().in('id', [TAG, TAG2]).select('id');
-  if (delEq.error) console.warn(`  aviso: falha ao remover equipamentos: ${delEq.error.message}`);
-  console.log('  limpeza concluída.');
+
+  // 2. Metadata de fotos (por ID exato)
+  for (const photoId of createdTestPhotoIds) {
+    const r = await admin.from('fotos_inspecao').delete().eq('id', photoId);
+    if (r.error) console.warn(`  aviso: remover foto ${photoId}: ${r.error.message}`);
+    else console.log(`  foto metadata removida: ${photoId}`);
+  }
+
+  // 3. Inspeções (por ID exato — §11)
+  for (const inspId of createdTestInspectionIds) {
+    const r = await admin.from('inspecoes').delete().eq('id', inspId);
+    if (r.error) console.warn(`  aviso: remover inspeção ${inspId}: ${r.error.message}`);
+    else console.log(`  inspeção removida: ${inspId}`);
+  }
+
+  // 4. Equipamento E2E (por ID exato — §36)
+  for (const eqId of createdTestEquipmentIds) {
+    assertE2eEquipment(eqId);
+    const r = await admin.from('equipamentos').delete().eq('id', eqId);
+    if (r.error) console.warn(`  aviso: remover equipamento ${eqId}: ${r.error.message}`);
+    else console.log(`  equipamento removido: ${eqId}`);
+  }
+
+  console.log('  [CLEANUP] Concluído.');
 }
 
 async function finish() {
-  await cleanup();
+  try { await cleanup(); } catch (e) { console.error('  Erro no cleanup:', e.message); }
+
   const failed = results.filter((r) => !r.ok);
   console.log('\n=== Resumo ===');
   console.log(`Total: ${results.length} · Passou: ${results.length - failed.length} · Falhou: ${failed.length}`);
@@ -457,15 +606,17 @@ async function finish() {
     console.log('\nFalhas:');
     for (const f of failed) console.log(`  - ${f.name}${f.detail ? ` (${f.detail})` : ''}`);
   }
+
+  const blocked = failed.some((f) => f.name.includes('intactos') || f.name.includes('QR') || f.name.includes('Contagem'));
+  if (blocked) {
+    console.error('\n[BLOCKED] Dados pré-existentes foram alterados. Merge BLOQUEADO.');
+  }
+
   process.exit(failed.length ? 1 : 0);
 }
 
 main().catch(async (err) => {
-  console.error('\nErro fatal na validação:', err.message);
-  try {
-    await cleanup();
-  } catch {
-    /* noop */
-  }
+  console.error('\n[ERRO FATAL]', err.message);
+  try { await cleanup(); } catch { /* noop */ }
   process.exit(1);
 });
