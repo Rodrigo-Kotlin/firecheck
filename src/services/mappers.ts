@@ -69,6 +69,10 @@ export interface DbInspecao {
   sincronizado: boolean;
   created_at: string;
   updated_at: string;
+  /** Conta autenticada da última alteração (null = nunca editada). */
+  updated_by: string | null;
+  /** Nome operacional da pessoa física que fez a última alteração. */
+  updated_by_name: string | null;
 }
 
 export interface DbPlanoAcao {
@@ -211,9 +215,17 @@ export function dbToInspection(row: DbInspecao): Inspection {
     status: row.status,
     observacoes: emptyToUndef(row.observacoes),
     userId: emptyToUndef(row.user_id),
+    createdAt: emptyToUndef(row.created_at),
+    // updated_at é preservado com precisão total (microssegundos) — jamais
+    // reformatar via `new Date()` para não quebrar o CAS.
+    updatedAt: emptyToUndef(row.updated_at),
+    updatedBy: emptyToUndef(row.updated_by),
+    updatedByName: emptyToUndef(row.updated_by_name),
   };
 }
 
+// Campos persistentes aceitos ao enviar uma inspeção (exclui rastreabilidade
+// gerenciada pelo servidor e metadados locais de sync).
 export function inspectionToDb(insp: Partial<Inspection>): Partial<DbInspecao> {
   const row: Partial<DbInspecao> = {};
   if (insp.id !== undefined) row.id = insp.id;

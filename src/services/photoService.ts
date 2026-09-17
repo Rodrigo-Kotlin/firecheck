@@ -384,3 +384,28 @@ export async function removeInspectionPhotoObject(path: string): Promise<void> {
     console.error('[photo.remove] exceção:', err);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Download sob demanda (fotos em inspeções compartilhadas)
+// ---------------------------------------------------------------------------
+
+/** Baixa uma foto do bucket privado para visualização sob demanda. O Blob
+ *  resultante pode ser cacheado localmente (ex.: IndexedDB) SEM tocar nas flags
+ *  de sincronização — fotos baixadas só para exibição nunca viram upload. */
+export async function downloadInspectionPhoto(storagePath: string): Promise<Blob | null> {
+  if (!isSupabaseConfigured || !supabase) {
+    console.warn('[photo.download] Supabase não configurado.');
+    return null;
+  }
+  try {
+    const { data, error } = await supabase.storage.from(PHOTO_BUCKET).download(storagePath);
+    if (error || !data) {
+      console.error('[photo.download]', error);
+      return null;
+    }
+    return data as Blob;
+  } catch (err) {
+    console.error('[photo.download] exceção:', err);
+    return null;
+  }
+}

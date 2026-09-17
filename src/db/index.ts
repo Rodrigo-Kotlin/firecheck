@@ -104,10 +104,27 @@ export type LocalActionPlan = ActionPlan & {
   remoteUpdatedAtAtConflict?: string | null;
 };
 
-/** Inspection row as stored in Dexie (already had `sincronizado`). */
+/** Inspection row as stored in Dexie (adds sync metadata + audit fields). */
 export type LocalInspection = Inspection & {
   sincronizado: boolean;
   pendingDelete?: boolean;
+  /** Intenção da operação local pendente: 'create' | 'update' | 'delete'. */
+  syncAction?: 'create' | 'update' | 'delete';
+  /** Valor de updatedAt remoto conhecido no momento em que a inspeção foi
+   *  carregada ou sincronizada pela última vez. Base do CAS. */
+  syncBaseUpdatedAt?: string | null;
+  /** Indica que a edição local tentou sincronizar, mas o remoto mudou. */
+  syncConflict?: boolean;
+  /** Mensagem técnica/amigável do conflito. */
+  syncConflictReason?: string | null;
+  /** Valor remoto de updatedAt no momento em que o conflito foi detectado. */
+  remoteUpdatedAtAtConflict?: string | null;
+  /** Erro persistente da última tentativa de sync. */
+  syncError?: string;
+  /** Timestamp local da última edição. */
+  updatedAt?: string;
+  updatedBy?: string;
+  updatedByName?: string;
 };
 
 const LEGACY_SESSION_KEY = 'firecheck-auth-session';
@@ -209,6 +226,17 @@ export class FireCheckDatabase extends Dexie {
           });
         }
       });
+
+    // v7 — inspeções ganham índices de sincronização (syncAction, syncConflict,
+    // updatedAt). Não há upgrade destrutivo: os dados existentes são
+    // preservados e apenas os novos índices são criados.
+    this.version(7).stores({
+      equipamentos: 'id, tipo, status, sincronizado',
+      inspecoes: 'id, equipmentId, sincronizado, syncAction, syncConflict, updatedAt',
+      planosAcao: 'id, equipmentId, status, sincronizado, pendingDelete, syncAction, deletedAt',
+      fotos: 'id, inspectionId, sincronizado, syncAction, storagePath',
+      acoes_pendentes: '++id, type, timestamp',
+    });
   }
 
   /** Purge all local data tables. Used when clearing stale cache or

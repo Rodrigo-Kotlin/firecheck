@@ -4,8 +4,10 @@ import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanSta
 import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan, type LocalInspectionPhoto } from '../db';
 import { syncAll, pendingSyncCount, conflictCount } from '../services/sync';
 import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById } from '../services/equipmentService';
-import { carregarInspecoes } from '../services/inspectionService';
+import { carregarInspecoes, fetchInspectionById, updateInspectionRemote, recalculateEquipmentFromLatestInspectionRemote } from '../services/inspectionService';
 import { carregarPlanosDeAcao, fetchActionPlanById, updateActionPlanRemote } from '../services/actionPlanService';
+import { canViewInspection, canEditInspection, canDeleteInspection } from '../services/permissions';
+import { getLatestInspectionForEquipment } from '../utils/equipmentFilters';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   loginUser,
@@ -46,6 +48,15 @@ export interface SaveInspectionResult {
   /** false quando a foto falhou (ex.: quota do IndexedDB). */
   photoSaved: boolean;
   error?: string;
+}
+
+/** Resultado da edição compartilhada de uma inspeção. */
+export interface InspectionSaveResult {
+  ok: boolean;
+  mode: 'local' | 'cloud';
+  /** true quando a alteração local conflitou com uma versão remota mais nova. */
+  conflict?: boolean;
+  message?: string;
 }
 
 function inferCriticidade(inspectionObs: string, eqTipo: string): import('../types').Criticidade {
@@ -141,7 +152,7 @@ interface AppState {
   syncEnabled: boolean;
 
   /** Number of records in conflict (per entity type). */
-  conflictCounts: { equipments: number; actionPlans: number };
+  conflictCounts: { equipments: number; actionPlans: number; inspections: number };
 
   // ---- actions ----
   refreshConflictCount: () => Promise<void>;
@@ -149,6 +160,8 @@ interface AppState {
   resolveEquipmentConflictUseRemote: (id: string) => Promise<void>;
   resolveActionPlanConflictKeepLocal: (id: string) => Promise<void>;
   resolveActionPlanConflictUseRemote: (id: string) => Promise<void>;
+  resolveInspectionConflictKeepLocal: (id: string) => Promise<void>;
+  resolveInspectionConflictUseRemote: (id: string) => Promise<void>;
   login: (email: string, pass: string) => Promise<void>;
   register: (input: { email: string; password: string; nome: string; cargo: string }) => Promise<void>;
   logout: () => Promise<void>;
@@ -166,6 +179,10 @@ interface AppState {
   }) => Promise<SaveInspectionResult>;
   addEquipment: (eq: Equipment) => Promise<EquipmentResult>;
   updateEquipment: (id: string, updates: Partial<Equipment>) => Promise<EquipmentResult>;
+  updateInspection: (
+    id: string,
+    updates: { data?: string; status: EquipmentStatus; observacoes?: string; updatedByName: string },
+  ) => Promise<InspectionSaveResult>;
   addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'> & { status?: ActionPlanStatus }) => void;
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
   deleteActionPlan: (id: string) => void;
@@ -282,7 +299,7 @@ export const useAppStore = create<AppState>()(
         pending: 0,
         lastSyncAt: null,
         syncEnabled: isSupabaseConfigured,
-        conflictCounts: { equipments: 0, actionPlans: 0 },
+        conflictCounts: { equipments: 0, actionPlans: 0, inspections: 0 },
 
         // -----------------------------------------------------------------
         // Auth — Supabase Auth + tabela `profiles`. A sessão é mantida pelo
@@ -364,7 +381,7 @@ export const useAppStore = create<AppState>()(
 
         refreshConflictCount: async () => {
           if (!isSupabaseConfigured) {
-            set({ conflictCounts: { equipments: 0, actionPlans: 0 } });
+            set({ conflictCounts: { equipments: 0, actionPlans: 0, inspections: 0 } });
             return;
           }
           const counts = await conflictCount();
@@ -705,6 +722,310 @@ export const useAppStore = create<AppState>()(
           };
         },
 
+        updateInspection: async (id, updates): Promise<InspectionSaveResult> => {
+          // Inspeções compartilhadas: admin ou inspetor podem editar qualquer uma.
+          if (!canEditInspection(get().user, {})) {
+            return { ok: false, mode: 'local', message: 'Sem permissão para editar inspeções.' };
+          }
+
+          const current = await db.inspecoes.get(id);
+          if (!current) {
+            return { ok: false, mode: 'local', message: 'Inspeção não encontrada.' };
+          }
+
+          const now = new Date().toISOString();
+          const safeUpdates: Partial<LocalInspection> = {
+            data: updates.data ?? current.data,
+            status: updates.status,
+            observacoes: updates.observacoes ?? '',
+            updatedAt: now,
+            updatedBy: get().user?.id,
+            updatedByName: updates.updatedByName,
+            sincronizado: false,
+            syncAction: 'update',
+          };
+
+          // A edição NUNCA ajusta autoria original da inspeção.
+          try {
+            await db.inspecoes.update(id, safeUpdates);
+          } catch (err) {
+            console.error('[store.updateInspection] erro ao persistir no Dexie:', err);
+            return { ok: false, mode: 'local', message: 'Erro ao salvar localmente.' };
+          }
+
+          set((state) => ({
+            inspections: state.inspections.map((i) =>
+              i.id === id
+                ? {
+                    ...i,
+                    data: safeUpdates.data ?? i.data,
+                    status: safeUpdates.status ?? i.status,
+                    observacoes: (safeUpdates.observacoes ?? '') || undefined,
+                    updatedAt: now,
+                    updatedBy: get().user?.id,
+                    updatedByName: updates.updatedByName,
+                  }
+                : i,
+            ),
+          }));
+
+          // Recalcula o status do EQUIPAMENTO localmente SOMENTE se a inspeção
+          // editada for a mais recente do equipamento (evita regressão por
+          // edição de inspeção antiga).
+          const allLocal = await db.inspecoes.toArray();
+          const latest = getLatestInspectionForEquipment(allLocal as Inspection[], current.equipmentId);
+          const isLatest = latest?.id === id;
+          if (isLatest) {
+            const eqStatus = safeUpdates.status as EquipmentStatus;
+            await db.equipamentos.update(current.equipmentId, {
+              status: eqStatus,
+              dataUltimaInspecao: safeUpdates.data ?? current.data,
+              sincronizado: false,
+              statusUpdatePending: true,
+              updatedAt: now,
+            } as Partial<LocalEquipment>);
+            set((state) => ({
+              equipments: state.equipments.map((e) =>
+                e.id === current.equipmentId
+                  ? { ...e, status: eqStatus, dataUltimaInspecao: safeUpdates.data ?? current.data }
+                  : e,
+              ),
+            }));
+          }
+
+          // Push imediato quando online (CAS), como em updateEquipment.
+          if (isSupabaseConfigured && supabase && navigator.onLine) {
+            const result = await updateInspectionRemote({
+              id,
+              data: safeUpdates.data ?? current.data,
+              status: safeUpdates.status as EquipmentStatus,
+              observacoes: safeUpdates.observacoes || undefined,
+              updatedByName: updates.updatedByName,
+              syncBaseUpdatedAt: current.syncBaseUpdatedAt,
+            });
+
+            if (result.ok) {
+              await db.inspecoes.update(id, {
+                sincronizado: true,
+                syncAction: undefined,
+                syncError: undefined,
+                syncConflict: false,
+                syncConflictReason: undefined,
+                remoteUpdatedAtAtConflict: null,
+                syncBaseUpdatedAt: result.row.updated_at,
+                updatedAt: result.row.updated_at,
+                updatedBy: result.row.updated_by ?? undefined,
+                updatedByName: result.row.updated_by_name ?? updates.updatedByName,
+              });
+
+              // Recalcula o status remoto do equipamento.
+              const rpc = await recalculateEquipmentFromLatestInspectionRemote(
+                current.equipmentId,
+                undefined,
+                id,
+              );
+              if (rpc.ok && rpc.data) {
+                const rpcData = rpc.data as Record<string, unknown>;
+                await db.equipamentos.update(current.equipmentId, {
+                  sincronizado: true,
+                  statusUpdatePending: undefined,
+                  status: typeof rpcData.status === 'string' ? (rpcData.status as EquipmentStatus) : undefined,
+                  dataUltimaInspecao: typeof rpcData.data_ultima_inspecao === 'string' ? rpcData.data_ultima_inspecao : undefined,
+                  updatedAt: typeof rpcData.updated_at === 'string' ? rpcData.updated_at : now,
+                } as Partial<LocalEquipment>);
+                set((state) => ({
+                  equipments: state.equipments.map((e) =>
+                    e.id === current.equipmentId
+                      ? {
+                          ...e,
+                          status: typeof rpcData.status === 'string' ? (rpcData.status as EquipmentStatus) : e.status,
+                          dataUltimaInspecao: typeof rpcData.data_ultima_inspecao === 'string' ? rpcData.data_ultima_inspecao : e.dataUltimaInspecao,
+                        }
+                      : e,
+                  ),
+                }));
+              } else {
+                // Equipamento fica pendente de recálculo para a próxima rodada.
+                await db.equipamentos.update(current.equipmentId, {
+                  sincronizado: false,
+                  statusUpdatePending: true,
+                });
+              }
+
+              await get().refreshPendingCount();
+              await get().refreshConflictCount();
+              return { ok: true, mode: 'cloud' };
+            }
+
+            if (result.code === 'conflict' || result.code === 'not_found') {
+              const reason = result.code === 'not_found'
+                ? 'Esta inspeção foi excluída no servidor. Revise as versões antes de continuar.'
+                : 'Esta inspeção foi alterada em outro dispositivo depois da última sincronização. Revise as versões antes de continuar.';
+              await db.inspecoes.update(id, {
+                sincronizado: false,
+                syncAction: 'update',
+                syncConflict: true,
+                syncConflictReason: reason,
+                remoteUpdatedAtAtConflict: result.current?.updatedAt ?? null,
+                syncError: 'conflict',
+              });
+              await get().refreshPendingCount();
+              await get().refreshConflictCount();
+              return { ok: true, mode: 'local', conflict: true, message: reason };
+            }
+
+            return {
+              ok: true,
+              mode: 'local',
+              message: 'Alteração salva neste dispositivo. Será sincronizada quando houver conexão.',
+            };
+          }
+
+          if (isSupabaseConfigured) {
+            void runSync().then(() => get().refreshPendingCount());
+          }
+          return {
+            ok: true,
+            mode: 'local',
+            message: 'Alteração salva neste dispositivo. Será sincronizada quando houver conexão.',
+          };
+        },
+
+        resolveInspectionConflictKeepLocal: async (id: string) => {
+          if (import.meta.env.DEV) console.log(`[conflict-resolution] inspection keep local started: ${id}`);
+          const local = await db.inspecoes.get(id);
+          if (!local || !local.syncConflict) {
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] inspection ${id} not found or not in conflict`);
+            return;
+          }
+          if (!canEditInspection(get().user, { userId: local.userId })) {
+            throw new Error('Sem permissão para resolver o conflito desta inspeção.');
+          }
+
+          // Refresca a base CAS com o estado remoto atual, depois envia nossa
+          // versão (CAS condicionado ao updated_at mais recente).
+          const remoteResult = await fetchInspectionById(id);
+          if (!remoteResult.ok) {
+            if (remoteResult.code === 'not_found') {
+              throw new Error('Esta inspeção foi excluída no servidor. Use "Usar versão do servidor" para remover a versão local.');
+            }
+            throw new Error(remoteResult.message || 'Falha ao buscar versão remota.');
+          }
+          const remote = remoteResult.data!;
+
+          const result = await updateInspectionRemote({
+            id,
+            data: local.data,
+            status: local.status,
+            observacoes: local.observacoes ?? '',
+            updatedByName: local.updatedByName ?? '',
+            syncBaseUpdatedAt: remote.updatedAt ?? null,
+          });
+
+          if (!result.ok) {
+            if (result.code === 'conflict') {
+              throw new Error('O servidor mudou novamente durante a resolução. Tente de novo.');
+            }
+            throw new Error(result.message || 'Falha ao enviar versão local para o servidor.');
+          }
+
+          await db.inspecoes.update(id, {
+            sincronizado: true,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            remoteUpdatedAtAtConflict: null,
+            syncBaseUpdatedAt: result.row.updated_at,
+            updatedAt: result.row.updated_at,
+            updatedBy: result.row.updated_by ?? undefined,
+            updatedByName: result.row.updated_by_name ?? local.updatedByName,
+          });
+
+          // Recálculo do status do equipamento (por garantia, sem p_next).
+          const eqId = result.row.equipment_id;
+          const rpc = await recalculateEquipmentFromLatestInspectionRemote(eqId, undefined, id);
+          if (rpc.ok && rpc.data) {
+            const rpcData = rpc.data as Record<string, unknown>;
+            await db.equipamentos.update(eqId, {
+              sincronizado: true,
+              statusUpdatePending: undefined,
+              status: typeof rpcData.status === 'string' ? (rpcData.status as EquipmentStatus) : undefined,
+            } as Partial<LocalEquipment>);
+          }
+
+          set((state) => ({
+            inspections: state.inspections.map((i) =>
+              i.id === id
+                ? {
+                    ...i,
+                    data: result.row.data,
+                    status: result.row.status as EquipmentStatus,
+                    observacoes: result.row.observacoes || undefined,
+                    updatedAt: result.row.updated_at,
+                    updatedBy: result.row.updated_by ?? undefined,
+                    updatedByName: result.row.updated_by_name ?? local.updatedByName,
+                  }
+                : i,
+            ),
+          }));
+
+          if (import.meta.env.DEV) console.log('[conflict-resolution] inspection keep local success: ', id, '→ conflict resolved: keep local');
+          await get().refreshConflictCount();
+          await get().refreshPendingCount();
+        },
+
+        resolveInspectionConflictUseRemote: async (id: string) => {
+          if (import.meta.env.DEV) console.log(`[conflict-resolution] inspection use remote started: ${id}`);
+          const local = await db.inspecoes.get(id);
+          if (!local || !local.syncConflict) {
+            if (import.meta.env.DEV) console.log(`[conflict-resolution] inspection ${id} not found or not in conflict`);
+            return;
+          }
+          if (!canViewInspection(get().user)) {
+            throw new Error('Sem permissão para visualizar esta inspeção.');
+          }
+
+          const remoteResult = await fetchInspectionById(id);
+          if (!remoteResult.ok) {
+            if (remoteResult.code === 'not_found') {
+              // Excluída no servidor: remove a versão local.
+              await db.inspecoes.delete(id);
+              set((state) => ({
+                inspections: state.inspections.filter((i) => i.id !== id),
+              }));
+              if (import.meta.env.DEV) console.log('[conflict-resolution] inspection use remote: removed local copy (remote deleted) ', id);
+              await get().refreshConflictCount();
+              await get().refreshPendingCount();
+              return;
+            }
+            throw new Error(remoteResult.message || 'Falha ao buscar versão remota.');
+          }
+
+          const remote = remoteResult.data!;
+          const now = new Date().toISOString();
+          await db.inspecoes.put({
+            ...remote,
+            sincronizado: true,
+            pendingDelete: false,
+            syncAction: undefined,
+            syncError: undefined,
+            syncConflict: false,
+            syncConflictReason: undefined,
+            remoteUpdatedAtAtConflict: null,
+            syncBaseUpdatedAt: remote.updatedAt ?? now,
+            updatedAt: remote.updatedAt ?? now,
+          } as LocalInspection);
+
+          set((state) => ({
+            inspections: state.inspections.map((i) => (i.id === id ? { ...remote } : i)),
+          }));
+
+          if (import.meta.env.DEV) console.log('[conflict-resolution] inspection use remote success: ', id, '→ conflict resolved: use remote');
+          await get().refreshConflictCount();
+          await get().refreshPendingCount();
+        },
+
         deleteEquipment: (id) => {
           const userId = get().user?.id;
           const now = new Date().toISOString();
@@ -727,10 +1048,15 @@ export const useAppStore = create<AppState>()(
         },
 
         deleteInspection: (id) => {
+          // Guarda de permissão: somente ADMIN pode excluir inspeções.
+          if (!canDeleteInspection(get().user, { userId: get().inspections.find((i) => i.id === id)?.userId })) {
+            console.warn('[store.deleteInspection] Sem permissão para excluir inspeção — admin apenas.');
+            return;
+          }
           set((state) => ({
             inspections: state.inspections.filter((i) => i.id !== id),
           }));
-          void db.inspecoes.update(id, { pendingDelete: true, sincronizado: false });
+          void db.inspecoes.update(id, { pendingDelete: true, sincronizado: false, syncAction: 'delete' });
           void runSync().then(() => get().refreshPendingCount());
         },
 
@@ -754,8 +1080,15 @@ export const useAppStore = create<AppState>()(
           //    TUDO (inspeção não existe, equipamento inalterado) e retornamos
           //    o resultado granular sem falso sucesso.
           try {
+            const now = new Date().toISOString();
             await db.transaction('rw', db.inspecoes, db.fotos, db.equipamentos, async () => {
-              await db.inspecoes.put({ ...stamped, sincronizado: false } as LocalInspection);
+              await db.inspecoes.put({
+                ...stamped,
+                sincronizado: false,
+                syncAction: 'create',
+                createdAt: now,
+                updatedAt: now,
+              } as LocalInspection);
 
               if (data.photo) {
                 const now = new Date().toISOString();

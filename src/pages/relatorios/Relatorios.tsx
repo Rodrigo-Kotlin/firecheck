@@ -720,7 +720,7 @@ function generateMonthlyPDF(
 }
 
 export default function Relatorios() {
-  const { inspections, stats, equipments, config, user, deleteInspection } = useAppStore();
+  const { inspections, stats, equipments, config, user, deleteInspection, resolveInspectionConflictKeepLocal, resolveInspectionConflictUseRemote } = useAppStore();
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
@@ -928,38 +928,86 @@ export default function Relatorios() {
             </div>
           )}
 
-          {visible.map(h => (
-            <div key={h.id} className="card-subtle bg-white flex items-center gap-3">
-              <div className="flex-1 min-w-0 space-y-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-black text-gray-900">{h.equipId}</span>
-                  <span className="text-[10px] font-mono text-gray-400 bg-gray-50 px-1 rounded">{h.id}</span>
-                  <span className={`pill ${HISTORY_STATUS_BADGE[h.status]}`}>{h.status}</span>
+          {visible.map(h => {
+            const rowInspection = inspections.find(i => i.id === h.id);
+            const isConflict = rowInspection
+              ? Boolean(rowInspection.syncConflict || rowInspection.syncError === 'conflict')
+              : false;
+            return (
+              <div key={h.id} className="card-subtle bg-white">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-black text-gray-900">{h.equipId}</span>
+                      <span className="text-[10px] font-mono text-gray-400 bg-gray-50 px-1 rounded">{h.id}</span>
+                      <span className={`pill ${HISTORY_STATUS_BADGE[h.status]}`}>{h.status}</span>
+                      {isConflict && (
+                        <span className="pill bg-red-100 text-critical border border-red-200 flex items-center gap-1">
+                          <AlertOctagon className="w-3 h-3" />
+                          Conflito
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-500 font-semibold">{h.data} · {h.inspetor}</div>
+                  </div>
+                  <button
+                    onClick={() => handleIndividualPDF(h)}
+                    className="w-10 h-10 flex items-center justify-center bg-gray-50 border border-gray-100 hover:bg-red-50 hover:border-primary rounded-lg transition-all min-h-0 min-w-0"
+                    title="Gerar PDF"
+                    aria-label="Gerar PDF do relatório"
+                    type="button"
+                  >
+                    <FileText className="w-4 h-4 text-gray-500" />
+                  </button>
+                  {canDeleteInspection(user, { userId: undefined }) && (
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget(h.id)}
+                      className="w-10 h-10 flex items-center justify-center text-gray-300 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0 transition-colors"
+                      aria-label={`Excluir relatório ${h.id}`}
+                      title="Excluir relatório"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-                <div className="text-xs text-gray-500 font-semibold">{h.data} · {h.inspetor}</div>
+                {rowInspection && isConflict && (
+                  <div className="mt-3 px-3 py-2 bg-red-50 border border-red-200 border-l-[4px] border-l-red-500 rounded-lg space-y-2">
+                    <p className="text-[11px] text-critical font-semibold leading-relaxed">
+                      {rowInspection.syncConflictReason ??
+                        'Esta inspeção foi alterada em outro dispositivo depois da última sincronização.'}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!confirm('Manter sua versão local? Ela será enviada ao servidor.')) return;
+                          resolveInspectionConflictKeepLocal(rowInspection.id)
+                            .then(() => showToast({ kind: 'success', title: 'Conflito resolvido', description: 'Sua versão foi enviada ao servidor.' }))
+                            .catch(err => showToast({ kind: 'error', title: 'Erro', description: err instanceof Error ? err.message : 'Falha ao resolver conflito.' }));
+                        }}
+                        className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 border-none cursor-pointer"
+                      >
+                        Manter minha versão
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!confirm('Usar a versão do servidor? Sua alteração local será descartada.')) return;
+                          resolveInspectionConflictUseRemote(rowInspection.id)
+                            .then(() => showToast({ kind: 'success', title: 'Conflito resolvido', description: 'Versão do servidor restaurada.' }))
+                            .catch(err => showToast({ kind: 'error', title: 'Erro', description: err instanceof Error ? err.message : 'Falha ao resolver conflito.' }));
+                        }}
+                        className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-white border border-red-200 text-critical hover:bg-red-50 cursor-pointer"
+                      >
+                        Usar versão do servidor
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <button
-                onClick={() => handleIndividualPDF(h)}
-                className="w-10 h-10 flex items-center justify-center bg-gray-50 border border-gray-100 hover:bg-red-50 hover:border-primary rounded-lg transition-all min-h-0 min-w-0"
-                title="Gerar PDF"
-                aria-label="Gerar PDF do relatório"
-                type="button"
-              >
-                <FileText className="w-4 h-4 text-gray-500" />
-              </button>
-              {canDeleteInspection(user, { userId: undefined }) && (
-                <button
-                  type="button"
-                  onClick={() => setDeleteTarget(h.id)}
-                  className="w-10 h-10 flex items-center justify-center text-gray-300 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0 transition-colors"
-                  aria-label={`Excluir relatório ${h.id}`}
-                  title="Excluir relatório"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          ))}
+            );
+          })}
 
           {visible.length < filtered.length && (
             <button

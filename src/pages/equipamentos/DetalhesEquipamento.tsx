@@ -1,6 +1,7 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
+import { canEditInspection } from '../../services/permissions';
 import {
   ChevronLeft,
   Play,
@@ -532,29 +533,48 @@ export default function DetalhesEquipamento() {
                     >
                       {insp.status}
                     </span>
+                    {insp.updatedByName && (
+                      <span className="pill bg-violet-100 text-violet-700" title={insp.updatedByName}>
+                        Editada
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1 text-[11px] text-gray-500 font-bold uppercase tracking-wider">
                     <User className="w-3.5 h-3.5" />
                     <span className="truncate">{insp.inspetor}</span>
                   </div>
+                  {insp.updatedByName && (
+                    <div className="flex items-center gap-1 text-[11px] text-violet-600 font-bold uppercase tracking-wider">
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span className="truncate">Editada por {insp.updatedByName}</span>
+                    </div>
+                  )}
                   {insp.observacoes && (
                     <p className="text-xs text-gray-600 italic mt-1.5 font-medium line-clamp-2">
                       &ldquo;{insp.observacoes}&rdquo;
                     </p>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    alert(
-                      `Inspeção ${insp.id}\nData: ${insp.data}\nInspetor: ${insp.inspetor}\nStatus: ${insp.status}\nLaudo: ${insp.observacoes || 'Nenhum'}`,
-                    )
-                  }
-                  className="flex-shrink-0 w-9 h-9 flex items-center justify-center border border-gray-100 bg-gray-50 hover:bg-gray-100 rounded-lg min-h-0 min-w-0"
-                  aria-label="Ver detalhes da inspeção"
-                >
-                  <Eye className="w-4 h-4 text-gray-500" />
-                </button>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/inspecoes/${insp.id}`)}
+                    className="w-9 h-9 flex items-center justify-center border border-gray-100 bg-gray-50 hover:bg-gray-100 rounded-lg min-h-0 min-w-0"
+                    aria-label="Ver detalhes da inspeção"
+                  >
+                    <Eye className="w-4 h-4 text-gray-500" />
+                  </button>
+                  {canEditInspection(user, insp) && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/inspecoes/${insp.id}/editar`)}
+                      className="w-9 h-9 flex items-center justify-center border border-primary/20 bg-primary/5 hover:bg-primary/10 rounded-lg min-h-0 min-w-0"
+                      aria-label="Editar inspeção"
+                    >
+                      <Pencil className="w-4 h-4 text-primary" />
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

@@ -22,11 +22,11 @@
  * report.
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { db, type LocalInspectionPhoto } from '../db';
+import { db, type LocalInspection, type LocalEquipment, type LocalInspectionPhoto } from '../db';
 import {
-  fetchEquipments, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById, softDeleteEquipment, applyEquipmentInspectionStatusRemote, type ServiceResult,
+  fetchEquipments, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById, softDeleteEquipment, type ServiceResult,
 } from './equipmentService';
-import { fetchInspections, upsertInspection } from './inspectionService';
+import { fetchInspections, upsertInspection, fetchInspectionById, updateInspectionRemote, recalculateEquipmentFromLatestInspectionRemote } from './inspectionService';
 import {
   fetchActionPlans,
   fetchActionPlanById,
@@ -373,85 +373,233 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
   let errors = 0;
   let deleted = 0;
 
-  const toDelete = await db.inspecoes.filter((i) => !!i.pendingDelete).toArray();
-  for (const insp of toDelete) {
-    // Cloud already stores a `sincronizado` flag — use it as a tombstone.
-    // (We keep the row locally until the cloud DELETE succeeds, then purge.)
-    if (supabase) {
-      const { error } = await supabase.from('inspecoes').delete().eq('id', insp.id);
-      if (!error) {
-        await db.inspecoes.delete(insp.id);
-        deleted++;
+  const markConflict = async (id: string, remoteUpdatedAt: string | null, reason: string) => {
+    if (import.meta.env.DEV) {
+      console.log(`[conflict] detected for inspection ${id}: ${reason}`);
+    }
+    await db.inspecoes.update(id, {
+      syncConflict: true,
+      syncConflictReason: reason,
+      remoteUpdatedAtAtConflict: remoteUpdatedAt,
+      syncError: 'conflict',
+      sincronizado: false,
+    });
+    errors++;
+  };
+
+  /** Aplica os campos derivados da RPC de recálculo no equipamento local. */
+  const applyRpcToEquipment = async (
+    equipmentId: string,
+    rpcData: Record<string, unknown>,
+    fallbackUpdatedAt?: string,
+  ) => {
+    const patch: Partial<LocalEquipment> = {
+      sincronizado: true,
+      statusUpdatePending: undefined,
+    };
+    if (typeof rpcData.status === 'string') patch.status = rpcData.status as Equipment['status'];
+    if (typeof rpcData.data_ultima_inspecao === 'string') patch.dataUltimaInspecao = rpcData.data_ultima_inspecao;
+    if (typeof rpcData.data_proxima_inspecao === 'string') patch.dataProximaInspecao = rpcData.data_proxima_inspecao;
+    if (typeof rpcData.updated_at === 'string') patch.updatedAt = rpcData.updated_at;
+    else if (fallbackUpdatedAt) patch.updatedAt = fallbackUpdatedAt;
+    await db.equipamentos.update(equipmentId, patch);
+  };
+
+  /** Reconciliação de flags órfãs: equipamentos com `statusUpdatePending` sem
+   *  inspeção pendente associada (ex.: exclusão de inspeção já aplicada).
+   *  Recálculo idempotente a partir da inspeção mais recente do servidor. */
+  const reconcileStaleStatusFlags = async () => {
+    const eqs = await db.equipamentos
+      .filter((e) => !!e.statusUpdatePending && !e.syncAction && !e.pendingDelete && !e.syncError)
+      .toArray();
+    if (eqs.length === 0) return;
+
+    // Pula equipamentos que ainda têm inspeções pendentes este round (o RPC
+    // normal será executado junto com a inspeção e evita janela de regressão).
+    const pendingInspEqIds = new Set<string>();
+    const pendingInspections = await db.inspecoes.filter((i) => !i.sincronizado).toArray();
+    for (const i of pendingInspections) pendingInspEqIds.add(i.equipmentId);
+
+    for (const eq of eqs) {
+      if (pendingInspEqIds.has(eq.id)) continue;
+      const rpc = await recalculateEquipmentFromLatestInspectionRemote(eq.id);
+      if (rpc.ok && rpc.data) {
+        await applyRpcToEquipment(eq.id, rpc.data as Record<string, unknown>);
+        if (import.meta.env.DEV) {
+          console.log(`[sync] status do equipamento %s reconciliado via inspeções mais recentes`, eq.id);
+        }
       } else {
-        console.error('[sync.pushInspections] Falha ao deletar inspeção no Supabase', {
-          id: insp.id,
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-        });
-        errors++;
+        console.error('[sync] Falha ao reconciliar status do equipamento %s: %s',
+          eq.id, rpc.message ?? rpc.code);
+        // Mantém statusUpdatePending para a próxima rodada.
       }
     }
-  }
+  };
 
-  const pending = await db.inspecoes.filter((i) => !i.sincronizado && !i.pendingDelete).toArray();
-  for (const insp of pending) {
-    let toUpsert = insp;
-    if (!insp.userId && userId) {
-      await db.inspecoes.update(insp.id, { userId });
-      toUpsert = { ...insp, userId };
-    }
-
-    // 1. Enviar inspeção para o Supabase
-    const success = await upsertInspection(toUpsert);
-    if (!success) {
-      console.error('[sync] Falha ao sincronizar inspeção %s — mantendo sincronizado: false', insp.id);
+  // 1) pending deletes — ADMIN ONLY (RLS) com confirmação de linha.
+  const toDelete = await db.inspecoes.filter((i) => !!i.pendingDelete).toArray();
+  for (const insp of toDelete) {
+    if (!supabase) {
+      console.warn('[sync.pushInspections] Supabase não configurado — exclusão local não enviada');
       errors++;
       continue;
     }
 
-    // 2. Aplicar status do equipamento via RPC segura (SECURITY DEFINER)
-    const localEq = await db.equipamentos.get(insp.equipmentId);
-    const rpcResult = await applyEquipmentInspectionStatusRemote(
-      insp.equipmentId,
-      insp.status,
-      insp.data,
-      localEq?.dataProximaInspecao ?? undefined,
-    );
+    // Verifica conflito antes de excluir (como em equipamentos/planos).
+    const remoteResult = await fetchInspectionById(insp.id);
+    if (remoteResult.ok && remoteResult.data) {
+      const remote = remoteResult.data;
+      if (isConflict(insp.syncBaseUpdatedAt, remote.updatedAt)) {
+        await markConflict(insp.id, remote.updatedAt ?? null, 'Esta inspeção foi alterada em outro dispositivo antes da exclusão. Revise antes de excluir.');
+        continue;
+      }
+    } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+      console.error('[sync.pushInspections] Erro ao verificar conflito para exclusão', { id: insp.id });
+      errors++;
+      continue;
+    }
 
-    if (rpcResult.ok) {
-      // 3. Sucesso completo: marcar inspeção como sincronizada e atualizar equipamento local
-      await db.inspecoes.update(insp.id, { sincronizado: true });
-
-      // Atualizar equipamento local com os dados retornados pela RPC
-      if (rpcResult.data) {
-        const rpcData = rpcResult.data as unknown as Record<string, unknown>;
-        await db.equipamentos.update(insp.equipmentId, {
-          sincronizado: true,
-          statusUpdatePending: undefined,
-          updatedAt: (typeof rpcData.updated_at === 'string' ? rpcData.updated_at : undefined) as string | undefined,
-          status: typeof rpcData.status === 'string' ? (rpcData.status as Equipment['status']) : undefined,
-          dataUltimaInspecao: typeof rpcData.data_ultima_inspecao === 'string' ? rpcData.data_ultima_inspecao : undefined,
-          dataProximaInspecao: typeof rpcData.data_proxima_inspecao === 'string' ? rpcData.data_proxima_inspecao : undefined,
-        });
+    const { error } = await supabase.from('inspecoes').delete().eq('id', insp.id).select('id').maybeSingle();
+    if (!error) {
+      await db.inspecoes.delete(insp.id);
+      // Recalcula o status do equipamento a partir do restante das inspeções.
+      const rpc = await recalculateEquipmentFromLatestInspectionRemote(insp.equipmentId);
+      if (rpc.ok && rpc.data) {
+        await applyRpcToEquipment(insp.equipmentId, rpc.data as Record<string, unknown>);
       } else {
-        // RPC retornou ok sem data — apenas limpar flags
-        await db.equipamentos.update(insp.equipmentId, {
-          sincronizado: true,
-          statusUpdatePending: undefined,
-        });
+        // Mantém statusUpdatePending para a reconciliação da próxima rodada.
+        await db.equipamentos.update(insp.equipmentId, { sincronizado: false, statusUpdatePending: true });
+        console.error('[sync.pushInspections] Falha ao recalcular status do equipamento %s após exclusão',
+          insp.equipmentId);
+      }
+      deleted++;
+      if (import.meta.env.DEV) console.log('[sync] Inspeção %s excluída do Supabase (admin)', insp.id);
+    } else {
+      console.error('[sync.pushInspections] Falha ao deletar inspeção no Supabase', {
+        id: insp.id,
+        code: error.code,
+        message: error.message,
+      });
+      errors++;
+    }
+  }
+
+  // 2) pending sync — create / update.
+  const pending = await db.inspecoes
+    .filter((i) => !i.sincronizado && !i.pendingDelete && !i.syncError)
+    .toArray();
+  for (const insp of pending) {
+    let toSync = insp;
+    if (!insp.userId && userId) {
+      await db.inspecoes.update(insp.id, { userId });
+      toSync = { ...insp, userId };
+    }
+
+    const isCreate = insp.syncAction === 'create' || !insp.syncBaseUpdatedAt;
+    const rpcEquipmentId = insp.equipmentId;
+    const localEq = await db.equipamentos.get(rpcEquipmentId);
+
+    if (isCreate) {
+      // CREATE — upsert idempotente com confirmação de linha.
+      const created = await upsertInspection(toSync);
+      if (!created.ok || !created.row) {
+        console.error('[sync] Falha ao criar inspeção %s — %s', insp.id, created.message ?? 'erro desconhecido');
+        errors++;
+        continue;
+      }
+
+      await db.inspecoes.update(insp.id, {
+        sincronizado: true,
+        syncAction: undefined,
+        syncError: undefined,
+        syncConflict: false,
+        syncConflictReason: undefined,
+        syncBaseUpdatedAt: created.row.updated_at,
+        updatedAt: created.row.updated_at,
+        updatedBy: created.row.updated_by ?? undefined,
+        updatedByName: created.row.updated_by_name ?? toSync.updatedByName,
+      });
+
+      // Status do equipamento via RPC segura (recálculo pela mais recente).
+      const rpc = await recalculateEquipmentFromLatestInspectionRemote(
+        rpcEquipmentId,
+        localEq?.dataProximaInspecao ?? undefined,
+        insp.id,
+      );
+      if (rpc.ok && rpc.data) {
+        await applyRpcToEquipment(rpcEquipmentId, rpc.data as Record<string, unknown>, created.row.updated_at);
+      } else {
+        // A inspeção foi salva no servidor; o status é reconciliado na próxima
+        // rodada sem regressão de dados.
+        await db.equipamentos.update(rpcEquipmentId, { sincronizado: false, statusUpdatePending: true });
+        console.error('[sync] Inspeção %s criada, mas RPC de status falhou: %s',
+          insp.id, rpc.message ?? rpc.code);
       }
 
       ok++;
-      if (import.meta.env.DEV) console.log('[sync] Inspeção %s e status do equipamento %s sincronizados com sucesso',
-        insp.id, insp.equipmentId);
-    } else {
-      // RPC falhou — NÃO marcar inspeção como sincronizada para retentar
-      console.error('[sync] Inspeção %s enviada, mas RPC de status falhou: %s',
-        insp.id, rpcResult.message ?? rpcResult.code);
-      errors++;
+      if (import.meta.env.DEV) console.log('[sync] Inspeção %s e status do equipamento %s sincronizados',
+        insp.id, rpcEquipmentId);
+      continue;
     }
+
+    // UPDATE — CAS com atualização otimista.
+    const updated = await updateInspectionRemote({
+      id: insp.id,
+      data: toSync.data,
+      status: toSync.status,
+      observacoes: toSync.observacoes,
+      updatedByName: toSync.updatedByName,
+      syncBaseUpdatedAt: insp.syncBaseUpdatedAt,
+    });
+
+    if (!updated.ok) {
+      if (updated.code === 'conflict') {
+        await markConflict(insp.id, updated.current?.updatedAt ?? null, updated.message);
+        continue;
+      }
+      if (updated.code === 'not_found') {
+        await markConflict(insp.id, null, 'Esta inspeção foi excluída no servidor. Revise antes de continuar.');
+        continue;
+      }
+      console.error('[sync] Falha ao atualizar inspeção %s — %s', insp.id, updated.message);
+      errors++;
+      continue;
+    }
+
+    await db.inspecoes.update(insp.id, {
+      sincronizado: true,
+      syncAction: undefined,
+      syncError: undefined,
+      syncConflict: false,
+      syncConflictReason: undefined,
+      remoteUpdatedAtAtConflict: null,
+      syncBaseUpdatedAt: updated.row.updated_at,
+      updatedAt: updated.row.updated_at,
+      updatedBy: updated.row.updated_by ?? undefined,
+      updatedByName: updated.row.updated_by_name ?? toSync.updatedByName,
+    });
+
+    // Recálculo do status do equipamento (p_trigger = esta inspeção, portanto
+    // data_proxima_inspecao é preservada).
+    const rpc = await recalculateEquipmentFromLatestInspectionRemote(rpcEquipmentId, undefined, insp.id);
+    if (rpc.ok && rpc.data) {
+      await applyRpcToEquipment(rpcEquipmentId, rpc.data as Record<string, unknown>, updated.row.updated_at);
+    } else {
+      await db.equipamentos.update(rpcEquipmentId, { sincronizado: false, statusUpdatePending: true });
+      console.error('[sync] Inspeção %s atualizada, mas RPC de status falhou: %s',
+        insp.id, rpc.message ?? rpc.code);
+    }
+
+    ok++;
+    if (import.meta.env.DEV) console.log('[sync] Inspeção %s atualizada (CAS ok) no Supabase', insp.id);
+  }
+
+  // 3) Reconciliação de flags de status órfãs (ex.: exclusão em outro
+  //    dispositivo já refletida localmente).
+  await reconcileStaleStatusFlags();
+
+  if (import.meta.env.DEV) {
+    console.log(`[sync] pushInspections final: ok=${ok} errors=${errors} deleted=${deleted}`);
   }
   return { ok, errors, deleted };
 }
@@ -964,14 +1112,19 @@ async function pullInspections(): Promise<PullResult> {
     // --- Importar / atualizar registros do cloud ---
     for (const insp of cloud) {
       const local = await db.inspecoes.get(insp.id);
+      const cloudRow: LocalInspection = {
+        ...insp,
+        sincronizado: true,
+        syncBaseUpdatedAt: insp.updatedAt ?? null,
+      };
       if (!local) {
-        await db.inspecoes.put({ ...insp, sincronizado: true });
+        await db.inspecoes.put(cloudRow);
         imported++;
-      } else if (local.sincronizado && !local.pendingDelete) {
-        await db.inspecoes.put({ ...insp, sincronizado: true });
+      } else if (local.sincronizado && !local.pendingDelete && !local.syncConflict) {
+        await db.inspecoes.put(cloudRow);
         imported++;
       }
-      // else: local has unsynced changes — preserve them.
+      // else: local has unsynced/conflicting changes — preserve them.
     }
 
     // --- Reconciliação de órfãos locais ---
@@ -980,6 +1133,8 @@ async function pullInspections(): Promise<PullResult> {
       if (cloudIds.has(local.id)) continue;
       if (!local.sincronizado) continue;
       if (local.pendingDelete) continue;
+      // Registro em conflito/erro pendente NUNCA é removido pelo pull.
+      if (local.syncConflict || local.syncError || local.syncAction) continue;
 
       // Inspeção sincronizada sem pendência que não existe no cloud → remover
       await db.inspecoes.delete(local.id);
@@ -1354,10 +1509,11 @@ export async function pendingSyncCount(): Promise<number> {
 }
 
 /** Counts rows in conflict (syncConflict === true) for UI badges. */
-export async function conflictCount(): Promise<{ equipments: number; actionPlans: number }> {
+export async function conflictCount(): Promise<{ equipments: number; actionPlans: number; inspections: number }> {
   const equipments = await db.equipamentos.filter((e) => !!e.syncConflict).count();
   const actionPlans = await db.planosAcao.filter((p) => !!p.syncConflict).count();
-  return { equipments, actionPlans };
+  const inspections = await db.inspecoes.filter((i) => !!i.syncConflict).count();
+  return { equipments, actionPlans, inspections };
 }
 
 // Re-export the mapper helpers for convenience.
