@@ -664,7 +664,7 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 **Regras de engenharia aplicadas**: datas civis nunca passam por `new Date('YYYY-MM-DD')`; CAS usa o `updated_at` remoto exato (microssegundos) sem reformatação; **todo UPDATE remoto de inspeção é CAS** (`.eq('updated_at', base).select('*').maybeSingle()`) — quando não há base (registro legado) o serviço faz `fetchInspectionRowById` e adota o `updated_at` remoto como base (nunca UPDATE cego); ordem de exclusão: persistir `pendingDelete`/`syncAction:'delete'` antes de sincronizar; sem UPDATE direto do Supabase dentro de páginas (tudo via store/services); sucesso exige `.select().maybeSingle()`; conflitos não contam como erros de sync.
 
-**Validação**: `npm run lint` 0 erros (2 warnings pré-existentes) e `npm run build` OK. Scripts de validação: `scripts/simulate-inspection-cas.mjs` (standalone, sem credenciais — 9 checagens `[PASS]`) e `scripts/validate-inspection-sharing.mjs` (integração RLS/CAS/RPC/fotos com clientes anon autenticados; requer `.env.test.local`). Migration `0018` criada e revisada localmente — **aplicação remota pendente** (aguarda confirmação explícita/CLI autenticado).
+**Validação**: `npm run lint` 0 erros (2 warnings pré-existentes) e `npm run build` OK. Scripts de validação: `scripts/simulate-inspection-cas.mjs` (standalone, sem credenciais — 9 checagens `[PASS]`) e `scripts/validate-inspection-sharing.mjs` (integração RLS/CAS/RPC/fotos com clientes anon autenticados; requer `.env.test.local`). Migration `0018` criada, revisada e **aplicada** ao projeto remoto via `supabase db push`.
 
 ## 10. Branches de Trabalho
 
@@ -942,7 +942,7 @@ Máquina de estados: `unavailable` → `available` → `installed`. Detecta iOS 
 11. **Fotos 48 MP** precisam validação em dispositivo real — o cap de 25 MP limita o canvas, mas o decode inicial ainda aloca a resolução original.
 12. ~~Fotos compartilhadas entre contas~~ — resolvido no Prompt 11 (migration `0018`, `can_access_inspection()`).
 13. ~~Download de fotos remotas sob demanda~~ — resolvido no Prompt 11 (`downloadInspectionPhoto` + `DetalheInspecao.tsx`).
-14. **Migration `0018` ainda não aplicada no Supabase remoto** (sem CLI autenticado) — aplicar junto do Prompt 12 e validar com as queries da seção 22.
+14. **Migration `0018` aplicada no Supabase remoto** via `supabase db push` em 2026-09-17. Pós-validação recomendada com as queries da seção 22.
 15. **Edição de inspeção** depende do CAS por `updated_at`: se dois dispositivos editam a mesma inspeção simultaneamente, o segundo entra em conflito (resolve manualmente) — sem merge campo a campo.
 
 ---
