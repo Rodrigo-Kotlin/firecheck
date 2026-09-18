@@ -5,6 +5,7 @@ import { Menu, User, Download, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import { showToast } from '../../hooks/useToasts';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
 import { useAutoSync } from '../../hooks/useAutoSync';
+import { clearCooldown } from '../../services/networkState';
 import { OfflineBanner } from './OfflineBanner';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import { BottomNav } from './BottomNav';
@@ -12,7 +13,7 @@ import { Sidebar } from './Sidebar';
 
 export default function AppLayout() {
   useAutoSync();
-  const { user, authReady, setCurrentTab, pending, syncing, syncEnabled, triggerSync } = useAppStore();
+  const { user, authReady, setCurrentTab, pending, syncing, syncEnabled, networkUnavailable, triggerSync } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -76,6 +77,10 @@ export default function AppLayout() {
       return;
     }
     if (syncing) return;
+    if (networkUnavailable) {
+      // Tentativa manual: libera a tentativa controlada imediatamente.
+      clearCooldown();
+    }
     void triggerSync();
   };
 
@@ -137,7 +142,7 @@ export default function AppLayout() {
             )}
             {syncEnabled && (
               <div className="hidden md:block">
-                <SyncStatusBadge isOnline={isOnline} syncing={syncing} pending={pending} onClick={handleTriggerSync} />
+                <SyncStatusBadge isOnline={isOnline} syncing={syncing} pending={pending} networkUnavailable={networkUnavailable} onClick={handleTriggerSync} />
               </div>
             )}
             <button

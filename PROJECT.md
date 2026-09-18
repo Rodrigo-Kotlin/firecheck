@@ -47,7 +47,7 @@
 | QR | qrcode (canvas/DataURL) |
 | PDF | jsPDF + html2canvas |
 | Forms | react-hook-form + zod |
-| PWA | Service Worker manual (`public/sw.js`, cache-first) |
+| PWA | `vite-plugin-pwa` (Workbox `generateSW`, autoUpdate, manifest próprio em `public/manifest.json`) |
 | Ícones | Lucide React |
 | CI/CD | GitHub Actions (`ci.yml` + `deploy.yml`) |
 | Deploy | GitHub Pages |
@@ -537,7 +537,7 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 4. **Auditoria SW/PWA**:
    - `vite.config.ts`: Supabase configurado como `NetworkOnly` no runtime caching.
-   - `navigateFallback: '/'` adicionado ao `workbox` para SPA offline — navegação em sub-rotas servirá `index.html`.
+   - `navigateFallback: 'index.html'` (relativo — resolve contra o scope do SW, funciona em `/` e `/firecheck/`); `cleanupOutdatedCaches: true`. Evita o erro Workbox `non-precached-url :: [{"url":"/"}]`.
    - `manifest.json`: `display: standalone`, ícones 16–512px, `start_url: '.'`, cores definidas.
 
 5. **Auditoria de listeners**:
@@ -894,34 +894,45 @@ matchesEquipmentIdentity(eq, code): boolean    // compara com id, qrCode, qrcode
 
 ## 17. PWA (Progressive Web App)
 
-### Service Worker (`public/sw.js`)
+### Service Worker (`vite-plugin-pwa` → `dist/sw.js`)
 
-Estratégia **cache-first com atualização em background** (stale-while-revalidate):
+Gerado via `vite-plugin-pwa` (Workbox, modo `generateSW`, `registerType: 'autoUpdate'`):
 
-1. `install`: pré-carrega assets estáticos no cache `firecheck-v2`, `skipWaiting()`.
-2. `activate`: limpa caches antigos, `clients.claim()`.
-3. `fetch`: serve do cache se disponível; fetch em background para atualizar.
-4. `message`: escuta `SKIP_WAITING` para ativar novo worker.
+1. `workbox.globPatterns`: `**/*.{js,css,html,ico,png,svg,json}`.
+2. `navigateFallback: 'index.html'` — relativo, resolve contra o scope do SW e funciona tanto para a base `/` (deploy normal) quanto para `/firecheck/` (GitHub Pages). Evita o erro `non-precached-url :: [{"url":"/"}]`.
+3. `cleanupOutdatedCaches: true` — remove caches de versões anteriores do precache.
+4. `runtimeCaching` Supabase → `NetworkOnly`: requisições à nuvem nunca leem cache.
+5. `manifest: false` — o manifesto fica em `public/manifest.json` e é referenciado por `index.html` com `%BASE_URL%`.
 
-### Registro (`src/registerSW.ts`)
+### Registro (`src/hooks/usePwaUpdate.ts` + `virtual:pwa-register`)
 
-Apenas em produção (`import.meta.env.PROD`). Callback `onUpdateAvailable` exibe toast "Nova versão disponível" com ação "Atualizar".
+Registro via `registerSW` do `virtual:pwa-register` (bundle principal, `import.meta.env.PROD`).
+Callback `onUpdateAvailable` exibe toast "Nova versão disponível" com ação "Atualizar".
 
 ### Hook `usePwaUpdate`
 
-- Registra SW com callback de atualização.
+- Registra SW com callback de atualização (`autoUpdate`).
 - Escuta `appinstalled` para toast de sucesso.
 
 ### Hook `usePwaInstall`
 
 Máquina de estados: `unavailable` → `available` → `installed`. Detecta iOS para instruções manuais.
 
+### Resilência offline / sincronização (Prompt 13)
+
+- `src/services/network.ts` — classificação de erros de rede: rejects de `fetch` (`TypeError`/`FetchError`/`AbortError`), códigos HTTP funcionalmente de rede, e mensagens típicas (`Failed to fetch`, `net::ERR_*`, timeouts). Códigos funcionais (401/403/409/`42501`/`23505`, conflitos CAS) são tratados como NÃO-rede.
+- `src/services/networkState.ts` — circuit breaker singleton: `canAttemptNetwork()`, backoff progressivo de 15s→30s→60s→120s→300s após falha real de rede, `clearCooldown()` no evento `online` e na tentativa manual.
+- `src/services/sync.ts` — `syncAll` com short-circuit em cascata: qualquer etapa que comprove backend inalcançável (`network: true`) interrompe a rodada, abre o breaker e retorna `report.networkUnavailable`.
+- `src/store/index.ts` — campo `networkUnavailable` (não persistido) alimenta o `SyncStatusBadge` ("Aguardando conexão"); `hydrate`/gates usam `canAttemptNetwork()` em vez de somente `navigator.onLine`.
+- `src/services/authService.ts` — `resolveSession` tolerante offline: fallback para `user_metadata` quando o breaker está aberto (não desloga o usuário num reload sem internet); `listUsers` gateado por `canAttemptNetwork()`.
+- `src/hooks/useAutoSync.ts` — janela de sync com gate de `canAttemptNetwork()`; no evento `online` chama `clearCooldown()` antes da tentativa.
+
 ### Indicadores de sincronização
 
 | Componente | Onde | Função |
 |-----------|------|--------|
 | `OfflineBanner` | Topo (mobile + desktop) | Faixa âmbar informando modo offline |
-| `SyncStatusBadge` | Top bar (≥768px) | Pill compacto com estado do sync |
+| `SyncStatusBadge` | Top bar (≥768px) | Pill compacto com estado do sync (Sincronizando/Offline/Aguardando conexão/N pendentes/Sincronizado) |
 | `SyncNowButton` | Sidebar | Botão "Sincronizar agora" com contagem |
 | Badge Supabase | Sidebar | Status da conexão com nuvem |
 
@@ -1121,6 +1132,7 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-09-16 | `fix/firecheck-fotos-inspecao` | Fotos de inspeção — captura Blob + Storage | `compressInspectionImage` (pipeline Blob), Dexie v6 com `LocalInspectionPhoto` (migração `base64`→`legacyBase64`), transação atômica + `SaveInspectionResult`, `pushInspectionPhotos`/`pullInspectionPhotos`, preview via Object URL com revogação, storagePath-first no retry, migration `0017` | Concluído | Merge em `main` (Prompt 11 — testes finais e deploy) |
 | 2026-09-16 | `feat/firecheck-dashboard-filtros` | Dashboard clicável e filtros (KPIs confiáveis + drill-down) | `src/utils/equipmentFilters.ts` (fonte única de verdade: `getEquipmentDashboardGroups`, `getLatestInspectionForEquipment`, `getDashboardGroupByView`); 4 cards clicáveis (CADASTRADOS, INSPECIONADOS, EM DIA, PENDENTES) → `/equipamentos?view=...`; busca `?q=` sobre o conjunto do view; títulos contextuais, "Limpar filtro", empty states por visão; data civil `YYYY-MM-DD` (sem bug de fuso); sem migration/backend/fotos; lint 0 erros, build ok | Concluído | Merge em `main` (Prompt 12 — testes finais e deploy) |
 | 2026-09-16 | `feat/firecheck-inspecoes-compartilhadas` | Inspeções compartilhadas, edição, rastreabilidade e conflitos | diagnóstico da auditoria (§2); migration `0018` (updated_by/updated_by_name, trigger `inspecoes_audit`, RLS compartilhada + DELETE admin-only, storage shared, RPC recalc); campos de auditoria/conflito em `Inspection`/`LocalInspection` + Dexie v7; CAS em `updateInspectionRemote`; `pushInspections` reescrito (create/update/delete/recalc/reconcile); `pullInspections` com base; resolvers de conflito no store; `DetalheInspecao`/`EditarInspecao` + rotas; badge "Editada" e lápis em DetalhesEquipamento; pill de conflito + resolução em Relatorios; Dashboard/Sidebar com `conflictCounts.inspections`; lint 0 erros, build ok | Concluído | Aplicar migration `0018` no Supabase remoto e teste multiusuário (Prompt 12 — testes finais e deploy) |
+| 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Hardening offline/PWA (Prompt 13) | circuit breaker + backoff progressivo (`networkState.ts`, 15s→300s); classificação de erros de rede (`utils/network.ts`); `syncAll` com short-circuit em cascata e `networkUnavailable` no report; serviços (equipamentos/inspeções/planos/fotos) propagam `network` e marcam brea em vez de gravar `syncError`; logout preservado offline via `inspectorFromSession`; `useAutoSync` com gate `canAttemptNetwork` + `clearCooldown` no `online`; badge "Aguardando conexão"; `navigateFallback: 'index.html'` + `cleanupOutdatedCaches` (corrige `non-precached-url`); favicons/manifest com `%BASE_URL%`; manifest `id:"./"`; docs atualizadas; lint 0 erros, build ok | Concluído | --- |
 
 ---
 

@@ -12,6 +12,8 @@ import {
 import { db, type LocalEquipment } from '../db';
 import type { Equipment } from '../types';
 import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
+import { isNetworkUnavailableError } from '../utils/network';
+import { canAttemptNetwork } from './networkState';
 
 const isDev = import.meta.env.DEV;
 
@@ -29,6 +31,8 @@ export interface ServiceResult<T = Equipment> {
   code?: 'duplicate' | 'permission_denied' | 'not_found' | 'network' | 'unknown' | 'not_applied' | 'invalid_status' | 'not_authenticated' | 'rpc_error';
   message?: string;
   data?: T;
+  /** Comprovado que o backend está inalcançável (erro real de rede). */
+  network?: boolean;
 }
 
 /** Resultado de uma operação de busca (listagem) no Supabase.
@@ -38,6 +42,8 @@ export interface ServiceResult<T = Equipment> {
 export interface FetchResult<T> {
   ok: boolean;
   data: T[] | null;
+  /** Comprovado que o backend está inalcançável (erro real de rede). */
+  network?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,15 +52,16 @@ export interface FetchResult<T> {
 
 export async function fetchEquipments(): Promise<FetchResult<Equipment>> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, data: null };
+    return { ok: false, data: null, network: false };
   }
   const { data, error } = await supabase
     .from('equipamentos')
     .select('*')
     .order('id');
   if (error) {
-    console.error('[equipment.fetchEquipments]', error);
-    return { ok: false, data: null };
+    const network = isNetworkUnavailableError(error);
+    console.error('[equipment.fetchEquipments]', network ? '(rede)' : '', error);
+    return { ok: false, data: null, network };
   }
   return { ok: true, data: (data as DbEquipamento[]).map(dbToEquipment) };
 }
@@ -78,7 +85,7 @@ export async function findEquipmentById(id: string): Promise<Equipment | null> {
  *  distinguishes "not found" from network errors. */
 export async function fetchEquipmentById(id: string): Promise<ServiceResult> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
   const { data, error } = await supabase
     .from('equipamentos')
@@ -86,18 +93,19 @@ export async function fetchEquipmentById(id: string): Promise<ServiceResult> {
     .eq('id', id)
     .maybeSingle();
   if (error) {
-    console.error('[equipment.fetchEquipmentById]', error);
-    return { ok: false, code: 'network', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[equipment.fetchEquipmentById]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
   if (!data) {
-    return { ok: false, code: 'not_found', message: 'Equipamento não encontrado no servidor.' };
+    return { ok: false, code: 'not_found', message: 'Equipamento não encontrado no servidor.', network: false };
   }
   return { ok: true, data: dbToEquipment(data as DbEquipamento) };
 }
 
 export async function createEquipmentRemote(eq: Equipment): Promise<ServiceResult> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
   const payload = equipmentToDb(eq);
   payload.created_at = new Date().toISOString();
@@ -116,8 +124,9 @@ export async function createEquipmentRemote(eq: Equipment): Promise<ServiceResul
     if (error.code === '42501') {
       return { ok: false, code: 'permission_denied', message: 'Sem permissão para criar equipamento.' };
     }
-    console.error('[equipment.createEquipmentRemote]', error);
-    return { ok: false, code: 'unknown', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[equipment.createEquipmentRemote]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
 
   if (!data || !data.id) {
@@ -129,7 +138,7 @@ export async function createEquipmentRemote(eq: Equipment): Promise<ServiceResul
 
 export async function updateEquipmentRemote(eq: Equipment): Promise<ServiceResult> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
   const payload = equipmentToDb(eq);
   payload.updated_at = new Date().toISOString();
@@ -145,8 +154,9 @@ export async function updateEquipmentRemote(eq: Equipment): Promise<ServiceResul
     if (error.code === '42501') {
       return { ok: false, code: 'permission_denied', message: 'Sem permissão para atualizar equipamento.' };
     }
-    console.error('[equipment.updateEquipmentRemote]', error);
-    return { ok: false, code: 'unknown', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[equipment.updateEquipmentRemote]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
 
   if (!data) {
@@ -236,8 +246,9 @@ export async function softDeleteEquipment(id: string, userId?: string): Promise<
     if (error.code === '42501') {
       return { ok: false, code: 'permission_denied', message: 'Sem permissão para excluir equipamento.' };
     }
-    console.error('[equipment.softDeleteEquipment]', error);
-    return { ok: false, code: 'unknown', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[equipment.softDeleteEquipment]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
 
   const row = data as Record<string, unknown> | null;
@@ -266,8 +277,9 @@ export async function softDeleteEquipment(id: string, userId?: string): Promise<
     if (rpcError.code === 'UNAUTH') {
       return { ok: false, code: 'not_authenticated', message: 'Usuário não autenticado.' };
     }
-    console.error('[equipment.softDeleteEquipment] RPC falhou', rpcError);
-    return { ok: false, code: 'rpc_error', message: rpcError.message ?? 'Erro ao executar soft delete via RPC.' };
+    const network = isNetworkUnavailableError(rpcError);
+    console.error('[equipment.softDeleteEquipment] RPC falhou', network ? '(rede)' : '', rpcError);
+    return { ok: false, code: network ? 'network' : 'rpc_error', message: rpcError.message ?? 'Erro ao executar soft delete via RPC.', network };
   }
 
   const rpcRow = rpcData as Record<string, unknown> | null;
@@ -308,8 +320,9 @@ export async function applyEquipmentInspectionStatusRemote(
     if (error.code === '42501') {
       return { ok: false, code: 'permission_denied', message: 'Sem permissão para executar esta operação.' };
     }
-    console.error('[equipment.applyEquipmentInspectionStatus]', error);
-    return { ok: false, code: 'rpc_error', message: error.message ?? 'Não foi possível atualizar o status do equipamento no servidor.' };
+    const network = isNetworkUnavailableError(error);
+    console.error('[equipment.applyEquipmentInspectionStatus]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'rpc_error', message: error.message ?? 'Não foi possível atualizar o status do equipamento no servidor.', network };
   }
 
   if (!data) {
@@ -329,7 +342,7 @@ export async function applyEquipmentInspectionStatusRemote(
 // ---------------------------------------------------------------------------
 
 export async function carregarEquipamentos(): Promise<Equipment[]> {
-  const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+  const isOnline = canAttemptNetwork();
 
   if (isDev) {
     console.log(`[loader] online=${isOnline}, supabase=${isSupabaseConfigured}`);

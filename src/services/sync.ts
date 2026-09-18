@@ -44,6 +44,12 @@ import {
 import { getInspectionPhotoBlob, mimeToExtension, uploadInspectionPhotoBlob, removeInspectionPhotoObject } from './photoService';
 import type { Equipment } from '../types';
 import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
+import { isNetworkUnavailableError } from '../utils/network';
+import {
+  canAttemptNetwork,
+  markNetworkFailure,
+  markNetworkSuccess,
+} from './networkState';
 
 /** Concurrency guard — prevents overlapping sync runs. */
 let _syncInProgress = false;
@@ -55,6 +61,9 @@ export interface SyncReport {
   errors: number;
   skipped: boolean;
   reason?: string;
+  /** Circuit breaker abriu durante a rodada por erro real de rede — a rodada
+   *  foi interrompida prematuramente (short-circuit) e o backoff foi ativado. */
+  networkUnavailable: boolean;
 
   // -- Detalhamento por domínio --
   pushEqOk: number;
@@ -90,7 +99,7 @@ export interface SyncReport {
 
 function skip(reason: string): SyncReport {
   return {
-    pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason,
+    pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason, networkUnavailable: false,
     pushEqOk: 0, pushInsOk: 0, pushErrors: 0,
     pullEqImported: 0, pullEqReconciled: 0,
     pullInsImported: 0, pullInsReconciled: 0,
@@ -105,10 +114,12 @@ function skip(reason: string): SyncReport {
   };
 }
 
-function canSync(): boolean {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
-  if (!isSupabaseConfigured || !supabase) return false;
-  return true;
+/** Por que a rodada NÃO deve iniciar (null = pode iniciar). */
+function canSync(): string | null {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return 'offline';
+  if (!isSupabaseConfigured || !supabase) return 'supabase-not-configured';
+  if (!canAttemptNetwork()) return 'network-cooldown';
+  return null;
 }
 
 export function isSyncInProgress(): boolean {
@@ -126,10 +137,11 @@ function isConflict(localBase: string | null | undefined, remoteUpdatedAt: strin
 // PUSH
 // ---------------------------------------------------------------------------
 
-async function pushEquipments(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
+async function pushEquipments(userId?: string): Promise<{ ok: number; errors: number; deleted: number; network?: boolean }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
+  let network = false;
 
   const markConflict = async (id: string, remoteUpdatedAt: string, reason: string) => {
     if (import.meta.env.DEV) {
@@ -179,6 +191,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
     } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
       // Erro de rede — preservar pendência
       console.error('[sync.pushEquipments] Erro ao verificar conflito para exclusão', { id: eq.id });
+      if (remoteResult.network) {
+        network = true;
+        break;
+      }
       errors++;
       continue;
     }
@@ -201,6 +217,11 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
       deleted++;
       if (import.meta.env.DEV) console.log('[sync] Equipamento %s deletado (soft) do Supabase', eq.id);
     } else {
+      if (result.network) {
+        // Rede inalcançável: preserva a pendência e NÃO grava syncError.
+        network = true;
+        break;
+      }
       await db.equipamentos.update(eq.id, { syncError: result.code ?? 'unknown' });
       console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', { id: eq.id, code: result.code, message: result.message });
       errors++;
@@ -242,6 +263,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         });
         ok++;
         if (import.meta.env.DEV) console.log('[sync] Equipamento %s criado com sucesso', eq.id);
+      } else if (result.network) {
+        // Rede inalcançável: preserva a pendência e interrompe a rodada.
+        network = true;
+        break;
       }
     } else if (eq.syncAction === 'update') {
       // Verificar conflito antes de atualizar
@@ -271,6 +296,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         } else {
           // Erro de rede — preservar pendência
           console.error('[sync.pushEquipments] Erro ao verificar conflito para update', { id: eq.id });
+          if (remoteResult.network) {
+            network = true;
+            break;
+          }
           errors++;
           continue;
         }
@@ -302,6 +331,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
             ok++;
             if (import.meta.env.DEV) console.log('[sync] Equipamento %s atualizado com sucesso', eq.id);
           } else {
+            if (result.network) {
+              network = true;
+              break;
+            }
             console.error('[sync] Falha ao atualizar equipamento %s — mantendo sincronizado: false', eq.id);
             errors++;
           }
@@ -336,6 +369,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         }
       } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
         console.error('[sync] Erro ao verificar equipamento remoto %s', eq.id);
+        if (remoteResult.network) {
+          network = true;
+          break;
+        }
         errors++;
       } else {
         result = await createEquipmentRemote(toSync);
@@ -355,6 +392,9 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         } else if (result.code === 'duplicate') {
           await db.equipamentos.update(eq.id, { syncError: 'duplicate' });
           if (import.meta.env.DEV) console.warn('[sync] Conflito de duplicidade para %s — syncError=duplicate', eq.id);
+        } else if (result.network) {
+          network = true;
+          break;
         } else {
           console.error('[sync] Falha ao sincronizar equipamento %s', eq.id);
           errors++;
@@ -365,13 +405,14 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
   if (import.meta.env.DEV) {
     console.log(`[sync] pushEquipments final: ok=${ok} errors=${errors} deleted=${deleted}`);
   }
-  return { ok, errors, deleted };
+  return { ok, errors, deleted, network };
 }
 
-async function pushInspections(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
+async function pushInspections(userId?: string): Promise<{ ok: number; errors: number; deleted: number; network?: boolean }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
+  let network = false;
 
   const markConflict = async (id: string, remoteUpdatedAt: string | null, reason: string) => {
     if (import.meta.env.DEV) {
@@ -428,6 +469,10 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
         if (import.meta.env.DEV) {
           console.log(`[sync] status do equipamento %s reconciliado via inspeções mais recentes`, eq.id);
         }
+      } else if (rpc.network) {
+        // Rede inalcançável — interrompe a rodada; reconcilia na próxima.
+        network = true;
+        break;
       } else {
         console.error('[sync] Falha ao reconciliar status do equipamento %s: %s',
           eq.id, rpc.message ?? rpc.code);
@@ -455,6 +500,10 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       }
     } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
       console.error('[sync.pushInspections] Erro ao verificar conflito para exclusão', { id: insp.id });
+      if (remoteResult.network) {
+        network = true;
+        break;
+      }
       errors++;
       continue;
     }
@@ -469,12 +518,22 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       } else {
         // Mantém statusUpdatePending para a reconciliação da próxima rodada.
         await db.equipamentos.update(insp.equipmentId, { sincronizado: false, statusUpdatePending: true });
+        if (isNetworkUnavailableError(error)) {
+          // Rede inalcançável — interrompe a rodada preservando a pendência.
+          network = true;
+          break;
+        }
         console.error('[sync.pushInspections] Falha ao recalcular status do equipamento %s após exclusão',
           insp.equipmentId);
       }
       deleted++;
       if (import.meta.env.DEV) console.log('[sync] Inspeção %s excluída do Supabase (admin)', insp.id);
     } else {
+      if (isNetworkUnavailableError(error)) {
+        console.error('[sync.pushInspections] Falha de rede ao deletar inspeção', { id: insp.id });
+        network = true;
+        break;
+      }
       console.error('[sync.pushInspections] Falha ao deletar inspeção no Supabase', {
         id: insp.id,
         code: error.code,
@@ -512,6 +571,10 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       } else {
         // Falha de rede na sondagem: não arrisca um write — tenta na próxima.
         console.error('[sync] Sondagem remota falhou para inspeção %s — %s', insp.id, probe.message);
+        if (probe.network) {
+          network = true;
+          break;
+        }
         errors++;
         continue;
       }
@@ -522,6 +585,10 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       const created = await upsertInspection(toSync);
       if (!created.ok || !created.row) {
         console.error('[sync] Falha ao criar inspeção %s — %s', insp.id, created.message ?? 'erro desconhecido');
+        if (created.network) {
+          network = true;
+          break;
+        }
         errors++;
         continue;
       }
@@ -550,6 +617,10 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
         // A inspeção foi salva no servidor; o status é reconciliado na próxima
         // rodada sem regressão de dados.
         await db.equipamentos.update(rpcEquipmentId, { sincronizado: false, statusUpdatePending: true });
+        if (rpc.network) {
+          network = true;
+          break;
+        }
         console.error('[sync] Inspeção %s criada, mas RPC de status falhou: %s',
           insp.id, rpc.message ?? rpc.code);
       }
@@ -580,6 +651,10 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
         continue;
       }
       console.error('[sync] Falha ao atualizar inspeção %s — %s', insp.id, updated.message);
+      if (updated.network) {
+        network = true;
+        break;
+      }
       errors++;
       continue;
     }
@@ -604,6 +679,10 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       await applyRpcToEquipment(rpcEquipmentId, rpc.data as Record<string, unknown>, updated.row.updated_at);
     } else {
       await db.equipamentos.update(rpcEquipmentId, { sincronizado: false, statusUpdatePending: true });
+      if (rpc.network) {
+        network = true;
+        break;
+      }
       console.error('[sync] Inspeção %s atualizada, mas RPC de status falhou: %s',
         insp.id, rpc.message ?? rpc.code);
     }
@@ -619,13 +698,14 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
   if (import.meta.env.DEV) {
     console.log(`[sync] pushInspections final: ok=${ok} errors=${errors} deleted=${deleted}`);
   }
-  return { ok, errors, deleted };
+  return { ok, errors, deleted, network };
 }
 
-async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
+async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: number; deleted: number; network?: boolean }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
+  let network = false;
 
   const markConflict = async (id: string, remoteUpdatedAt: string, reason: string) => {
     if (import.meta.env.DEV) {
@@ -671,6 +751,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
       }
     } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
       console.error('[sync.pushActionPlans] Erro ao verificar conflito para exclusão', { id: plan.id });
+      if (remoteResult.network) {
+        network = true;
+        break;
+      }
       errors++;
       continue;
     }
@@ -690,6 +774,11 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
       deleted++;
       if (import.meta.env.DEV) console.log('[sync] Plano %s deletado (soft) do Supabase', plan.id);
     } else {
+      if (result.network) {
+        // Rede inalcançável: preserva a pendência e interrompe a rodada.
+        network = true;
+        break;
+      }
       console.error('[sync.pushActionPlans] Falha ao deletar plano no Supabase', { id: plan.id });
       errors++;
     }
@@ -723,6 +812,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         });
         ok++;
         if (import.meta.env.DEV) console.log('[sync] Plano %s criado com sucesso', plan.id);
+      } else if (result.network) {
+        // Rede inalcançável: preserva a pendência e interrompe a rodada.
+        network = true;
+        break;
       }
     } else if (plan.syncAction === 'update') {
       if (import.meta.env.DEV) {
@@ -749,6 +842,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
           }
         } else {
           console.error('[sync.pushActionPlans] Erro ao verificar conflito para update', { id: plan.id });
+          if (remoteResult.network) {
+            network = true;
+            break;
+          }
           errors++;
           continue;
         }
@@ -778,6 +875,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
             ok++;
             if (import.meta.env.DEV) console.log('[sync] Plano %s atualizado com sucesso', plan.id);
           } else {
+            if (result.network) {
+              network = true;
+              break;
+            }
             console.error('[sync] Falha ao atualizar plano %s — mantendo sincronizado: false', plan.id);
             errors++;
           }
@@ -809,6 +910,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         }
       } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
         console.error('[sync] Erro ao verificar plano remoto %s', plan.id);
+        if (remoteResult.network) {
+          network = true;
+          break;
+        }
         errors++;
         continue;
       } else {
@@ -829,6 +934,9 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         } else if (result.code === 'duplicate') {
           await db.planosAcao.update(plan.id, { syncError: 'duplicate' });
           if (import.meta.env.DEV) console.warn('[sync] Conflito de duplicidade para plano %s — syncError=duplicate', plan.id);
+        } else if (result.network) {
+          network = true;
+          break;
         } else {
           console.error('[sync] Falha ao sincronizar plano %s', plan.id);
           errors++;
@@ -839,7 +947,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
   if (import.meta.env.DEV) {
     console.log(`[sync] pushActionPlans final: ok=${ok} errors=${errors} deleted=${deleted}`);
   }
-  return { ok, errors, deleted };
+  return { ok, errors, deleted, network };
 }
 
 // ---------------------------------------------------------------------------
@@ -863,10 +971,11 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
  *   • Local-only deletes (`syncAction: 'delete'`) remove both the object and
  *     the metadata row, then delete the local row.
  */
-async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; errors: number; skipped: number }> {
+async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; errors: number; skipped: number; network?: boolean }> {
   let pushed = 0;
   let errors = 0;
   let skipped = 0;
+  let network = false;
 
   const pending = await db.fotos.filter((p) => !p.sincronizado).toArray();
   if (import.meta.env.DEV && pending.length > 0) {
@@ -888,6 +997,10 @@ async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; 
         if (import.meta.env.DEV) console.log('[sync] Foto %s removida do Supabase', photo.id);
       } catch (err) {
         console.error('[sync.pushInspectionPhotos] falha ao remover foto', { id: photo.id, err });
+        if (isNetworkUnavailableError(err)) {
+          network = true;
+          break;
+        }
         errors++;
       }
       continue;
@@ -918,7 +1031,15 @@ async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; 
         // Upload object (upsert keeps retries idempotent)
         const blob = getInspectionPhotoBlob(photo);
         const up = await uploadInspectionPhotoBlob(path, blob);
-        if (!up.ok) throw new Error(up.error?.message ?? 'Falha ao enviar foto.');
+        if (!up.ok) {
+          if (up.network) {
+            // Rede inalcançável: preserva a foto, NÃO grava syncError e
+            // interrompe a rodada (curto-circuito).
+            network = true;
+            break;
+          }
+          throw new Error(up.error?.message ?? 'Falha ao enviar foto.');
+        }
 
         // Persistir storagePath assim que o upload é confirmado: se o upsert
         // de `fotos_inspecao` falhar logo abaixo, o próximo sync sabe que o
@@ -943,7 +1064,15 @@ async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; 
         },
         { onConflict: 'id' },
       );
-      if (metaError) throw metaError;
+      if (metaError) {
+        if (isNetworkUnavailableError(metaError)) {
+          // Rede inalcançável: preserva a foto (já provavelmente com
+          // storagePath gravado), NÃO grava syncError, interrompe a rodada.
+          network = true;
+          break;
+        }
+        throw metaError;
+      }
 
       // 5) Only now confirm locally
       await db.fotos.update(photo.id, {
@@ -975,7 +1104,7 @@ async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; 
   if (import.meta.env.DEV) {
     console.log(`[sync] pushInspectionPhotos final: pushed=${pushed} errors=${errors} skipped=${skipped}`);
   }
-  return { pushed, errors, skipped };
+  return { pushed, errors, skipped, network };
 }
 
 // ---------------------------------------------------------------------------
@@ -988,6 +1117,8 @@ interface PullResult {
   error: boolean;
   /** true quando o Supabase retornou resposta válida vazia (não erro). */
   empty: boolean;
+  /** Comprovado que o backend está inalcançável (erro real de rede). */
+  network?: boolean;
 }
 
 /** Import cloud equipment rows, reconcile orphans, preserve pending changes.
@@ -1006,7 +1137,7 @@ async function pullEquipments(): Promise<PullResult> {
   // --- Erro remoto: preservar tudo ---
   if (!result.ok) {
     console.error('[sync] pullEquipments erro: preservando dados locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, network: result.network ?? false };
   }
 
   const cloud = result.data ?? [];
@@ -1118,7 +1249,7 @@ async function pullInspections(): Promise<PullResult> {
   // --- Erro remoto: preservar tudo ---
   if (!result.ok) {
     console.error('[sync] pullInspections erro: preservando dados locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, network: result.network ?? false };
   }
 
   const cloud = result.data ?? [];
@@ -1181,7 +1312,7 @@ async function pullActionPlans(): Promise<PullResult> {
 
   if (!result.ok) {
     console.error('[sync] pullActionPlans erro: preservando dados locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, network: result.network ?? false };
   }
 
   const cloud = result.data ?? [];
@@ -1289,8 +1420,9 @@ async function pullInspectionPhotos(): Promise<PullResult> {
   }
   const { data, error } = await supabase.from('fotos_inspecao').select('*');
   if (error) {
+    const network = isNetworkUnavailableError(error);
     console.error('[sync] pullInspectionPhotos erro: preservando fotos locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, network };
   }
 
   const rows = (data ?? []) as DbFotoInspecao[];
@@ -1336,7 +1468,7 @@ async function pullInspectionPhotos(): Promise<PullResult> {
     console.log('[sync] pullInspectionPhotos final: cloud=%d imported=%d empty=%s',
       rows.length, imported, rows.length === 0 ? 'true' : 'false');
   }
-  return { imported, reconciled: 0, error: false, empty: rows.length === 0 };
+  return { imported, reconciled: 0, error: false, empty: rows.length === 0, network: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -1360,12 +1492,9 @@ export async function syncAll(
     return skip('sync-in-progress');
   }
 
-  if (!canSync()) {
-    return skip(
-      typeof navigator !== 'undefined' && !navigator.onLine
-        ? 'offline'
-        : 'supabase-not-configured',
-    );
+  const blockReason = canSync();
+  if (blockReason) {
+    return skip(blockReason);
   }
 
   _syncInProgress = true;
@@ -1411,55 +1540,90 @@ export async function syncAll(
   let pullApError = false;
   let pullApEmpty = false;
 
+  /** Abre clicado por erro real de rede durante a rodada. */
+  let networkUnavailable = false;
+
   try {
     if (!options.pullOnly) {
       const eqR = await pushEquipments(options.userId);
-      const insR = await pushInspections(options.userId);
-      const phR = await pushInspectionPhotos(options.userId);
-      const apR = await pushActionPlans(options.userId);
       pushEqOk = eqR.ok;
-      pushInsOk = insR.ok;
-      pushPhotoOk = phR.pushed;
-      pushPhotoErrors = phR.errors;
-      pushPhotoSkipped = phR.skipped;
-      pushApOk = apR.ok;
-      pushApErrors = apR.errors;
-      pushErrors = eqR.errors + insR.errors + phR.errors + apR.errors;
+      pushErrors = eqR.errors;
+      deleted += eqR.deleted;
+      networkUnavailable = !!eqR.network;
+
+      if (!networkUnavailable) {
+        const insR = await pushInspections(options.userId);
+        pushInsOk = insR.ok;
+        pushErrors += insR.errors;
+        deleted += insR.deleted;
+        networkUnavailable = !!insR.network;
+      }
+
+      if (!networkUnavailable) {
+        const phR = await pushInspectionPhotos(options.userId);
+        pushPhotoOk = phR.pushed;
+        pushPhotoErrors = phR.errors;
+        pushPhotoSkipped = phR.skipped;
+        networkUnavailable = !!phR.network;
+      }
+
+      if (!networkUnavailable) {
+        const apR = await pushActionPlans(options.userId);
+        pushApOk = apR.ok;
+        pushApErrors = apR.errors;
+        deleted += apR.deleted;
+        networkUnavailable = !!apR.network;
+      }
+
       pushed = pushEqOk + pushInsOk + pushPhotoOk + pushApOk;
-      deleted += eqR.deleted + insR.deleted + apR.deleted;
       errors += pushErrors;
     }
 
-    if (!options.pushOnly) {
+    if (!networkUnavailable && !options.pushOnly) {
       const eqP = await pullEquipments();
-      const insP = await pullInspections();
-      const phP = await pullInspectionPhotos();
-      const apP = await pullActionPlans();
-
       pullEqImported = eqP.imported;
       pullEqReconciled = eqP.reconciled;
       pullEqError = eqP.error;
       pullEqEmpty = eqP.empty;
+      pulled += eqP.imported;
+      if (eqP.error) errors++;
+      networkUnavailable = !!eqP.network;
 
-      pullInsImported = insP.imported;
-      pullInsReconciled = insP.reconciled;
-      pullInsError = insP.error;
-      pullInsEmpty = insP.empty;
+      if (!networkUnavailable) {
+        const insP = await pullInspections();
+        pullInsImported = insP.imported;
+        pullInsReconciled = insP.reconciled;
+        pullInsError = insP.error;
+        pullInsEmpty = insP.empty;
+        pulled += insP.imported;
+        if (insP.error) errors++;
+        networkUnavailable = !!insP.network;
+      }
 
-      pullPhotoImported = phP.imported;
-      pullPhotoReconciled = phP.reconciled;
-      pullPhotoError = phP.error;
-      pullPhotoEmpty = phP.empty;
+      if (!networkUnavailable) {
+        const phP = await pullInspectionPhotos();
+        pullPhotoImported = phP.imported;
+        pullPhotoReconciled = phP.reconciled;
+        pullPhotoError = phP.error;
+        pullPhotoEmpty = phP.empty;
+        pulled += phP.imported;
+        if (phP.error) errors++;
+        networkUnavailable = !!phP.network;
+      }
 
-      pullApImported = apP.imported;
-      pullApReconciled = apP.reconciled;
-      pullApError = apP.error;
-      pullApEmpty = apP.empty;
-
-      pulled = eqP.imported + insP.imported + phP.imported + apP.imported;
-      if (eqP.error || insP.error || phP.error || apP.error) errors++;
+      if (!networkUnavailable) {
+        const apP = await pullActionPlans();
+        pullApImported = apP.imported;
+        pullApReconciled = apP.reconciled;
+        pullApError = apP.error;
+        pullApEmpty = apP.empty;
+        pulled += apP.imported;
+        if (apP.error) errors++;
+        networkUnavailable = !!apP.network;
+      }
     }
   } catch (err) {
+    if (isNetworkUnavailableError(err)) networkUnavailable = true;
     console.error('[sync] exceção durante syncAll:', err);
     errors++;
   } finally {
@@ -1468,11 +1632,54 @@ export async function syncAll(
       console.log('[sync] ' +
         `Push: eq=${pushEqOk} ins=${pushInsOk} photo=${pushPhotoOk}(skip=${pushPhotoSkipped}) ap=${pushApOk} errors=${pushErrors} | ` +
         `Pull: eq=${pullEqImported}(${pullEqReconciled}) ins=${pullInsImported}(${pullInsReconciled}) photo=${pullPhotoImported}(${pullPhotoReconciled}) ap=${pullApImported}(${pullApReconciled}) | ` +
-        `Delete=${deleted} Erros=${errors}`);
+        `Delete=${deleted} Erros=${errors} Rede=${networkUnavailable ? 'inalcançável' : 'ok'}`);
     }
     _syncInProgress = false;
     if (import.meta.env.DEV) console.log('[sync] ===== FIM =====');
   }
+
+  // Falha real de rede comprovada → abre o circuit breaker com backoff e
+  // interrompe a rodada. Nenhuma próxima etapa da cascata foi executada.
+  if (networkUnavailable) {
+    markNetworkFailure();
+    if (import.meta.env.DEV) console.log('[sync] Rodada interrompida por rede — backoff ativado.');
+    return {
+      pushed,
+      pulled,
+      deleted,
+      errors,
+      skipped: true,
+      reason: 'network-unavailable',
+      networkUnavailable: true,
+      pushEqOk,
+      pushInsOk,
+      pushErrors,
+      pullEqImported,
+      pullEqReconciled,
+      pullInsImported,
+      pullInsReconciled,
+      pullEqError,
+      pullInsError,
+      pullEqEmpty,
+      pullInsEmpty,
+      pushApOk,
+      pushApErrors,
+      pullApImported,
+      pullApReconciled,
+      pullApError,
+      pullApEmpty,
+      pushPhotoOk,
+      pushPhotoErrors,
+      pushPhotoSkipped,
+      pullPhotoImported,
+      pullPhotoReconciled,
+      pullPhotoError,
+      pullPhotoEmpty,
+    };
+  }
+
+  // Rodada completa terminou com o backend respondendo → fecha o breaker.
+  markNetworkSuccess();
 
   return {
     pushed,
@@ -1480,6 +1687,7 @@ export async function syncAll(
     deleted,
     errors,
     skipped: false,
+    networkUnavailable: false,
     pushEqOk,
     pushInsOk,
     pushErrors,

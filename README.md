@@ -49,7 +49,7 @@ automática para a nuvem via Supabase.
 | Estilo | TailwindCSS 4 |
 | QR | html5-qrcode |
 | PDF | jsPDF + html2canvas |
-| PWA | Service Worker manual (`public/sw.js`) + hooks (`usePwaUpdate`, `usePwaInstall`) |
+| PWA | `vite-plugin-pwa` (Workbox `generateSW`, autoUpdate) + hooks (`usePwaUpdate`, `usePwaInstall`) |
 
 ## 🚀 Quick start
 
@@ -119,8 +119,7 @@ firecheck/
 │       └── 0003_supabase_auth.sql
 └── src/
     ├── App.tsx             # rotas + Toaster + usePwaUpdate
-    ├── main.tsx            # entrypoint + registerSW
-    ├── registerSW.ts       # PWA service worker registration
+    ├── main.tsx            # entrypoint (registerSW via usePwaUpdate)
     ├── index.css           # design system + PWA styles (toaster, offline-banner, sync-now, etc.)
     ├── components/         # Toaster, ToggleSwitch, QrCodePrintCard, etc.
     │   └── layout/         # AppLayout (sidebar + bottom nav + PWA install + sync indicators)

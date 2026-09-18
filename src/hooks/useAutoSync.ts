@@ -2,6 +2,7 @@ import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useAppStore } from '../store';
 import { isSyncInProgress } from '../services/sync';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { canAttemptNetwork, clearCooldown } from '../services/networkState';
 
 const AUTO_SYNC_INTERVAL_MS = 30_000;
 const AUTO_SYNC_THROTTLE_MS = 8_000;
@@ -35,6 +36,7 @@ export function useAutoSync() {
       if (!isSupabaseConfigured) return false;
       if (!navigator.onLine) return false;
       if (isSyncInProgress()) return false;
+      if (!canAttemptNetwork()) return false;
       return true;
     };
 
@@ -50,6 +52,7 @@ export function useAutoSync() {
         if (import.meta.env.DEV) {
           if (isSyncInProgress()) console.log('[auto-sync] skipped: sync in progress');
           else if (!navigator.onLine) console.log('[auto-sync] skipped: offline');
+          else if (!canAttemptNetwork()) console.log('[auto-sync] skipped: network cooldown');
           else if (!isSupabaseConfigured) console.log('[auto-sync] skipped: supabase not configured');
         }
         return;
@@ -75,7 +78,13 @@ export function useAutoSync() {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') triggerAutoSync('visibility');
     };
-    const handleOnline = () => triggerAutoSync('online');
+    const handleOnline = () => {
+      // Libera o cooldown ANTES da tentativa: garante uma tentativa controlada
+      // assim que o browser reporta online (a ordem importa — o breaker só
+      // reabre se a tentativa falhar por rede de novo).
+      clearCooldown();
+      triggerAutoSync('online');
+    };
 
     window.addEventListener('focus', handleFocus);
     document.addEventListener('visibilitychange', handleVisibility);

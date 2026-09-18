@@ -10,20 +10,23 @@ import {
 import { db } from '../db';
 import type { Equipment, Inspection } from '../types';
 import type { FetchResult, ServiceResult } from './equipmentService';
+import { isNetworkUnavailableError } from '../utils/network';
+import { canAttemptNetwork } from './networkState';
 
 const isDev = import.meta.env.DEV;
 
 export async function fetchInspections(): Promise<FetchResult<Inspection>> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, data: null };
+    return { ok: false, data: null, network: false };
   }
   const { data, error } = await supabase
     .from('inspecoes')
     .select('*')
     .order('data', { ascending: false });
   if (error) {
-    console.error('[inspection.fetch]', error);
-    return { ok: false, data: null };
+    const network = isNetworkUnavailableError(error);
+    console.error('[inspection.fetch]', network ? '(rede)' : '', error);
+    return { ok: false, data: null, network };
   }
   return { ok: true, data: (data as DbInspecao[]).map(dbToInspection) };
 }
@@ -31,7 +34,7 @@ export async function fetchInspections(): Promise<FetchResult<Inspection>> {
 /** Fetch a single inspection by ID (mapped model). */
 export async function fetchInspectionById(id: string): Promise<ServiceResult<Inspection>> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
   const { data, error } = await supabase
     .from('inspecoes')
@@ -39,11 +42,12 @@ export async function fetchInspectionById(id: string): Promise<ServiceResult<Ins
     .eq('id', id)
     .maybeSingle();
   if (error) {
-    console.error('[inspection.fetchById]', error);
-    return { ok: false, code: 'network', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[inspection.fetchById]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
   if (!data) {
-    return { ok: false, code: 'not_found', message: 'Inspeção não encontrada no servidor.' };
+    return { ok: false, code: 'not_found', message: 'Inspeção não encontrada no servidor.', network: false };
   }
   return { ok: true, data: dbToInspection(data as DbInspecao) };
 }
@@ -52,16 +56,17 @@ export async function fetchInspectionById(id: string): Promise<ServiceResult<Ins
  *  Never throws: network failures are reported via `error`. */
 async function fetchInspectionRowById(
   id: string,
-): Promise<{ found: boolean; row?: DbInspecao; error?: string }> {
-  if (!isSupabaseConfigured || !supabase) return { found: false, error: 'Supabase não configurado.' };
+): Promise<{ found: boolean; row?: DbInspecao; error?: string; network?: boolean }> {
+  if (!isSupabaseConfigured || !supabase) return { found: false, error: 'Supabase não configurado.', network: false };
   const { data, error } = await supabase
     .from('inspecoes')
     .select('*')
     .eq('id', id)
     .maybeSingle();
   if (error) {
-    console.error('[inspection.fetchRowById]', error);
-    return { found: false, error: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[inspection.fetchRowById]', network ? '(rede)' : '', error);
+    return { found: false, error: error.message, network };
   }
   if (!data) return { found: false };
   return { found: true, row: data as DbInspecao };
@@ -71,10 +76,10 @@ async function fetchInspectionRowById(
  *  so the caller can record the remote `updated_at` as the CAS base. */
 export async function upsertInspection(
   insp: Inspection,
-): Promise<{ ok: boolean; row?: DbInspecao; message?: string }> {
+): Promise<{ ok: boolean; row?: DbInspecao; message?: string; network?: boolean }> {
   if (!isSupabaseConfigured || !supabase) {
     console.warn('[inspection.upsert] Supabase não configurado — ignorando.');
-    return { ok: false, message: 'Supabase não configurado.' };
+    return { ok: false, message: 'Supabase não configurado.', network: false };
   }
 
   const { data, error } = await supabase
@@ -85,10 +90,11 @@ export async function upsertInspection(
 
   if (error) {
     if (error.code === '42501') {
-      return { ok: false, message: 'Sem permissão para salvar a inspeção no servidor.' };
+      return { ok: false, message: 'Sem permissão para salvar a inspeção no servidor.', network: false };
     }
-    console.error('[inspection.upsert]', error);
-    return { ok: false, message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[inspection.upsert]', network ? '(rede)' : '', error);
+    return { ok: false, message: error.message, network };
   }
 
   if (!data) {
@@ -130,6 +136,8 @@ export type InspectionUpdateResult =
       message: string;
       /** Estado remoto atual (quando conhecido) — usado para orientar a revisão. */
       current?: Inspection | null;
+      /** Comprovado que o backend está inalcançável (erro real de rede). */
+      network?: boolean;
     };
 
 /** Update an inspection with optimistic concurrency control (CAS).
@@ -147,7 +155,7 @@ export async function updateInspectionRemote(
   input: UpdateInspectionRemoteInput,
 ): Promise<InspectionUpdateResult> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
 
   // 1. Resolver a base do CAS — nunca UPDATE sem base.
@@ -159,7 +167,7 @@ export async function updateInspectionRemote(
   if (!base) {
     const remote = await fetchInspectionRowById(input.id);
     if (remote.error) {
-      return { ok: false, code: 'network', message: remote.error };
+      return { ok: false, code: remote.network ? 'network' : 'unknown', message: remote.error, network: remote.network ?? false };
     }
     if (!remote.found || !remote.row) {
       return {
@@ -175,6 +183,7 @@ export async function updateInspectionRemote(
         ok: false,
         code: 'network',
         message: 'Servidor não retornou a versão da inspeção — tente novamente.',
+        network: false,
       };
     }
   }
@@ -197,13 +206,14 @@ export async function updateInspectionRemote(
 
   if (error) {
     if (error.code === '42501') {
-      return { ok: false, code: 'permission_denied', message: 'Sem permissão para editar esta inspeção.' };
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para editar esta inspeção.', network: false };
     }
     if (error.code === '23514' || error.code === '22007' || error.code === '22P02') {
-      return { ok: false, code: 'invalid_status', message: 'Dados inválidos para esta inspeção.' };
+      return { ok: false, code: 'invalid_status', message: 'Dados inválidos para esta inspeção.', network: false };
     }
-    console.error('[inspection.updateRemote]', error);
-    return { ok: false, code: 'unknown', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[inspection.updateRemote]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
 
   if (data) {
@@ -213,7 +223,7 @@ export async function updateInspectionRemote(
   // 3. Nenhuma linha: o CAS falhou. Distingue conflito de exclusão/existência.
   const remote = await fetchInspectionRowById(input.id);
   if (remote.error) {
-    return { ok: false, code: 'network', message: remote.error };
+    return { ok: false, code: remote.network ? 'network' : 'unknown', message: remote.error, network: remote.network ?? false };
   }
   if (!remote.found || !remote.row) {
     return {
@@ -242,7 +252,7 @@ export async function recalculateEquipmentFromLatestInspectionRemote(
   triggerInspectionId?: string,
 ): Promise<ServiceResult<Record<string, unknown>>> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
 
   const { data, error } = await supabase.rpc('recalculate_equipment_from_latest_inspection', {
@@ -258,8 +268,9 @@ export async function recalculateEquipmentFromLatestInspectionRemote(
     if (error.code === '42501') {
       return { ok: false, code: 'permission_denied', message: 'Sem permissão para atualizar o status do equipamento.' };
     }
-    console.error('[inspection.recalculateEquipment]', error);
-    return { ok: false, code: 'rpc_error', message: error.message ?? 'Falha ao recalcular o status do equipamento.' };
+    const network = isNetworkUnavailableError(error);
+    console.error('[inspection.recalculateEquipment]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'rpc_error', message: error.message ?? 'Falha ao recalcular o status do equipamento.', network };
   }
 
   return { ok: true, data: (data ?? {}) as Record<string, unknown> };
@@ -271,7 +282,7 @@ export async function recalculateEquipmentFromLatestInspectionRemote(
 // ---------------------------------------------------------------------------
 
 export async function carregarInspecoes(): Promise<Inspection[]> {
-  const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+  const isOnline = canAttemptNetwork();
 
   if (isDev) {
     console.log(`[loader-inspecoes] online=${isOnline}, supabase=${isSupabaseConfigured}`);

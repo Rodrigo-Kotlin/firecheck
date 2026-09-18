@@ -12,6 +12,7 @@
  * the `inspection-photos` bucket, storing metadata in `fotos_inspecao`.
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { isNetworkUnavailableError } from '../utils/network';
 
 export const PHOTO_BUCKET = 'inspection-photos';
 
@@ -353,10 +354,10 @@ export async function compressImage(
 export async function uploadInspectionPhotoBlob(
   path: string,
   blob: Blob,
-): Promise<{ ok: boolean; path?: string; error?: { message?: string; code?: string } }> {
+): Promise<{ ok: boolean; path?: string; error?: { message?: string; code?: string }; network?: boolean }> {
   if (!isSupabaseConfigured || !supabase) {
     console.warn('[photo.upload] Supabase não configurado — foto permanece local.');
-    return { ok: false, error: { message: 'Supabase não configurado.' } };
+    return { ok: false, error: { message: 'Supabase não configurado.' }, network: false };
   }
   try {
     const { error } = await supabase.storage.from(PHOTO_BUCKET).upload(path, blob, {
@@ -365,13 +366,15 @@ export async function uploadInspectionPhotoBlob(
       cacheControl: '3600',
     });
     if (error) {
-      console.error('[photo.upload]', error);
-      return { ok: false, error: { message: error.message, code: error.name } };
+      const network = isNetworkUnavailableError(error);
+      console.error('[photo.upload]', network ? '(rede)' : '', error);
+      return { ok: false, error: { message: error.message, code: error.name }, network };
     }
     return { ok: true, path };
   } catch (err) {
-    console.error('[photo.upload] exceção:', err);
-    return { ok: false, error: { message: err instanceof Error ? err.message : 'Erro ao enviar foto.' } };
+    const network = isNetworkUnavailableError(err);
+    console.error('[photo.upload] exceção:', network ? '(rede)' : '', err);
+    return { ok: false, error: { message: err instanceof Error ? err.message : 'Erro ao enviar foto.' }, network };
   }
 }
 

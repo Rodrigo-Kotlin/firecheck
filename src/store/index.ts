@@ -10,6 +10,10 @@ import { canViewInspection, canEditInspection, canDeleteInspection } from '../se
 import { getLatestInspectionForEquipment } from '../utils/equipmentFilters';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
+  canAttemptNetwork,
+  ensureNetworkListeners,
+} from '../services/networkState';
+import {
   loginUser,
   registerUser,
   resolveSession,
@@ -150,6 +154,8 @@ interface AppState {
   pending: number;
   lastSyncAt: number | null;
   syncEnabled: boolean;
+  /** Circuit breaker aberto (backend inalcançável ou browser offline). */
+  networkUnavailable: boolean;
 
   /** Number of records in conflict (per entity type). */
   conflictCounts: { equipments: number; actionPlans: number; inspections: number };
@@ -224,13 +230,19 @@ export const useAppStore = create<AppState>()(
 
       const runSync = async (): Promise<void> => {
         if (!isSupabaseConfigured) return;
-        if (!navigator.onLine) {
+        if (!canAttemptNetwork()) {
           await get().refreshPendingCount();
           return;
         }
-        set({ syncing: true });
+        set({ syncing: true, networkUnavailable: false });
         try {
           const report = await syncAll({ userId: get().user?.id });
+
+          if (report.networkUnavailable) {
+            set({ networkUnavailable: true });
+            await get().refreshPendingCount();
+            return;
+          }
 
           if (!report.skipped) {
             // Reload equipments, inspections, and action plans from Dexie
@@ -299,6 +311,7 @@ export const useAppStore = create<AppState>()(
         pending: 0,
         lastSyncAt: null,
         syncEnabled: isSupabaseConfigured,
+        networkUnavailable: false,
         conflictCounts: { equipments: 0, actionPlans: 0, inspections: 0 },
 
         // -----------------------------------------------------------------
@@ -342,8 +355,10 @@ export const useAppStore = create<AppState>()(
         // -----------------------------------------------------------------
         hydrate: async () => {
           const sessionUser = await resolveSession();
-          const allUsers = await listUsers();
-          const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+          const isOnline = canAttemptNetwork();
+          const allUsers = isOnline ? await listUsers() : get().users;
+
+          ensureNetworkListeners();
 
           // Migrar planos legados do localStorage para Dexie (uma única vez)
           await migratePersistedActionPlansToDexie();
@@ -624,7 +639,7 @@ export const useAppStore = create<AppState>()(
           let mode: EquipmentResult['mode'] = 'local';
           let message: string | undefined;
 
-          if (isSupabaseConfigured && supabase && navigator.onLine) {
+          if (isSupabaseConfigured && supabase && canAttemptNetwork()) {
             const result = await createEquipmentRemote(stamped);
             if (result.ok) {
               await db.equipamentos.update(stamped.id, {
@@ -695,7 +710,7 @@ export const useAppStore = create<AppState>()(
           });
 
           // Tentar push imediato se online
-          if (isSupabaseConfigured && supabase && navigator.onLine) {
+          if (isSupabaseConfigured && supabase && canAttemptNetwork()) {
             const result = await updateEquipmentRemote(updated);
             if (result.ok) {
               await db.equipamentos.update(id, {

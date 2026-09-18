@@ -8,27 +8,30 @@ import {
 import { db } from '../db';
 import type { ActionPlan } from '../types';
 import type { FetchResult, ServiceResult } from './equipmentService';
+import { isNetworkUnavailableError } from '../utils/network';
+import { canAttemptNetwork } from './networkState';
 
 const isDev = import.meta.env.DEV;
 
 export async function fetchActionPlans(): Promise<FetchResult<ActionPlan>> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, data: null };
+    return { ok: false, data: null, network: false };
   }
   const { data, error } = await supabase
     .from('planos_acao')
     .select('*')
     .order('created_at', { ascending: false });
   if (error) {
-    console.error('[actionPlan.fetch]', error);
-    return { ok: false, data: null };
+    const network = isNetworkUnavailableError(error);
+    console.error('[actionPlan.fetch]', network ? '(rede)' : '', error);
+    return { ok: false, data: null, network };
   }
   return { ok: true, data: (data as DbPlanoAcao[]).map(dbToActionPlan) };
 }
 
 export async function createActionPlanRemote(plan: ActionPlan): Promise<ServiceResult> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
   const payload = actionPlanToDb(plan);
   payload.created_at = new Date().toISOString();
@@ -42,13 +45,14 @@ export async function createActionPlanRemote(plan: ActionPlan): Promise<ServiceR
 
   if (error) {
     if (error.code === '23505') {
-      return { ok: false, code: 'duplicate', message: 'Já existe um plano de ação com este ID no servidor.' };
+      return { ok: false, code: 'duplicate', message: 'Já existe um plano de ação com este ID no servidor.', network: false };
     }
     if (error.code === '42501') {
-      return { ok: false, code: 'permission_denied', message: 'Sem permissão para criar plano de ação.' };
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para criar plano de ação.', network: false };
     }
-    console.error('[actionPlan.create]', error);
-    return { ok: false, code: 'unknown', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[actionPlan.create]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
 
   if (!data || !data.id) {
@@ -60,7 +64,7 @@ export async function createActionPlanRemote(plan: ActionPlan): Promise<ServiceR
 
 export async function updateActionPlanRemote(plan: ActionPlan): Promise<ServiceResult> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
   const payload = actionPlanToDb(plan);
   payload.updated_at = new Date().toISOString();
@@ -74,10 +78,11 @@ export async function updateActionPlanRemote(plan: ActionPlan): Promise<ServiceR
 
   if (error) {
     if (error.code === '42501') {
-      return { ok: false, code: 'permission_denied', message: 'Sem permissão para atualizar plano de ação.' };
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para atualizar plano de ação.', network: false };
     }
-    console.error('[actionPlan.update]', error);
-    return { ok: false, code: 'unknown', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[actionPlan.update]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
 
   if (!data) {
@@ -91,7 +96,7 @@ export async function updateActionPlanRemote(plan: ActionPlan): Promise<ServiceR
  *  distinguishes "not found" from network errors. */
 export async function fetchActionPlanById(id: string): Promise<ServiceResult<ActionPlan>> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
   const { data, error } = await supabase
     .from('planos_acao')
@@ -99,18 +104,19 @@ export async function fetchActionPlanById(id: string): Promise<ServiceResult<Act
     .eq('id', id)
     .maybeSingle();
   if (error) {
-    console.error('[actionPlan.fetchById]', error);
-    return { ok: false, code: 'network', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[actionPlan.fetchById]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
   if (!data) {
-    return { ok: false, code: 'not_found', message: 'Plano de ação não encontrado no servidor.' };
+    return { ok: false, code: 'not_found', message: 'Plano de ação não encontrado no servidor.', network: false };
   }
   return { ok: true, data: dbToActionPlan(data as DbPlanoAcao) };
 }
 
 export async function softDeleteActionPlanRemote(id: string, userId?: string): Promise<ServiceResult> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, code: 'network', message: 'Supabase não configurado.' };
+    return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
   const now = new Date().toISOString();
   const update: Record<string, unknown> = {
@@ -130,10 +136,11 @@ export async function softDeleteActionPlanRemote(id: string, userId?: string): P
 
   if (error) {
     if (error.code === '42501') {
-      return { ok: false, code: 'permission_denied', message: 'Sem permissão para excluir plano de ação.' };
+      return { ok: false, code: 'permission_denied', message: 'Sem permissão para excluir plano de ação.', network: false };
     }
-    console.error('[actionPlan.softDelete]', error);
-    return { ok: false, code: 'unknown', message: error.message };
+    const network = isNetworkUnavailableError(error);
+    console.error('[actionPlan.softDelete]', network ? '(rede)' : '', error);
+    return { ok: false, code: network ? 'network' : 'unknown', message: error.message, network };
   }
 
   if (!data) {
@@ -144,7 +151,7 @@ export async function softDeleteActionPlanRemote(id: string, userId?: string): P
 }
 
 export async function carregarPlanosDeAcao(): Promise<ActionPlan[]> {
-  const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+  const isOnline = canAttemptNetwork();
 
   if (isDev) {
     console.log(`[loader-planos] online=${isOnline}, supabase=${isSupabaseConfigured}`);
