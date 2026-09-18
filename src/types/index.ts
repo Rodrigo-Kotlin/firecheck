@@ -191,8 +191,28 @@ export interface Inspection {
   inspetor: string;
   status: EquipmentStatus;
   observacoes?: string;
-  /** ID of the user who performed this inspection. */
+  /** ID of the user who performed this inspection (conta autenticada). */
   userId?: string;
+  /** ISO date quando a inspeção foi criada. */
+  createdAt?: string;
+  /** updated_at remoto (ISO, precisão total) da última alteração. */
+  updatedAt?: string;
+  /** Conta autenticada que realizou a última alteração (uuid). */
+  updatedBy?: string;
+  /** Nome operacional da pessoa física que realizou a última alteração. */
+  updatedByName?: string;
+
+  // ---- Metadados locais de sincronização (Dexie) ----
+  /** Registro em conflito — push bloqueado até revisão. */
+  syncConflict?: boolean;
+  /** Motivo legível do conflito. */
+  syncConflictReason?: string;
+  /** updated_at remoto no momento da detecção do conflito. */
+  remoteUpdatedAtAtConflict?: string | null;
+  /** Erro persistente da última tentativa de sync. */
+  syncError?: string;
+  /** updated_at remoto registrado na última sincronização bem-sucedida. */
+  syncBaseUpdatedAt?: string | null;
 }
 
 export interface Inspector {

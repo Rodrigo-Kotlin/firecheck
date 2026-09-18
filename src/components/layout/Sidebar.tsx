@@ -155,11 +155,11 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
                   </span>
                 )}
               </div>
-              {(conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0) && (
+              {(conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0 || conflictCounts.inspections > 0) && (
                 <div className="flex items-center gap-1.5 text-[10px] font-bold text-critical bg-red-50 rounded-md px-2 py-1.5">
                   <AlertOctagon className="w-3 h-3 flex-shrink-0" />
                   <span>
-                    Conflito{conflictCounts.equipments + conflictCounts.actionPlans > 1 ? 's' : ''}: {conflictCounts.equipments + conflictCounts.actionPlans}
+                    Conflito{(conflictCounts.equipments + conflictCounts.actionPlans + conflictCounts.inspections) > 1 ? 's' : ''}: {conflictCounts.equipments + conflictCounts.actionPlans + conflictCounts.inspections}
                   </span>
                 </div>
               )}

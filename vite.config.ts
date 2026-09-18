@@ -9,9 +9,12 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
         cacheId: 'firecheck-v1',
-        navigateFallback: '/',
+        // Resolvida contra o scope do SW (trabalha para bases `/` e
+        // `/firecheck/`) — evita `non-precached-url` do precache com `/`.
+        navigateFallback: 'index.html',
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,

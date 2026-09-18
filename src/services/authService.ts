@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import type { AuthError as SupabaseAuthError } from '@supabase/supabase-js';
+import type { AuthError as SupabaseAuthError, Session } from '@supabase/supabase-js';
 import type { Inspector, UserProfile } from '../types';
+import { canAttemptNetwork } from './networkState';
 
 // ---------------------------------------------------------------------------
 // Autenticação via Supabase Auth + tabela `public.profiles`.
@@ -181,6 +182,26 @@ function toInspector(profile: UserProfile): Inspector {
   };
 }
 
+/** Constrói Inspector mínimo a partir dos metadados da sessão (user_metadata).
+ *  Usado como fallback offline quando não é possível chamar getUser ou ler
+ *  profiles (§16 — identidade local preservada). O cargo pode ficar vazio e
+ *  o papel fica 'inspector' — ao voltar online, resolveSession devolve o
+ *  profile real com papel (role) correto. */
+function inspectorFromSession(session: Session): Inspector | null {
+  const meta = (session.user?.user_metadata ?? {}) as Record<string, string>;
+  const nome =
+    typeof meta.nome === 'string' && meta.nome.trim()
+      ? meta.nome.trim()
+      : session.user?.email ?? null;
+  if (!nome) return null;
+  return {
+    id: session.user.id,
+    nome,
+    cargo: typeof meta.cargo === 'string' ? meta.cargo.trim() : '',
+    role: 'inspector',
+  };
+}
+
 async function fetchOwnProfile(): Promise<UserProfile | null> {
   if (!supabase) return null;
   const { data: sessionData } = await supabase.auth.getUser();
@@ -287,8 +308,15 @@ export async function resolveSession(): Promise<Inspector | null> {
   if (!supabase) return null;
   const { data } = await supabase.auth.getSession();
   if (!data.session) return null;
+
+  // Offline / circuit breaker aberto: usa a identidade local da sessão
+  // (user_metadata) para NÃO deslogar o usuário num reload sem internet.
+  if (!canAttemptNetwork()) {
+    return inspectorFromSession(data.session);
+  }
+
   const profile = await fetchOwnProfile();
-  return profile ? toInspector(profile) : null;
+  return profile ? toInspector(profile) : inspectorFromSession(data.session);
 }
 
 export async function logoutUser(): Promise<void> {
@@ -362,6 +390,7 @@ export interface PublicUser {
 
 export async function listUsers(): Promise<PublicUser[]> {
   if (!supabase) return [];
+  if (!canAttemptNetwork()) return [];
   const { data, error } = await supabase
     .from('profiles')
     .select('id, email, nome, cargo, role, created_at')

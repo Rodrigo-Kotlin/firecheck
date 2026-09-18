@@ -18,6 +18,7 @@ import type { Equipment } from '../../types';
 import { matchesEquipmentIdentity, normalizeEquipmentTag } from '../../utils/equipmentIdentity';
 import { db } from '../../db';
 import { findEquipmentById } from '../../services/equipmentService';
+import { canAttemptNetwork } from '../../services/networkState';
 import { isSupabaseConfigured } from '../../lib/supabase';
 
 type ScanResult =
@@ -70,7 +71,7 @@ export default function ScanQr() {
     }
 
     // 3) Supabase (remote, only if online)
-    if (typeof navigator !== 'undefined' && navigator.onLine && isSupabaseConfigured) {
+    if (isSupabaseConfigured && canAttemptNetwork()) {
       try {
         const remoto = await findEquipmentById(code);
         if (remoto && isActive(remoto)) return remoto;

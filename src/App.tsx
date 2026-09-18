@@ -14,6 +14,8 @@ const Equipamentos = lazy(() => import('./pages/equipamentos/Equipamentos'));
 const NovoEquipamento = lazy(() => import('./pages/equipamentos/NovoEquipamento'));
 const EditarEquipamento = lazy(() => import('./pages/equipamentos/EditarEquipamento'));
 const DetalhesEquipamento = lazy(() => import('./pages/equipamentos/DetalhesEquipamento'));
+const DetalheInspecao = lazy(() => import('./pages/inspecoes/DetalheInspecao'));
+const EditarInspecao = lazy(() => import('./pages/inspecoes/EditarInspecao'));
 const Inspecionar = lazy(() => import('./pages/inspecionar/Inspecionar'));
 const ScanQr = lazy(() => import('./pages/scan/ScanQr'));
 const QrCodes = lazy(() => import('./pages/qrcodes/QrCodes'));
@@ -77,6 +79,8 @@ export default function App() {
             <Route path="equipamentos/novo" element={<NovoEquipamento />} />
             <Route path="equipamentos/:id/editar" element={<EditarEquipamento />} />
             <Route path="equipamentos/:id" element={<DetalhesEquipamento />} />
+            <Route path="inspecoes/:id/editar" element={<EditarInspecao />} />
+            <Route path="inspecoes/:id" element={<DetalheInspecao />} />
             <Route path="inspecionar" element={<Inspecionar />} />
             <Route path="scan" element={<ScanQr />} />
             <Route

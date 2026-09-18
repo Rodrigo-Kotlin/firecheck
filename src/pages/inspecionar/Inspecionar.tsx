@@ -1,7 +1,10 @@
-import { useState, useMemo, useRef, type FormEvent } from 'react';
+import { useState, useMemo, useRef, useEffect, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { compressImage, PHOTO_MAX_WIDTH } from '../../services/photoService';
+import {
+  compressInspectionImage,
+  PHOTO_MAX_WIDTH,
+} from '../../services/photoService';
 import { showToast } from '../../hooks/useToasts';
 import {
   ChevronLeft,
@@ -21,6 +24,7 @@ import {
   ImagePlus,
   Loader2,
   User,
+  WifiOff,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
@@ -179,15 +183,33 @@ const EQUIPMENT_STATUS_CONFIGS: Record<
 // evidence photos. Mobile-first: a primary "Tirar foto" button uses
 // `capture="environment"` to launch the rear camera on phones, and a
 // secondary "Escolher da galeria" button opens the file picker. The preview
-// shows the resized dimensions + size, a green "Foto pronta" badge, and two
+// shows the final dimensions + size, a green "Foto pronta" badge, and two
 // clear actions — "Trocar foto" (replaces) and "Remover" (with confirm).
 //
-// The actual compression/resize/encode logic lives in `compressImage()`
-// (services/photoService.ts) so it can be reused and unit-tested. We only
-// keep UI-level concerns here: validation, loading state, error display.
+// The actual compression/resize/encode pipeline lives in
+// `compressInspectionImage()` (services/photoService.ts) and returns a Blob
+// (not base64) so the bytes can go straight into IndexedDB without a second
+// base64 round-trip. The preview is an Object URL (`URL.createObjectURL`) that
+// the owner screen revokes when the draft is replaced, removed or unmounted.
+// We only keep UI-level concerns here: validation, loading state, error
+// display and the offline hint.
 // ---------------------------------------------------------------------------
 
+/** Foto já processada, pronta para preview + persistência. O preview usa uma
+ *  Object URL do Blob (`URL.createObjectURL`) — nunca uma string Base64. */
+interface PhotoDraft {
+  blob: Blob;
+  /** Object URL para o `<img>` de preview. É revogada quando a foto é
+   *  trocada/removida ou a tela desmonta. */
+  previewUrl: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  size: number;
+}
+
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024; // 10 MB upload limit
+const PHOTO_ERROR_MSG = 'Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -195,25 +217,47 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** Cria uma Object URL para o preview do Blob (sem representação em Base64). */
+function createPreviewUrl(blob: Blob): string {
+  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    throw new Error('Este navegador não suporta pré-visualização de imagem.');
+  }
+  return URL.createObjectURL(blob);
+}
+
+/** Revoga uma Object URL quando ela sai de uso (troca, remoção ou unmount). */
+function revokePreviewUrl(url: string | null | undefined): void {
+  if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    URL.revokeObjectURL(url);
+  }
+}
+
 type PhotoCaptureProps = {
-  value: string | null;
-  onChange: (base64: string | null) => void;
+  value: PhotoDraft | null;
+  onChange: (draft: PhotoDraft | null) => void;
   disabled?: boolean;
+  /** Network status from the parent's listener (reactive). */
+  online?: boolean;
+  /** Called while the photo is being compressed/resized (parent may gate the
+   *  Finalizar button). */
+  onProcessingChange?: (processing: boolean) => void;
 };
 
-function PhotoCapture({ value, onChange, disabled = false }: PhotoCaptureProps) {
+function PhotoCapture({ value, onChange, disabled = false, online, onProcessingChange }: PhotoCaptureProps) {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
-  const [meta, setMeta] = useState<{ width: number; height: number; size: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const offline = online !== undefined
+    ? !online
+    : (typeof navigator !== 'undefined' ? !navigator.onLine : false);
 
   const handleFile = async (file: File | null | undefined) => {
     if (!file) return;
     setError(null);
     if (!file.type.startsWith('image/')) {
-      const msg = 'Selecione um arquivo de imagem válido (JPG, PNG ou HEIC).';
+      const msg = 'Selecione um arquivo de imagem válido (JPG, PNG ou WEBP).';
       setError(msg);
       showToast({ kind: 'error', title: 'Formato inválido', description: msg });
       return;
@@ -225,32 +269,35 @@ function PhotoCapture({ value, onChange, disabled = false }: PhotoCaptureProps) 
       return;
     }
     setLoading(true);
+    onProcessingChange?.(true);
     try {
-      // All resize / re-encode work happens in the service so the same logic
-      // can be reused by batch flows (relatórios, etc.) and unit-tested.
-      const compressed = await compressImage(file);
-      setMeta({ width: compressed.width, height: compressed.height, size: compressed.size });
-      onChange(compressed.dataUrl);
-      if (compressed.ratio > 1.1) {
-        showToast({
-          kind: 'success',
-          title: 'Foto otimizada',
-          description: `Reduzida em ${Math.round((1 - 1 / compressed.ratio) * 100)}% (${compressed.width}×${compressed.height}, ${formatBytes(compressed.size)}).`,
-          duration: 3000,
-        });
-      }
+      const compressed = await compressInspectionImage(file);
+      onChange({
+        blob: compressed.blob,
+        previewUrl: createPreviewUrl(compressed.blob),
+        mimeType: compressed.mimeType,
+        width: compressed.width,
+        height: compressed.height,
+        size: compressed.compressedSize,
+      });
+      showToast({
+        kind: 'success',
+        title: 'Foto pronta',
+        description: `${compressed.width}×${compressed.height} · ${formatBytes(compressed.compressedSize)}`,
+        duration: 2500,
+      });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Não foi possível processar a imagem.';
+      const msg = err instanceof Error ? err.message : PHOTO_ERROR_MSG;
       setError(msg);
       showToast({ kind: 'error', title: 'Falha ao processar foto', description: msg });
     } finally {
       setLoading(false);
+      onProcessingChange?.(false);
     }
   };
 
   const handleClear = () => {
     onChange(null);
-    setMeta(null);
     setConfirmRemove(false);
     setError(null);
   };
@@ -266,7 +313,7 @@ function PhotoCapture({ value, onChange, disabled = false }: PhotoCaptureProps) 
       <div className="space-y-2">
         <div className="relative rounded-xl overflow-hidden border border-gray-100 bg-gray-50">
           <img
-            src={value}
+            src={value.previewUrl}
             alt="Evidência fotográfica da inspeção"
             className="w-full h-48 sm:h-56 object-cover"
           />
@@ -274,12 +321,19 @@ function PhotoCapture({ value, onChange, disabled = false }: PhotoCaptureProps) 
             <CheckCircle2 className="w-3 h-3" />
             Foto pronta
           </div>
-          {meta && (
-            <div className="absolute bottom-2 left-2 px-2 py-1 rounded-md bg-black/60 text-white text-[10px] font-bold tabular-nums">
-              {meta.width}×{meta.height} · {formatBytes(meta.size)}
-            </div>
-          )}
+          <div className="absolute bottom-2 left-2 px-2 py-1 rounded-md bg-black/60 text-white text-[10px] font-bold tabular-nums">
+            {value.width}×{value.height} · {formatBytes(value.size)}
+          </div>
         </div>
+
+        {offline && (
+          <div className="flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-100 rounded-lg">
+            <WifiOff className="w-4 h-4 text-pending flex-shrink-0 mt-0.5" />
+            <span className="text-xs font-bold text-pending flex-1 leading-snug">
+              Foto salva no dispositivo. Será sincronizada quando houver conexão.
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="flex items-start gap-2 p-2.5 bg-red-50 border border-red-100 rounded-lg">
@@ -371,7 +425,7 @@ function PhotoCapture({ value, onChange, disabled = false }: PhotoCaptureProps) 
           <div className="flex flex-col items-center justify-center gap-2 py-3" role="status" aria-live="polite">
             <Loader2 className="w-7 h-7 text-blue-500 animate-spin" />
             <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">
-              Processando imagem...
+              Otimizando imagem...
             </span>
             <span className="text-[10px] text-blue-600/80 font-medium">
               Redimensionando para {PHOTO_MAX_WIDTH}px
@@ -438,7 +492,7 @@ function PhotoCapture({ value, onChange, disabled = false }: PhotoCaptureProps) 
       )}
 
       <span className="field-hint">
-        JPG, PNG ou HEIC · até {formatBytes(PHOTO_MAX_BYTES)} · a foto é redimensionada automaticamente
+        JPG, PNG ou WEBP · até {formatBytes(PHOTO_MAX_BYTES)} · a foto é redimensionada automaticamente
       </span>
 
       <input
@@ -476,12 +530,44 @@ export default function Inspecionar() {
   const [checklist, setChecklist] = useState<Record<string, ChecklistValue>>({});
   const [validadeDate, setValidadeDate] = useState('');
   const [observacoes, setObservacoes] = useState('');
-  const [photoBase64, setPhotoBase64] = useState<string | null>(null);
+  const [photoDraft, setPhotoDraft] = useState<PhotoDraft | null>(null);
+  const [photoProcessing, setPhotoProcessing] = useState(false);
 
   const [success, setSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [inspectorName, setInspectorName] = useState(() => localStorage.getItem('firecheck_last_inspector_name') || '');
   const [isSaving, setIsSaving] = useState(false);
+
+  // Idempotência de submissão: lock síncrono (imediato, sem depender do render)
+  // + identidade estável da tentativa (submissionId → inspectionId). Retry da
+  // mesma tentativa reutiliza os MESMOS IDs.
+  const submitLockRef = useRef(false);
+  const submissionIdRef = useRef<string | null>(null);
+  const inspectionIdRef = useRef<string | null>(null);
+
+  const [online, setOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Object URL lifecycle: revogar assim que o preview é trocado/removido ou a
+  // tela desmonta. O cleanup captura o URL da renderização anterior — nunca é
+  // revogado um URL que o `<img>` ainda está usando (StrictMode não é afetado:
+  // a URL só é criada em interação do usuário, após a montagem inicial).
+  const photoPreviewUrl = photoDraft?.previewUrl;
+  useEffect(() => {
+    return () => {
+      revokePreviewUrl(photoPreviewUrl);
+    };
+  }, [photoPreviewUrl]);
 
   const selectedEquipment = equipments.find((e) => e.id === eqId);
 
@@ -531,18 +617,35 @@ export default function Inspecionar() {
 
   const handleFinalize = async (e: FormEvent) => {
     e.preventDefault();
+
+    // LOCK SÍNCRONO — primeira camada de idempotência. Atribuição imediata,
+    // sem depender do próximo render do React (defende double/triple click e
+    // Enter repetido que atravessam a janela antes de `disabled`/`isSaving`).
+    if (submitLockRef.current) {
+      if (import.meta.env.DEV) console.log('[inspection-submit] duplicate submit ignored (lock síncrono)');
+      return;
+    }
+
     if (!selectedEquipment) {
       setErrorMsg('Por favor, selecione um equipamento.');
       return;
     }
 
-    // Prevent double-click
-    if (isSaving) return;
-
     if (!inspectorName) {
       setErrorMsg('Selecione o inspetor responsável pela inspeção.');
-      setIsSaving(false);
       return;
+    }
+
+    submitLockRef.current = true;
+
+    // IDENTIDADE DA TENTATIVA — gerada UMA vez por tentativa. Retry da mesma
+    // tentativa reutiliza submissionId/inspectionId (nunca um novo UUID).
+    submissionIdRef.current ??= crypto.randomUUID();
+    inspectionIdRef.current ??= `INSP-${submissionIdRef.current}`;
+    const inspectionId = inspectionIdRef.current;
+
+    if (import.meta.env.DEV) {
+      console.log(`[inspection-submit] accepted ${submissionIdRef.current}`);
     }
 
     // Determine status logic.
@@ -571,30 +674,63 @@ export default function Inspecionar() {
 
     try {
       localStorage.setItem('firecheck_last_inspector_name', inspectorName);
-      await addInspection({
+      const result = await addInspection({
+        inspectionId,
         equipmentId: selectedEquipment.id,
         data: new Date().toISOString().split('T')[0],
         inspetor: inspectorName,
         status: finalStatus,
         observacoes,
         userId: user?.id,
-        photoBase64,
+        photo: photoDraft
+          ? {
+              blob: photoDraft.blob,
+              mimeType: photoDraft.mimeType,
+              width: photoDraft.width,
+              height: photoDraft.height,
+              size: photoDraft.size,
+            }
+          : undefined,
         dataProximaInspecao: validadeDate || undefined,
       });
 
+      if (!result.ok) {
+        setErrorMsg(result.error ?? 'Erro ao salvar inspeção. Tente novamente.');
+        // B) erro antes de persistir → libera lock para nova tentativa da
+        // MESMA tentativa (o inspectionId é mantido)
+        submitLockRef.current = false;
+        if (import.meta.env.DEV) console.log(`[inspection-submit] lock liberado (erro) ${submissionIdRef.current}`);
+        return;
+      }
+
+      // C) sucesso → lock permanece fechado (mesmo formulário não aceita novo
+      // submit). Apenas "Nova Inspeção" reseta lock + IDs.
       setSuccess(true);
+      if (result.idempotent) {
+        if (import.meta.env.DEV) console.log(`[inspection-submit] submit idempotente absorvido ${submissionIdRef.current}`);
+      }
     } catch (err) {
       console.error(err);
       setErrorMsg('Erro ao salvar inspeção. Tente novamente.');
+      submitLockRef.current = false;
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleNewInspection = () => {
+    // Reset TOTAL do estado de submissão: nova tentativa → novo submissionId,
+    // novo inspectionId, lock reaberto. (Item 10/34/40 do plano de idempotência.)
+    submitLockRef.current = false;
+    submissionIdRef.current = null;
+    inspectionIdRef.current = null;
+
     setSuccess(false);
+    setErrorMsg('');
+    setIsSaving(false);
     setObservacoes('');
-    setPhotoBase64(null);
+    setPhotoDraft(null);
+    setPhotoProcessing(false);
 
     // Reset date to today + 30 days
     const futureDate = new Date();
@@ -654,7 +790,7 @@ export default function Inspecionar() {
           <div>
             <h3 className="text-xl font-black text-gray-900">Inspeção Registrada!</h3>
             <p className="text-xs text-gray-500 mt-1.5 font-bold uppercase tracking-wider">
-              {navigator.onLine ? '✓ Salvo · Sincronizando' : '⏳ Salvo offline · Pendente sincronização'}
+              {online ? '✓ Salvo · Sincronizando' : '⏳ Salvo offline · Pendente sincronização'}
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-2 w-full max-w-sm">
@@ -859,7 +995,13 @@ export default function Inspecionar() {
                     (opcional)
                   </span>
                 </span>
-                <PhotoCapture value={photoBase64} onChange={setPhotoBase64} />
+                <PhotoCapture
+                  value={photoDraft}
+                  onChange={setPhotoDraft}
+                  disabled={isSaving}
+                  online={online}
+                  onProcessingChange={setPhotoProcessing}
+                />
               </div>
 
               {/* Observations — prominent section */}
@@ -887,9 +1029,11 @@ export default function Inspecionar() {
           {/* Sticky submit */}
           {selectedEquipment && (
             <div className="sticky bottom-20 lg:bottom-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-neutralBg lg:bg-transparent lg:px-0 lg:py-0 lg:mx-0">
-              <button type="submit" className="btn-primary" disabled={isSaving}>
+              <button type="submit" className="btn-primary" disabled={isSaving || photoProcessing}>
                 {isSaving ? (
                   <><Loader2 className="w-5 h-5 animate-spin" /> Salvando inspeção...</>
+                ) : photoProcessing ? (
+                  <><Loader2 className="w-5 h-5 animate-spin" /> Preparando foto...</>
                 ) : (
                   <><ShieldCheck className="w-5 h-5" /> Finalizar Inspeção</>
                 )}

@@ -4,6 +4,7 @@ type SyncStatusBadgeProps = {
   isOnline: boolean;
   syncing: boolean;
   pending: number;
+  networkUnavailable?: boolean;
   onClick: () => void;
 };
 
@@ -21,7 +22,7 @@ const dotClass = {
   online: '',
 };
 
-export function SyncStatusBadge({ isOnline, syncing, pending, onClick }: SyncStatusBadgeProps) {
+export function SyncStatusBadge({ isOnline, syncing, pending, networkUnavailable, onClick }: SyncStatusBadgeProps) {
   let label: string;
   let variant: keyof typeof variantClass;
   let Icon: LucideIcon | null = null;
@@ -33,6 +34,9 @@ export function SyncStatusBadge({ isOnline, syncing, pending, onClick }: SyncSta
   } else if (!isOnline) {
     label = 'Offline';
     variant = 'offline';
+  } else if (networkUnavailable) {
+    label = 'Aguardando conexão';
+    variant = 'pending';
   } else if (pending > 0) {
     label = `${pending} pendente${pending === 1 ? '' : 's'}`;
     variant = 'pending';

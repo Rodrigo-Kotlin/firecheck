@@ -22,9 +22,11 @@
  * report.
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { db } from '../db';
-import { fetchEquipments, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById, softDeleteEquipment, applyEquipmentInspectionStatusRemote, type ServiceResult } from './equipmentService';
-import { fetchInspections, upsertInspection } from './inspectionService';
+import { db, type LocalInspection, type LocalEquipment, type LocalInspectionPhoto } from '../db';
+import {
+  fetchEquipments, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById, softDeleteEquipment, type ServiceResult,
+} from './equipmentService';
+import { fetchInspections, upsertInspection, fetchInspectionById, updateInspectionRemote, recalculateEquipmentFromLatestInspectionRemote } from './inspectionService';
 import {
   fetchActionPlans,
   fetchActionPlanById,
@@ -37,9 +39,17 @@ import {
   dbToInspection,
   equipmentToDb,
   inspectionToDb,
+  type DbFotoInspecao,
 } from './mappers';
+import { getInspectionPhotoBlob, mimeToExtension, uploadInspectionPhotoBlob, removeInspectionPhotoObject } from './photoService';
 import type { Equipment } from '../types';
 import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
+import { isNetworkUnavailableError } from '../utils/network';
+import {
+  canAttemptNetwork,
+  markNetworkFailure,
+  markNetworkSuccess,
+} from './networkState';
 
 /** Concurrency guard — prevents overlapping sync runs. */
 let _syncInProgress = false;
@@ -51,6 +61,9 @@ export interface SyncReport {
   errors: number;
   skipped: boolean;
   reason?: string;
+  /** Circuit breaker abriu durante a rodada por erro real de rede — a rodada
+   *  foi interrompida prematuramente (short-circuit) e o backoff foi ativado. */
+  networkUnavailable: boolean;
 
   // -- Detalhamento por domínio --
   pushEqOk: number;
@@ -72,11 +85,21 @@ export interface SyncReport {
   pullApReconciled: number;
   pullApError: boolean;
   pullApEmpty: boolean;
+
+  // -- Detalhamento de fotos de inspeção --
+  pushPhotoOk: number;
+  pushPhotoErrors: number;
+  /** Fotos adiadas porque a inspeção pai ainda não existe remotamente. */
+  pushPhotoSkipped: number;
+  pullPhotoImported: number;
+  pullPhotoReconciled: number;
+  pullPhotoError: boolean;
+  pullPhotoEmpty: boolean;
 }
 
 function skip(reason: string): SyncReport {
   return {
-    pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason,
+    pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason, networkUnavailable: false,
     pushEqOk: 0, pushInsOk: 0, pushErrors: 0,
     pullEqImported: 0, pullEqReconciled: 0,
     pullInsImported: 0, pullInsReconciled: 0,
@@ -85,13 +108,18 @@ function skip(reason: string): SyncReport {
     pushApOk: 0, pushApErrors: 0,
     pullApImported: 0, pullApReconciled: 0,
     pullApError: false, pullApEmpty: false,
+    pushPhotoOk: 0, pushPhotoErrors: 0, pushPhotoSkipped: 0,
+    pullPhotoImported: 0, pullPhotoReconciled: 0,
+    pullPhotoError: false, pullPhotoEmpty: false,
   };
 }
 
-function canSync(): boolean {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
-  if (!isSupabaseConfigured || !supabase) return false;
-  return true;
+/** Por que a rodada NÃO deve iniciar (null = pode iniciar). */
+function canSync(): string | null {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return 'offline';
+  if (!isSupabaseConfigured || !supabase) return 'supabase-not-configured';
+  if (!canAttemptNetwork()) return 'network-cooldown';
+  return null;
 }
 
 export function isSyncInProgress(): boolean {
@@ -109,10 +137,11 @@ function isConflict(localBase: string | null | undefined, remoteUpdatedAt: strin
 // PUSH
 // ---------------------------------------------------------------------------
 
-async function pushEquipments(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
+async function pushEquipments(userId?: string): Promise<{ ok: number; errors: number; deleted: number; network?: boolean }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
+  let network = false;
 
   const markConflict = async (id: string, remoteUpdatedAt: string, reason: string) => {
     if (import.meta.env.DEV) {
@@ -162,6 +191,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
     } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
       // Erro de rede — preservar pendência
       console.error('[sync.pushEquipments] Erro ao verificar conflito para exclusão', { id: eq.id });
+      if (remoteResult.network) {
+        network = true;
+        break;
+      }
       errors++;
       continue;
     }
@@ -184,6 +217,11 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
       deleted++;
       if (import.meta.env.DEV) console.log('[sync] Equipamento %s deletado (soft) do Supabase', eq.id);
     } else {
+      if (result.network) {
+        // Rede inalcançável: preserva a pendência e NÃO grava syncError.
+        network = true;
+        break;
+      }
       await db.equipamentos.update(eq.id, { syncError: result.code ?? 'unknown' });
       console.error('[sync.pushEquipments] Falha ao deletar equipamento no Supabase', { id: eq.id, code: result.code, message: result.message });
       errors++;
@@ -225,6 +263,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         });
         ok++;
         if (import.meta.env.DEV) console.log('[sync] Equipamento %s criado com sucesso', eq.id);
+      } else if (result.network) {
+        // Rede inalcançável: preserva a pendência e interrompe a rodada.
+        network = true;
+        break;
       }
     } else if (eq.syncAction === 'update') {
       // Verificar conflito antes de atualizar
@@ -254,6 +296,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         } else {
           // Erro de rede — preservar pendência
           console.error('[sync.pushEquipments] Erro ao verificar conflito para update', { id: eq.id });
+          if (remoteResult.network) {
+            network = true;
+            break;
+          }
           errors++;
           continue;
         }
@@ -285,6 +331,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
             ok++;
             if (import.meta.env.DEV) console.log('[sync] Equipamento %s atualizado com sucesso', eq.id);
           } else {
+            if (result.network) {
+              network = true;
+              break;
+            }
             console.error('[sync] Falha ao atualizar equipamento %s — mantendo sincronizado: false', eq.id);
             errors++;
           }
@@ -319,6 +369,10 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         }
       } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
         console.error('[sync] Erro ao verificar equipamento remoto %s', eq.id);
+        if (remoteResult.network) {
+          network = true;
+          break;
+        }
         errors++;
       } else {
         result = await createEquipmentRemote(toSync);
@@ -338,6 +392,9 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         } else if (result.code === 'duplicate') {
           await db.equipamentos.update(eq.id, { syncError: 'duplicate' });
           if (import.meta.env.DEV) console.warn('[sync] Conflito de duplicidade para %s — syncError=duplicate', eq.id);
+        } else if (result.network) {
+          network = true;
+          break;
         } else {
           console.error('[sync] Falha ao sincronizar equipamento %s', eq.id);
           errors++;
@@ -348,101 +405,307 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
   if (import.meta.env.DEV) {
     console.log(`[sync] pushEquipments final: ok=${ok} errors=${errors} deleted=${deleted}`);
   }
-  return { ok, errors, deleted };
+  return { ok, errors, deleted, network };
 }
 
-async function pushInspections(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
+async function pushInspections(userId?: string): Promise<{ ok: number; errors: number; deleted: number; network?: boolean }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
+  let network = false;
 
-  const toDelete = await db.inspecoes.filter((i) => !!i.pendingDelete).toArray();
-  for (const insp of toDelete) {
-    // Cloud already stores a `sincronizado` flag — use it as a tombstone.
-    // (We keep the row locally until the cloud DELETE succeeds, then purge.)
-    if (supabase) {
-      const { error } = await supabase.from('inspecoes').delete().eq('id', insp.id);
-      if (!error) {
-        await db.inspecoes.delete(insp.id);
-        deleted++;
+  const markConflict = async (id: string, remoteUpdatedAt: string | null, reason: string) => {
+    if (import.meta.env.DEV) {
+      console.log(`[conflict] detected for inspection ${id}: ${reason}`);
+    }
+    await db.inspecoes.update(id, {
+      syncConflict: true,
+      syncConflictReason: reason,
+      remoteUpdatedAtAtConflict: remoteUpdatedAt,
+      syncError: 'conflict',
+      sincronizado: false,
+    });
+    errors++;
+  };
+
+  /** Aplica os campos derivados da RPC de recálculo no equipamento local. */
+  const applyRpcToEquipment = async (
+    equipmentId: string,
+    rpcData: Record<string, unknown>,
+    fallbackUpdatedAt?: string,
+  ) => {
+    const patch: Partial<LocalEquipment> = {
+      sincronizado: true,
+      statusUpdatePending: undefined,
+    };
+    if (typeof rpcData.status === 'string') patch.status = rpcData.status as Equipment['status'];
+    if (typeof rpcData.data_ultima_inspecao === 'string') patch.dataUltimaInspecao = rpcData.data_ultima_inspecao;
+    if (typeof rpcData.data_proxima_inspecao === 'string') patch.dataProximaInspecao = rpcData.data_proxima_inspecao;
+    if (typeof rpcData.updated_at === 'string') patch.updatedAt = rpcData.updated_at;
+    else if (fallbackUpdatedAt) patch.updatedAt = fallbackUpdatedAt;
+    await db.equipamentos.update(equipmentId, patch);
+  };
+
+  /** Reconciliação de flags órfãs: equipamentos com `statusUpdatePending` sem
+   *  inspeção pendente associada (ex.: exclusão de inspeção já aplicada).
+   *  Recálculo idempotente a partir da inspeção mais recente do servidor. */
+  const reconcileStaleStatusFlags = async () => {
+    const eqs = await db.equipamentos
+      .filter((e) => !!e.statusUpdatePending && !e.syncAction && !e.pendingDelete && !e.syncError)
+      .toArray();
+    if (eqs.length === 0) return;
+
+    // Pula equipamentos que ainda têm inspeções pendentes este round (o RPC
+    // normal será executado junto com a inspeção e evita janela de regressão).
+    const pendingInspEqIds = new Set<string>();
+    const pendingInspections = await db.inspecoes.filter((i) => !i.sincronizado).toArray();
+    for (const i of pendingInspections) pendingInspEqIds.add(i.equipmentId);
+
+    for (const eq of eqs) {
+      if (pendingInspEqIds.has(eq.id)) continue;
+      const rpc = await recalculateEquipmentFromLatestInspectionRemote(eq.id);
+      if (rpc.ok && rpc.data) {
+        await applyRpcToEquipment(eq.id, rpc.data as Record<string, unknown>);
+        if (import.meta.env.DEV) {
+          console.log(`[sync] status do equipamento %s reconciliado via inspeções mais recentes`, eq.id);
+        }
+      } else if (rpc.network) {
+        // Rede inalcançável — interrompe a rodada; reconcilia na próxima.
+        network = true;
+        break;
       } else {
-        console.error('[sync.pushInspections] Falha ao deletar inspeção no Supabase', {
-          id: insp.id,
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-        });
-        errors++;
+        console.error('[sync] Falha ao reconciliar status do equipamento %s: %s',
+          eq.id, rpc.message ?? rpc.code);
+        // Mantém statusUpdatePending para a próxima rodada.
       }
     }
-  }
+  };
 
-  const pending = await db.inspecoes.filter((i) => !i.sincronizado && !i.pendingDelete).toArray();
-  for (const insp of pending) {
-    let toUpsert = insp;
-    if (!insp.userId && userId) {
-      await db.inspecoes.update(insp.id, { userId });
-      toUpsert = { ...insp, userId };
-    }
-
-    // 1. Enviar inspeção para o Supabase
-    const success = await upsertInspection(toUpsert);
-    if (!success) {
-      console.error('[sync] Falha ao sincronizar inspeção %s — mantendo sincronizado: false', insp.id);
+  // 1) pending deletes — ADMIN ONLY (RLS) com confirmação de linha.
+  const toDelete = await db.inspecoes.filter((i) => !!i.pendingDelete).toArray();
+  for (const insp of toDelete) {
+    if (!supabase) {
+      console.warn('[sync.pushInspections] Supabase não configurado — exclusão local não enviada');
       errors++;
       continue;
     }
 
-    // 2. Aplicar status do equipamento via RPC segura (SECURITY DEFINER)
-    const localEq = await db.equipamentos.get(insp.equipmentId);
-    const rpcResult = await applyEquipmentInspectionStatusRemote(
-      insp.equipmentId,
-      insp.status,
-      insp.data,
-      localEq?.dataProximaInspecao ?? undefined,
-    );
-
-    if (rpcResult.ok) {
-      // 3. Sucesso completo: marcar inspeção como sincronizada e atualizar equipamento local
-      await db.inspecoes.update(insp.id, { sincronizado: true });
-
-      // Atualizar equipamento local com os dados retornados pela RPC
-      if (rpcResult.data) {
-        const rpcData = rpcResult.data as unknown as Record<string, unknown>;
-        await db.equipamentos.update(insp.equipmentId, {
-          sincronizado: true,
-          statusUpdatePending: undefined,
-          updatedAt: (typeof rpcData.updated_at === 'string' ? rpcData.updated_at : undefined) as string | undefined,
-          status: typeof rpcData.status === 'string' ? (rpcData.status as Equipment['status']) : undefined,
-          dataUltimaInspecao: typeof rpcData.data_ultima_inspecao === 'string' ? rpcData.data_ultima_inspecao : undefined,
-          dataProximaInspecao: typeof rpcData.data_proxima_inspecao === 'string' ? rpcData.data_proxima_inspecao : undefined,
-        });
-      } else {
-        // RPC retornou ok sem data — apenas limpar flags
-        await db.equipamentos.update(insp.equipmentId, {
-          sincronizado: true,
-          statusUpdatePending: undefined,
-        });
+    // Verifica conflito antes de excluir (como em equipamentos/planos).
+    const remoteResult = await fetchInspectionById(insp.id);
+    if (remoteResult.ok && remoteResult.data) {
+      const remote = remoteResult.data;
+      if (isConflict(insp.syncBaseUpdatedAt, remote.updatedAt)) {
+        await markConflict(insp.id, remote.updatedAt ?? null, 'Esta inspeção foi alterada em outro dispositivo antes da exclusão. Revise antes de excluir.');
+        continue;
       }
+    } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
+      console.error('[sync.pushInspections] Erro ao verificar conflito para exclusão', { id: insp.id });
+      if (remoteResult.network) {
+        network = true;
+        break;
+      }
+      errors++;
+      continue;
+    }
 
-      ok++;
-      if (import.meta.env.DEV) console.log('[sync] Inspeção %s e status do equipamento %s sincronizados com sucesso',
-        insp.id, insp.equipmentId);
+    const { error } = await supabase.from('inspecoes').delete().eq('id', insp.id).select('id').maybeSingle();
+    if (!error) {
+      await db.inspecoes.delete(insp.id);
+      // Recalcula o status do equipamento a partir do restante das inspeções.
+      const rpc = await recalculateEquipmentFromLatestInspectionRemote(insp.equipmentId);
+      if (rpc.ok && rpc.data) {
+        await applyRpcToEquipment(insp.equipmentId, rpc.data as Record<string, unknown>);
+      } else {
+        // Mantém statusUpdatePending para a reconciliação da próxima rodada.
+        await db.equipamentos.update(insp.equipmentId, { sincronizado: false, statusUpdatePending: true });
+        if (isNetworkUnavailableError(error)) {
+          // Rede inalcançável — interrompe a rodada preservando a pendência.
+          network = true;
+          break;
+        }
+        console.error('[sync.pushInspections] Falha ao recalcular status do equipamento %s após exclusão',
+          insp.equipmentId);
+      }
+      deleted++;
+      if (import.meta.env.DEV) console.log('[sync] Inspeção %s excluída do Supabase (admin)', insp.id);
     } else {
-      // RPC falhou — NÃO marcar inspeção como sincronizada para retentar
-      console.error('[sync] Inspeção %s enviada, mas RPC de status falhou: %s',
-        insp.id, rpcResult.message ?? rpcResult.code);
+      if (isNetworkUnavailableError(error)) {
+        console.error('[sync.pushInspections] Falha de rede ao deletar inspeção', { id: insp.id });
+        network = true;
+        break;
+      }
+      console.error('[sync.pushInspections] Falha ao deletar inspeção no Supabase', {
+        id: insp.id,
+        code: error.code,
+        message: error.message,
+      });
       errors++;
     }
   }
-  return { ok, errors, deleted };
+
+  // 2) pending sync — create / update.
+  const pending = await db.inspecoes
+    .filter((i) => !i.sincronizado && !i.pendingDelete && !i.syncError)
+    .toArray();
+  for (const insp of pending) {
+    let toSync = insp;
+    if (!insp.userId && userId) {
+      await db.inspecoes.update(insp.id, { userId });
+      toSync = { ...insp, userId };
+    }
+
+    const hasBase = typeof insp.syncBaseUpdatedAt === 'string' && insp.syncBaseUpdatedAt.length > 0;
+    const rpcEquipmentId = insp.equipmentId;
+    const localEq = await db.equipamentos.get(rpcEquipmentId);
+
+    // CREATE apenas para inspeções explicitamente novas (syncAction='create').
+    // Registro legado SEM base não pode virar upsert cego: consultamos o remoto
+    // para decidir entre CAS update (existe) e create (nunca enviado).
+    let treatAsCreate = insp.syncAction === 'create';
+    if (!treatAsCreate && !hasBase) {
+      const probe = await fetchInspectionById(insp.id);
+      if (probe.ok) {
+        treatAsCreate = false;
+      } else if (probe.code === 'not_found') {
+        treatAsCreate = true;
+      } else {
+        // Falha de rede na sondagem: não arrisca um write — tenta na próxima.
+        console.error('[sync] Sondagem remota falhou para inspeção %s — %s', insp.id, probe.message);
+        if (probe.network) {
+          network = true;
+          break;
+        }
+        errors++;
+        continue;
+      }
+    }
+
+    if (treatAsCreate) {
+      // CREATE — upsert idempotente com confirmação de linha.
+      const created = await upsertInspection(toSync);
+      if (!created.ok || !created.row) {
+        console.error('[sync] Falha ao criar inspeção %s — %s', insp.id, created.message ?? 'erro desconhecido');
+        if (created.network) {
+          network = true;
+          break;
+        }
+        errors++;
+        continue;
+      }
+
+      await db.inspecoes.update(insp.id, {
+        sincronizado: true,
+        syncAction: undefined,
+        syncError: undefined,
+        syncConflict: false,
+        syncConflictReason: undefined,
+        syncBaseUpdatedAt: created.row.updated_at,
+        updatedAt: created.row.updated_at,
+        updatedBy: created.row.updated_by ?? undefined,
+        updatedByName: created.row.updated_by_name ?? toSync.updatedByName,
+      });
+
+      // Status do equipamento via RPC segura (recálculo pela mais recente).
+      const rpc = await recalculateEquipmentFromLatestInspectionRemote(
+        rpcEquipmentId,
+        localEq?.dataProximaInspecao ?? undefined,
+        insp.id,
+      );
+      if (rpc.ok && rpc.data) {
+        await applyRpcToEquipment(rpcEquipmentId, rpc.data as Record<string, unknown>, created.row.updated_at);
+      } else {
+        // A inspeção foi salva no servidor; o status é reconciliado na próxima
+        // rodada sem regressão de dados.
+        await db.equipamentos.update(rpcEquipmentId, { sincronizado: false, statusUpdatePending: true });
+        if (rpc.network) {
+          network = true;
+          break;
+        }
+        console.error('[sync] Inspeção %s criada, mas RPC de status falhou: %s',
+          insp.id, rpc.message ?? rpc.code);
+      }
+
+      ok++;
+      if (import.meta.env.DEV) console.log('[sync] Inspeção %s e status do equipamento %s sincronizados',
+        insp.id, rpcEquipmentId);
+      continue;
+    }
+
+    // UPDATE — CAS com atualização otimista.
+    const updated = await updateInspectionRemote({
+      id: insp.id,
+      data: toSync.data,
+      status: toSync.status,
+      observacoes: toSync.observacoes,
+      updatedByName: toSync.updatedByName,
+      syncBaseUpdatedAt: insp.syncBaseUpdatedAt,
+    });
+
+    if (!updated.ok) {
+      if (updated.code === 'conflict') {
+        await markConflict(insp.id, updated.current?.updatedAt ?? null, updated.message);
+        continue;
+      }
+      if (updated.code === 'not_found') {
+        await markConflict(insp.id, null, 'Esta inspeção foi excluída no servidor. Revise antes de continuar.');
+        continue;
+      }
+      console.error('[sync] Falha ao atualizar inspeção %s — %s', insp.id, updated.message);
+      if (updated.network) {
+        network = true;
+        break;
+      }
+      errors++;
+      continue;
+    }
+
+    await db.inspecoes.update(insp.id, {
+      sincronizado: true,
+      syncAction: undefined,
+      syncError: undefined,
+      syncConflict: false,
+      syncConflictReason: undefined,
+      remoteUpdatedAtAtConflict: null,
+      syncBaseUpdatedAt: updated.row.updated_at,
+      updatedAt: updated.row.updated_at,
+      updatedBy: updated.row.updated_by ?? undefined,
+      updatedByName: updated.row.updated_by_name ?? toSync.updatedByName,
+    });
+
+    // Recálculo do status do equipamento (p_trigger = esta inspeção, portanto
+    // data_proxima_inspecao é preservada).
+    const rpc = await recalculateEquipmentFromLatestInspectionRemote(rpcEquipmentId, undefined, insp.id);
+    if (rpc.ok && rpc.data) {
+      await applyRpcToEquipment(rpcEquipmentId, rpc.data as Record<string, unknown>, updated.row.updated_at);
+    } else {
+      await db.equipamentos.update(rpcEquipmentId, { sincronizado: false, statusUpdatePending: true });
+      if (rpc.network) {
+        network = true;
+        break;
+      }
+      console.error('[sync] Inspeção %s atualizada, mas RPC de status falhou: %s',
+        insp.id, rpc.message ?? rpc.code);
+    }
+
+    ok++;
+    if (import.meta.env.DEV) console.log('[sync] Inspeção %s atualizada (CAS ok) no Supabase', insp.id);
+  }
+
+  // 3) Reconciliação de flags de status órfãs (ex.: exclusão em outro
+  //    dispositivo já refletida localmente).
+  await reconcileStaleStatusFlags();
+
+  if (import.meta.env.DEV) {
+    console.log(`[sync] pushInspections final: ok=${ok} errors=${errors} deleted=${deleted}`);
+  }
+  return { ok, errors, deleted, network };
 }
 
-async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: number; deleted: number }> {
+async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: number; deleted: number; network?: boolean }> {
   let ok = 0;
   let errors = 0;
   let deleted = 0;
+  let network = false;
 
   const markConflict = async (id: string, remoteUpdatedAt: string, reason: string) => {
     if (import.meta.env.DEV) {
@@ -488,6 +751,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
       }
     } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
       console.error('[sync.pushActionPlans] Erro ao verificar conflito para exclusão', { id: plan.id });
+      if (remoteResult.network) {
+        network = true;
+        break;
+      }
       errors++;
       continue;
     }
@@ -507,6 +774,11 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
       deleted++;
       if (import.meta.env.DEV) console.log('[sync] Plano %s deletado (soft) do Supabase', plan.id);
     } else {
+      if (result.network) {
+        // Rede inalcançável: preserva a pendência e interrompe a rodada.
+        network = true;
+        break;
+      }
       console.error('[sync.pushActionPlans] Falha ao deletar plano no Supabase', { id: plan.id });
       errors++;
     }
@@ -540,6 +812,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         });
         ok++;
         if (import.meta.env.DEV) console.log('[sync] Plano %s criado com sucesso', plan.id);
+      } else if (result.network) {
+        // Rede inalcançável: preserva a pendência e interrompe a rodada.
+        network = true;
+        break;
       }
     } else if (plan.syncAction === 'update') {
       if (import.meta.env.DEV) {
@@ -566,6 +842,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
           }
         } else {
           console.error('[sync.pushActionPlans] Erro ao verificar conflito para update', { id: plan.id });
+          if (remoteResult.network) {
+            network = true;
+            break;
+          }
           errors++;
           continue;
         }
@@ -595,6 +875,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
             ok++;
             if (import.meta.env.DEV) console.log('[sync] Plano %s atualizado com sucesso', plan.id);
           } else {
+            if (result.network) {
+              network = true;
+              break;
+            }
             console.error('[sync] Falha ao atualizar plano %s — mantendo sincronizado: false', plan.id);
             errors++;
           }
@@ -626,6 +910,10 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         }
       } else if (!remoteResult.ok && remoteResult.code !== 'not_found') {
         console.error('[sync] Erro ao verificar plano remoto %s', plan.id);
+        if (remoteResult.network) {
+          network = true;
+          break;
+        }
         errors++;
         continue;
       } else {
@@ -646,6 +934,9 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         } else if (result.code === 'duplicate') {
           await db.planosAcao.update(plan.id, { syncError: 'duplicate' });
           if (import.meta.env.DEV) console.warn('[sync] Conflito de duplicidade para plano %s — syncError=duplicate', plan.id);
+        } else if (result.network) {
+          network = true;
+          break;
         } else {
           console.error('[sync] Falha ao sincronizar plano %s', plan.id);
           errors++;
@@ -656,7 +947,164 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
   if (import.meta.env.DEV) {
     console.log(`[sync] pushActionPlans final: ok=${ok} errors=${errors} deleted=${deleted}`);
   }
-  return { ok, errors, deleted };
+  return { ok, errors, deleted, network };
+}
+
+// ---------------------------------------------------------------------------
+// PHOTOS (push)
+// ---------------------------------------------------------------------------
+
+/**
+ * Push inspection photos to Supabase Storage + `fotos_inspecao`.
+ *
+ * Ordering guarantees:
+ *   • Runs AFTER inspections are pushed (see syncAll): a photo is only sent
+ *     when its parent inspection already exists remotely as `sincronizado`,
+ *     otherwise it is `skipped` (stays pending for the next round).
+ *   • `sincronizado` flips to true ONLY after both the storage object and the
+ *     metadata row are confirmed. On storage failure the Blob is preserved
+ *     and `syncError` is recorded for the next attempt.
+ *   • Idempotent: `storagePath` is written to Dexie immediately after the
+ *     upload is confirmed, so a metadata failure keeps `sincronizado` false
+ *     but already records the path — the next sync skips the re-upload and
+ *     simply retries the `fotos_inspecao` upsert.
+ *   • Local-only deletes (`syncAction: 'delete'`) remove both the object and
+ *     the metadata row, then delete the local row.
+ */
+async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; errors: number; skipped: number; network?: boolean }> {
+  let pushed = 0;
+  let errors = 0;
+  let skipped = 0;
+  let network = false;
+
+  const pending = await db.fotos.filter((p) => !p.sincronizado).toArray();
+  if (import.meta.env.DEV && pending.length > 0) {
+    console.log(`[sync] pushInspectionPhotos: ${pending.length} pendentes (${pending.map(p => p.id).join(', ')})`);
+  }
+
+  for (const photo of pending) {
+    // 1) Local-only delete
+    if (photo.syncAction === 'delete') {
+      try {
+        if (supabase) {
+          if (photo.storagePath) {
+            await removeInspectionPhotoObject(photo.storagePath);
+          }
+          await supabase.from('fotos_inspecao').delete().eq('id', photo.id);
+        }
+        await db.fotos.delete(photo.id);
+        pushed++;
+        if (import.meta.env.DEV) console.log('[sync] Foto %s removida do Supabase', photo.id);
+      } catch (err) {
+        console.error('[sync.pushInspectionPhotos] falha ao remover foto', { id: photo.id, err });
+        if (isNetworkUnavailableError(err)) {
+          network = true;
+          break;
+        }
+        errors++;
+      }
+      continue;
+    }
+
+    // 2) Parent inspection must exist and be synced remotely first
+    const insp = await db.inspecoes.get(photo.inspectionId);
+    if (!insp || !insp.sincronizado || insp.pendingDelete) {
+      skipped++;
+      continue;
+    }
+
+    // 3) Storage path starts with the owner uid
+    const sessionData = supabase ? await supabase.auth.getSession() : null;
+    const uid = sessionData?.data?.session?.user?.id ?? userId;
+    if (!uid) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      const ext = mimeToExtension(photo.mimeType || 'image/jpeg');
+      const path =
+        photo.storagePath ??
+        `${uid}/${photo.inspectionId}/${photo.id}.${ext}`;
+
+      if (!photo.storagePath) {
+        // Upload object (upsert keeps retries idempotent)
+        const blob = getInspectionPhotoBlob(photo);
+        const up = await uploadInspectionPhotoBlob(path, blob);
+        if (!up.ok) {
+          if (up.network) {
+            // Rede inalcançável: preserva a foto, NÃO grava syncError e
+            // interrompe a rodada (curto-circuito).
+            network = true;
+            break;
+          }
+          throw new Error(up.error?.message ?? 'Falha ao enviar foto.');
+        }
+
+        // Persistir storagePath assim que o upload é confirmado: se o upsert
+        // de `fotos_inspecao` falhar logo abaixo, o próximo sync sabe que o
+        // objeto já existe e só repete o upsert de metadados — sem reenviar
+        // bytes (banda e tempo preservados).
+        await db.fotos.update(photo.id, {
+          storagePath: path,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      // 4) Metadata row (idempotent upsert on id)
+      const { error: metaError } = await supabase!.from('fotos_inspecao').upsert(
+        {
+          id: photo.id,
+          inspection_id: photo.inspectionId,
+          storage_path: path,
+          mime_type: photo.mimeType ?? 'image/jpeg',
+          size_bytes: photo.size ?? null,
+          uploaded_at: new Date().toISOString(),
+          created_by: uid,
+        },
+        { onConflict: 'id' },
+      );
+      if (metaError) {
+        if (isNetworkUnavailableError(metaError)) {
+          // Rede inalcançável: preserva a foto (já provavelmente com
+          // storagePath gravado), NÃO grava syncError, interrompe a rodada.
+          network = true;
+          break;
+        }
+        throw metaError;
+      }
+
+      // 5) Only now confirm locally
+      await db.fotos.update(photo.id, {
+        sincronizado: true,
+        syncAction: undefined,
+        syncError: undefined,
+        storagePath: path,
+        remoteId: photo.id,
+        updatedAt: new Date().toISOString(),
+      });
+      pushed++;
+      if (import.meta.env.DEV) {
+        console.log('[sync] Foto %s sincronizada: %s (%d bytes)', photo.id, path, photo.size ?? 0);
+      }
+    } catch (err) {
+      const message = (err as { message?: string; code?: string })?.message
+        ?? (err as { code?: string })?.code
+        ?? 'upload-failed';
+      console.error('[sync.pushInspectionPhotos] falha ao enviar foto', { id: photo.id, message });
+      await db.fotos.update(photo.id, {
+        sincronizado: false,
+        syncError: String(message).slice(0, 200),
+        updatedAt: new Date().toISOString(),
+      });
+      errors++;
+    }
+  }
+
+  if (import.meta.env.DEV) {
+    console.log(`[sync] pushInspectionPhotos final: pushed=${pushed} errors=${errors} skipped=${skipped}`);
+  }
+  return { pushed, errors, skipped, network };
 }
 
 // ---------------------------------------------------------------------------
@@ -669,6 +1117,8 @@ interface PullResult {
   error: boolean;
   /** true quando o Supabase retornou resposta válida vazia (não erro). */
   empty: boolean;
+  /** Comprovado que o backend está inalcançável (erro real de rede). */
+  network?: boolean;
 }
 
 /** Import cloud equipment rows, reconcile orphans, preserve pending changes.
@@ -687,7 +1137,7 @@ async function pullEquipments(): Promise<PullResult> {
   // --- Erro remoto: preservar tudo ---
   if (!result.ok) {
     console.error('[sync] pullEquipments erro: preservando dados locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, network: result.network ?? false };
   }
 
   const cloud = result.data ?? [];
@@ -799,7 +1249,7 @@ async function pullInspections(): Promise<PullResult> {
   // --- Erro remoto: preservar tudo ---
   if (!result.ok) {
     console.error('[sync] pullInspections erro: preservando dados locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, network: result.network ?? false };
   }
 
   const cloud = result.data ?? [];
@@ -811,14 +1261,19 @@ async function pullInspections(): Promise<PullResult> {
     // --- Importar / atualizar registros do cloud ---
     for (const insp of cloud) {
       const local = await db.inspecoes.get(insp.id);
+      const cloudRow: LocalInspection = {
+        ...insp,
+        sincronizado: true,
+        syncBaseUpdatedAt: insp.updatedAt ?? null,
+      };
       if (!local) {
-        await db.inspecoes.put({ ...insp, sincronizado: true });
+        await db.inspecoes.put(cloudRow);
         imported++;
-      } else if (local.sincronizado && !local.pendingDelete) {
-        await db.inspecoes.put({ ...insp, sincronizado: true });
+      } else if (local.sincronizado && !local.pendingDelete && !local.syncConflict) {
+        await db.inspecoes.put(cloudRow);
         imported++;
       }
-      // else: local has unsynced changes — preserve them.
+      // else: local has unsynced/conflicting changes — preserve them.
     }
 
     // --- Reconciliação de órfãos locais ---
@@ -827,6 +1282,8 @@ async function pullInspections(): Promise<PullResult> {
       if (cloudIds.has(local.id)) continue;
       if (!local.sincronizado) continue;
       if (local.pendingDelete) continue;
+      // Registro em conflito/erro pendente NUNCA é removido pelo pull.
+      if (local.syncConflict || local.syncError || local.syncAction) continue;
 
       // Inspeção sincronizada sem pendência que não existe no cloud → remover
       await db.inspecoes.delete(local.id);
@@ -855,7 +1312,7 @@ async function pullActionPlans(): Promise<PullResult> {
 
   if (!result.ok) {
     console.error('[sync] pullActionPlans erro: preservando dados locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, network: result.network ?? false };
   }
 
   const cloud = result.data ?? [];
@@ -940,6 +1397,81 @@ async function pullActionPlans(): Promise<PullResult> {
 }
 
 // ---------------------------------------------------------------------------
+// PHOTOS (pull) — metadata-only
+// ---------------------------------------------------------------------------
+
+/**
+ * Import `fotos_inspecao` rows from the cloud.
+ *
+ * This is metadata-only: image bytes are only downloaded on demand (future
+ * detail views). Rules:
+ *   • Local rows with unsynced changes (sincronizado:false / syncAction) are
+ *     always preserved.
+ *   • Remote rows are only materialised when the parent inspection exists
+ *     locally (no orphan photo rows).
+ *   • Locally-synced rows get their remote metadata refreshed.
+ *   • No orphan reconciliation: a local synced photo whose remote row is gone
+ *     is kept (evidence must never be destroyed by a sync race).
+ */
+async function pullInspectionPhotos(): Promise<PullResult> {
+  if (import.meta.env.DEV) console.log('[sync] pullInspectionPhotos...');
+  if (!supabase) {
+    return { imported: 0, reconciled: 0, error: true, empty: false };
+  }
+  const { data, error } = await supabase.from('fotos_inspecao').select('*');
+  if (error) {
+    const network = isNetworkUnavailableError(error);
+    console.error('[sync] pullInspectionPhotos erro: preservando fotos locais');
+    return { imported: 0, reconciled: 0, error: true, empty: false, network };
+  }
+
+  const rows = (data ?? []) as DbFotoInspecao[];
+  const now = new Date().toISOString();
+  let imported = 0;
+
+  for (const row of rows) {
+    const local = await db.fotos.get(row.id);
+    if (local) {
+      if (local.sincronizado) {
+        await db.fotos.update(row.id, {
+          storagePath: row.storage_path,
+          remoteId: row.id,
+          sincronizado: true,
+          syncError: undefined,
+          size: row.size_bytes ?? local.size,
+          mimeType: row.mime_type ?? local.mimeType,
+          updatedAt: now,
+        });
+      }
+      continue;
+    }
+
+    const insp = await db.inspecoes.get(row.inspection_id);
+    if (!insp || insp.pendingDelete) continue;
+
+    await db.fotos.put({
+      id: row.id,
+      inspectionId: row.inspection_id,
+      mimeType: row.mime_type ?? 'image/jpeg',
+      size: row.size_bytes ?? undefined,
+      storagePath: row.storage_path,
+      remoteId: row.id,
+      sincronizado: true,
+      syncAction: undefined,
+      createdAt: row.uploaded_at ? new Date(row.uploaded_at).toISOString() : now,
+      updatedAt: now,
+    } as LocalInspectionPhoto);
+    imported++;
+  }
+
+  if (import.meta.env.DEV) {
+    console.log('[sync] pullInspectionPhotos final: cloud=%d imported=%d empty=%s',
+      rows.length, imported, rows.length === 0 ? 'true' : 'false');
+  }
+  return { imported, reconciled: 0, error: false, empty: rows.length === 0, network: false };
+}
+
+// ---------------------------------------------------------------------------
 // PUBLIC API
 // ---------------------------------------------------------------------------
 
@@ -960,12 +1492,9 @@ export async function syncAll(
     return skip('sync-in-progress');
   }
 
-  if (!canSync()) {
-    return skip(
-      typeof navigator !== 'undefined' && !navigator.onLine
-        ? 'offline'
-        : 'supabase-not-configured',
-    );
+  const blockReason = canSync();
+  if (blockReason) {
+    return skip(blockReason);
   }
 
   _syncInProgress = true;
@@ -979,12 +1508,17 @@ export async function syncAll(
   let pushEqOk = 0;
   let pushInsOk = 0;
   let pushErrors = 0;
+  let pushed = 0;
   let pulled = 0;
   let deleted = 0;
   let errors = 0;
 
   let pushApOk = 0;
   let pushApErrors = 0;
+
+  let pushPhotoOk = 0;
+  let pushPhotoErrors = 0;
+  let pushPhotoSkipped = 0;
 
   let pullEqImported = 0;
   let pullEqReconciled = 0;
@@ -996,69 +1530,164 @@ export async function syncAll(
   let pullInsError = false;
   let pullInsEmpty = false;
 
+  let pullPhotoImported = 0;
+  let pullPhotoReconciled = 0;
+  let pullPhotoError = false;
+  let pullPhotoEmpty = false;
+
   let pullApImported = 0;
   let pullApReconciled = 0;
   let pullApError = false;
   let pullApEmpty = false;
 
+  /** Abre clicado por erro real de rede durante a rodada. */
+  let networkUnavailable = false;
+
   try {
     if (!options.pullOnly) {
       const eqR = await pushEquipments(options.userId);
-      const insR = await pushInspections(options.userId);
-      const apR = await pushActionPlans(options.userId);
       pushEqOk = eqR.ok;
-      pushInsOk = insR.ok;
-      pushApOk = apR.ok;
-      pushApErrors = apR.errors;
-      pushErrors = eqR.errors + insR.errors + apR.errors;
-      deleted += eqR.deleted + insR.deleted + apR.deleted;
+      pushErrors = eqR.errors;
+      deleted += eqR.deleted;
+      networkUnavailable = !!eqR.network;
+
+      if (!networkUnavailable) {
+        const insR = await pushInspections(options.userId);
+        pushInsOk = insR.ok;
+        pushErrors += insR.errors;
+        deleted += insR.deleted;
+        networkUnavailable = !!insR.network;
+      }
+
+      if (!networkUnavailable) {
+        const phR = await pushInspectionPhotos(options.userId);
+        pushPhotoOk = phR.pushed;
+        pushPhotoErrors = phR.errors;
+        pushPhotoSkipped = phR.skipped;
+        networkUnavailable = !!phR.network;
+      }
+
+      if (!networkUnavailable) {
+        const apR = await pushActionPlans(options.userId);
+        pushApOk = apR.ok;
+        pushApErrors = apR.errors;
+        deleted += apR.deleted;
+        networkUnavailable = !!apR.network;
+      }
+
+      pushed = pushEqOk + pushInsOk + pushPhotoOk + pushApOk;
       errors += pushErrors;
     }
 
-    if (!options.pushOnly) {
+    if (!networkUnavailable && !options.pushOnly) {
       const eqP = await pullEquipments();
-      const insP = await pullInspections();
-      const apP = await pullActionPlans();
-
       pullEqImported = eqP.imported;
       pullEqReconciled = eqP.reconciled;
       pullEqError = eqP.error;
       pullEqEmpty = eqP.empty;
+      pulled += eqP.imported;
+      if (eqP.error) errors++;
+      networkUnavailable = !!eqP.network;
 
-      pullInsImported = insP.imported;
-      pullInsReconciled = insP.reconciled;
-      pullInsError = insP.error;
-      pullInsEmpty = insP.empty;
+      if (!networkUnavailable) {
+        const insP = await pullInspections();
+        pullInsImported = insP.imported;
+        pullInsReconciled = insP.reconciled;
+        pullInsError = insP.error;
+        pullInsEmpty = insP.empty;
+        pulled += insP.imported;
+        if (insP.error) errors++;
+        networkUnavailable = !!insP.network;
+      }
 
-      pullApImported = apP.imported;
-      pullApReconciled = apP.reconciled;
-      pullApError = apP.error;
-      pullApEmpty = apP.empty;
+      if (!networkUnavailable) {
+        const phP = await pullInspectionPhotos();
+        pullPhotoImported = phP.imported;
+        pullPhotoReconciled = phP.reconciled;
+        pullPhotoError = phP.error;
+        pullPhotoEmpty = phP.empty;
+        pulled += phP.imported;
+        if (phP.error) errors++;
+        networkUnavailable = !!phP.network;
+      }
 
-      pulled += eqP.imported + insP.imported + apP.imported;
-      if (eqP.error || insP.error || apP.error) errors++;
+      if (!networkUnavailable) {
+        const apP = await pullActionPlans();
+        pullApImported = apP.imported;
+        pullApReconciled = apP.reconciled;
+        pullApError = apP.error;
+        pullApEmpty = apP.empty;
+        pulled += apP.imported;
+        if (apP.error) errors++;
+        networkUnavailable = !!apP.network;
+      }
     }
   } catch (err) {
+    if (isNetworkUnavailableError(err)) networkUnavailable = true;
     console.error('[sync] exceção durante syncAll:', err);
     errors++;
   } finally {
     if (import.meta.env.DEV) {
       console.log('[sync] ===== RESUMO =====');
       console.log('[sync] ' +
-        `Push: eq=${pushEqOk} ins=${pushInsOk} ap=${pushApOk} errors=${pushErrors} | ` +
-        `Pull: eq=${pullEqImported}(${pullEqReconciled}) ins=${pullInsImported}(${pullInsReconciled}) ap=${pullApImported}(${pullApReconciled}) | ` +
-        `Delete=${deleted} Erros=${errors}`);
+        `Push: eq=${pushEqOk} ins=${pushInsOk} photo=${pushPhotoOk}(skip=${pushPhotoSkipped}) ap=${pushApOk} errors=${pushErrors} | ` +
+        `Pull: eq=${pullEqImported}(${pullEqReconciled}) ins=${pullInsImported}(${pullInsReconciled}) photo=${pullPhotoImported}(${pullPhotoReconciled}) ap=${pullApImported}(${pullApReconciled}) | ` +
+        `Delete=${deleted} Erros=${errors} Rede=${networkUnavailable ? 'inalcançável' : 'ok'}`);
     }
     _syncInProgress = false;
     if (import.meta.env.DEV) console.log('[sync] ===== FIM =====');
   }
 
+  // Falha real de rede comprovada → abre o circuit breaker com backoff e
+  // interrompe a rodada. Nenhuma próxima etapa da cascata foi executada.
+  if (networkUnavailable) {
+    markNetworkFailure();
+    if (import.meta.env.DEV) console.log('[sync] Rodada interrompida por rede — backoff ativado.');
+    return {
+      pushed,
+      pulled,
+      deleted,
+      errors,
+      skipped: true,
+      reason: 'network-unavailable',
+      networkUnavailable: true,
+      pushEqOk,
+      pushInsOk,
+      pushErrors,
+      pullEqImported,
+      pullEqReconciled,
+      pullInsImported,
+      pullInsReconciled,
+      pullEqError,
+      pullInsError,
+      pullEqEmpty,
+      pullInsEmpty,
+      pushApOk,
+      pushApErrors,
+      pullApImported,
+      pullApReconciled,
+      pullApError,
+      pullApEmpty,
+      pushPhotoOk,
+      pushPhotoErrors,
+      pushPhotoSkipped,
+      pullPhotoImported,
+      pullPhotoReconciled,
+      pullPhotoError,
+      pullPhotoEmpty,
+    };
+  }
+
+  // Rodada completa terminou com o backend respondendo → fecha o breaker.
+  markNetworkSuccess();
+
   return {
-    pushed: pushEqOk + pushInsOk + pushApOk,
+    pushed,
     pulled,
     deleted,
     errors,
     skipped: false,
+    networkUnavailable: false,
     pushEqOk,
     pushInsOk,
     pushErrors,
@@ -1076,23 +1705,41 @@ export async function syncAll(
     pullApReconciled,
     pullApError,
     pullApEmpty,
+    pushPhotoOk,
+    pushPhotoErrors,
+    pushPhotoSkipped,
+    pullPhotoImported,
+    pullPhotoReconciled,
+    pullPhotoError,
+    pullPhotoEmpty,
   };
 }
 
 /** Counts the rows that still need to be pushed — surfaced in the UI.
- *  Includes conflict rows (syncConflict === true) since they block sync. */
+ *  Includes conflict rows (syncConflict === true) since they block sync.
+ *  Photos whose parent inspection is pending delete (or missing) are not
+ *  counted — they cannot be pushed until the inspection exists remotely. */
 export async function pendingSyncCount(): Promise<number> {
   const eqs = await db.equipamentos.filter((e) => !e.sincronizado || !!e.pendingDelete).count();
   const ins = await db.inspecoes.filter((i) => !i.sincronizado || !!i.pendingDelete).count();
   const aps = await db.planosAcao.filter((p) => !p.sincronizado || !!p.pendingDelete).count();
-  return eqs + ins + aps;
+
+  const pendingPhotos = await db.fotos.filter((p) => !p.sincronizado).toArray();
+  let photos = 0;
+  for (const p of pendingPhotos) {
+    const insp = await db.inspecoes.get(p.inspectionId);
+    if (insp && !insp.pendingDelete) photos++;
+  }
+
+  return eqs + ins + aps + photos;
 }
 
 /** Counts rows in conflict (syncConflict === true) for UI badges. */
-export async function conflictCount(): Promise<{ equipments: number; actionPlans: number }> {
+export async function conflictCount(): Promise<{ equipments: number; actionPlans: number; inspections: number }> {
   const equipments = await db.equipamentos.filter((e) => !!e.syncConflict).count();
   const actionPlans = await db.planosAcao.filter((p) => !!p.syncConflict).count();
-  return { equipments, actionPlans };
+  const inspections = await db.inspecoes.filter((i) => !!i.syncConflict).count();
+  return { equipments, actionPlans, inspections };
 }
 
 // Re-export the mapper helpers for convenience.

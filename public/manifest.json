@@ -3,7 +3,7 @@
   "name": "FireCheck - Inspeção de Equipamentos",
   "description": "Sistema móvel para inspeção de equipamentos de combate a incêndio.",
   "lang": "pt-BR",
-  "id": "/",
+  "id": "./",
   "background_color": "#DC2626",
   "screenshots": [
     {

@@ -18,6 +18,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import QrCodePrintCard from '../../components/QrCodePrintCard';
+import { canAttemptNetwork } from '../../services/networkState';
 import {
   EQUIP_TYPES,
   EQUIP_STATUS,
@@ -366,7 +367,7 @@ export default function NovoEquipamento() {
     setDuplicateError('');
 
     // Validação remota se online
-    if (navigator.onLine && isSupabaseConfigured) {
+    if (canAttemptNetwork() && isSupabaseConfigured) {
       try {
         const remoto = await findEquipmentById(tag);
         if (remoto) {

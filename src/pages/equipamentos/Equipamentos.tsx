@@ -1,10 +1,11 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight, Trash2, AlertOctagon } from 'lucide-react';
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 import ConfirmDialog from '../../components/ConfirmDialog';
+import { getDashboardGroupByView, getEquipmentDashboardGroups, isEquipmentDashboardView, type EquipmentDashboardView } from '../../utils/equipmentFilters';
 
 const CATEGORIES = [
   { label: 'Tudo', filter: 'Tudo' },
@@ -18,14 +19,52 @@ const CATEGORIES = [
   { label: 'Bombas', filter: 'Bomba' },
 ];
 
+const VIEW_META: Record<EquipmentDashboardView, { title: string; emptyTitle: string; emptyText: string }> = {
+  registered: {
+    title: 'Cadastrados',
+    emptyTitle: 'Nenhum equipamento cadastrado',
+    emptyText: 'Cadastre o primeiro equipamento para iniciar as inspeções.',
+  },
+  inspected: {
+    title: 'Inspecionados',
+    emptyTitle: 'Nenhum equipamento inspecionado',
+    emptyText: 'Realize a primeira inspeção para registrar aqui o histórico.',
+  },
+  'up-to-date': {
+    title: 'Em dia',
+    emptyTitle: 'Nenhum equipamento em dia',
+    emptyText: 'Equipamentos com última inspeção regular e próxima inspeção dentro do prazo.',
+  },
+  pending: {
+    title: 'Pendentes',
+    emptyTitle: 'Nenhum equipamento pendente',
+    emptyText: 'Equipamentos sem inspeção, com condição pendente/vencida ou com a próxima inspeção vencida.',
+  },
+};
+
 export default function Equipamentos() {
   const { equipments, inspections, user, deleteEquipment } = useAppStore();
   const navigate = useNavigate();
-  const [search, setSearch] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeChip, setActiveChip] = useState('Tudo');
 
-  const ativos = equipments.filter((eq) => !eq.pendingDelete && !eq.deletedAt);
-  const filtered = ativos.filter((eq) => {
+  const viewParam = searchParams.get('view');
+  const view = isEquipmentDashboardView(viewParam) ? viewParam : null;
+  const search = searchParams.get('q') ?? '';
+  const viewMeta = view ? VIEW_META[view] : null;
+
+  const dashboardGroups = useMemo(
+    () => getEquipmentDashboardGroups(equipments, inspections),
+    [equipments, inspections],
+  );
+
+  // Mesma fonte única de verdade do Dashboard: contagem do card == contagem
+  // da lista. Sem `view`, exibe todos os equipamentos ativos (comportamento
+  // original).
+  const ativos = dashboardGroups.registered;
+  const baseList = view ? getDashboardGroupByView(dashboardGroups, view) : ativos;
+
+  const filtered = baseList.filter((eq) => {
     const matchesSearch =
       eq.id.toLowerCase().includes(search.toLowerCase()) ||
       eq.tipo.toLowerCase().includes(search.toLowerCase()) ||
@@ -54,9 +93,33 @@ export default function Equipamentos() {
   };
   const getStatusStyle = (status: string) => STATUS_STYLES[status] ?? STATUS_STYLES.observacao;
 
-  const hasActiveFilters = search.length > 0 || activeChip !== 'Tudo';
+  const hasActiveFilters = search.length > 0 || activeChip !== 'Tudo' || view !== null;
+
+  // Atualiza a URL preservando os demais parâmetros (ex.: `q` ao limpar `view`).
+  const patchSearchParams = (changes: Record<string, string | null>) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        for (const [key, value] of Object.entries(changes)) {
+          if (value === null || value === '') next.delete(key);
+          else next.set(key, value);
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+  const updateSearch = (value: string) => {
+    patchSearchParams({ q: value || null });
+  };
+
+  const clearViewFilter = () => {
+    patchSearchParams({ view: null });
+  };
+
   const clearFilters = () => {
-    setSearch('');
+    patchSearchParams({ view: null, q: null });
     setActiveChip('Tudo');
   };
 
@@ -79,10 +142,22 @@ export default function Equipamentos() {
         <div className="flex-1 min-w-0">
           <div className="text-[10px] sm:text-xs font-bold text-gray-400 uppercase tracking-widest">Equipamentos</div>
           <h1 className="text-base sm:text-lg lg:text-xl font-black text-gray-900 uppercase tracking-wide truncate">
-            Inventário de Dispositivos
+            {view ? viewMeta?.title : 'Inventário de Dispositivos'}
           </h1>
-          <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">{filtered.length} de {equipments.length} {equipments.length === 1 ? 'item' : 'itens'}</p>
+          <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">
+            {filtered.length} de {baseList.length} {baseList.length === 1 ? 'item' : 'itens'}
+          </p>
         </div>
+        {view && (
+          <button
+            type="button"
+            onClick={clearViewFilter}
+            className="h-10 px-3 flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 whitespace-nowrap min-h-0 min-w-0"
+            aria-label="Limpar filtro de visão"
+          >
+            Limpar filtro
+          </button>
+        )}
         <button
           onClick={() => navigate('/scan')}
           className="w-10 h-10 lg:w-auto lg:h-10 lg:px-3 flex items-center justify-center gap-1.5 bg-primary text-white rounded-lg hover:bg-primary-dark transition-all min-h-0 min-w-0"
@@ -104,13 +179,13 @@ export default function Equipamentos() {
           type="text"
           placeholder="Buscar por código, tipo, setor ou local..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => updateSearch(e.target.value)}
           className="flex-1 min-w-0 h-full bg-transparent outline-none border-0 text-base font-medium text-gray-900 placeholder:text-gray-400 placeholder:font-medium"
         />
         {search && (
           <button
             type="button"
-            onClick={() => setSearch('')}
+            onClick={() => updateSearch('')}
             aria-label="Limpar busca"
             className="w-10 h-10 -mr-1 flex items-center justify-center text-gray-400 hover:text-gray-700 active:scale-95 transition-all rounded-full shrink-0"
           >
@@ -243,7 +318,12 @@ export default function Equipamentos() {
               <Search className="w-6 h-6 text-gray-400" />
             </div>
             <div>
-              {hasActiveFilters ? (
+              {view && baseList.length === 0 ? (
+                <>
+                  <p className="text-sm font-bold text-gray-700">{viewMeta?.emptyTitle}</p>
+                  <p className="text-xs text-gray-400 mt-1">{viewMeta?.emptyText}</p>
+                </>
+              ) : hasActiveFilters ? (
                 <>
                   <p className="text-sm font-bold text-gray-700">Nenhum equipamento encontrado</p>
                   <p className="text-xs text-gray-400 mt-1">Ajuste os filtros ou cadastre um novo equipamento.</p>
@@ -255,7 +335,15 @@ export default function Equipamentos() {
                 </>
               )}
             </div>
-            {hasActiveFilters && (
+            {view && baseList.length === 0 && (
+              <button
+                onClick={clearViewFilter}
+                className="btn-ghost btn-sm btn-auto mt-1"
+              >
+                Limpar filtro
+              </button>
+            )}
+            {hasActiveFilters && !(view && baseList.length === 0) && (
               <button
                 onClick={clearFilters}
                 className="btn-ghost btn-sm btn-auto mt-1"

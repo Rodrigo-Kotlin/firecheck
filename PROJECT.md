@@ -2,7 +2,7 @@
 
 > Documento de referência para IAs e desenvolvedores.
 > Leia antes de sugerir mudanças ou iniciar novas sessões.
-> Última atualização: 2026-06-22 · Prompt 08 (Resolução manual de conflitos + seleção de inspetor nas inspeções) concluído.
+> Última atualização: 2026-09-16 · Prompt 11 (Inspeções compartilhadas, edição, rastreabilidade e conflitos) concluído.
 
 ---
 
@@ -40,14 +40,14 @@
 | Framework | React 19 + TypeScript 6 |
 | Build | Vite 8 |
 | Estado | Zustand 5 (com `persist` v3 no localStorage) |
-| Banco local | Dexie 4 (IndexedDB, schema v5) |
+| Banco local | Dexie 4 (IndexedDB, schema v7) |
 | Backend | Supabase (PostgreSQL + Auth + Storage + RLS) |
 | Estilo | TailwindCSS 4 + design system próprio (`index.css`) |
 | Scanner QR | html5-qrcode |
 | QR | qrcode (canvas/DataURL) |
 | PDF | jsPDF + html2canvas |
 | Forms | react-hook-form + zod |
-| PWA | Service Worker manual (`public/sw.js`, cache-first) |
+| PWA | `vite-plugin-pwa` (Workbox `generateSW`, autoUpdate, manifest próprio em `public/manifest.json`) |
 | Ícones | Lucide React |
 | CI/CD | GitHub Actions (`ci.yml` + `deploy.yml`) |
 | Deploy | GitHub Pages |
@@ -145,15 +145,33 @@ interface Equipment {
 interface Inspection {
   id: string;               // "INSP-{UUID}"
   equipmentId: string;      // ref. Equipment.id
-  data: string;             // ISO date
-  inspetor: string;
+  data: string;             // ISO date (civil YYYY-MM-DD)
+  inspetor: string;         // responsável original — imutável após criação
   status: EquipmentStatus;
   observacoes?: string;
-  userId?: string;
+  userId?: string;          // quem criou (gravado como `user_id` no insert)
+  createdAt?: string;
+  updatedAt?: string;       // última alteração remota (base do CAS)
+  updatedBy?: string;       // quem editou por último
+  updatedByName?: string;   // nome legível do responsável pela alteração
+  // flags de sync (local only, não persistem no Supabase):
+  syncConflict?: boolean;
+  syncConflictReason?: string;
+  remoteUpdatedAtAtConflict?: string;
+  syncError?: string;
+  syncBaseUpdatedAt?: string;
 }
 ```
 
-Inspeções atualizam o status operacional do equipamento via RPC segura (`apply_equipment_inspection_status`). Se o status for `vencido` ou `pendente`, um plano de ação é criado automaticamente.
+Inspeções atualizam o status operacional do equipamento via RPC segura (`apply_equipment_inspection_status` / `recalculate_equipment_from_latest_inspection`). Se o status for `vencido` ou `pendente`, um plano de ação é criado automaticamente.
+
+**Modelo compartilhado (Prompt 11)**: inspeções são visíveis e editáveis por
+qualquer admin/inspetor (não mais atreladas ao criador). A edição preserva o
+responsável original (`inspetor`/`user_id`/`created_at`) e registra
+`updated_by`/`updated_by_name`/`updated_at` para rastreabilidade. DELETE é
+restrito a admin. O gate de escrita usa CAS (compare-and-set) por
+`updated_at`; edição offline é enfileirada e conflitos são sinalizados
+(`syncConflict`) com resolução "manter local" ou "usar servidor".
 
 ### 5.3 ActionPlan
 
@@ -236,9 +254,16 @@ Todas as policies exigem `auth.role() = 'authenticated'`. A edição cadastral d
 | Ação | Admin | Inspector (dono) | Inspector (outro) | Sem login |
 |------|-------|-----------------|-------------------|-----------|
 | `canEdit/Delete Equipment` | ✅ | ✅ se `createdBy === user.id` | ❌ (read-only) | ❌ |
-| `canEdit/Delete Inspection` | ✅ | ✅ se `userId === user.id` | ❌ | ❌ |
+| `canEdit/Delete Inspection` | ✅ | ✅ (editar qualquer) | ✅ (editar qualquer) | ❌ |
+| `canDeleteInspection` (exclusão de relatório) | ✅ somente admin | ❌ | ❌ | ❌ |
 | `canEdit/Delete ActionPlan` | ✅ | ✅ se `userId === user.id` | ❌ | ❌ |
 | `canManageUsers` | ✅ | ❌ | ❌ | ❌ |
+
+**Nota (Prompt 11)**: a edição de inspeção passou a ser compartilhada
+(admin/inspector) — `canEditInspection(user, inspection)` não considera
+ownership. A exclusão de inspeção permanece exclusiva de admin
+(`canDeleteInspection`). O write remoto ainda exige `updated_by`/`user_id`
+coerentes (RLS + trigger `inspecoes_audit`).
 
 **Nunca expor `.env`, tokens ou chaves.** `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` são configuradas via variáveis de ambiente GitHub Pages.
 
@@ -264,6 +289,30 @@ As migrations ficam em `supabase/migrations/`. **Nunca editar migrations antigas
 | `0012_clean_sync_metadata_from_dados_tecnicos.sql` | Remove metadados de sync vazados em `dados_tecnicos` | Corretiva |
 | `0013_add_soft_delete_to_planos_acao.sql` | `deleted_at`, `deleted_by` em planos_acao | Aditiva |
 | `0014_normalize_equipment_qrcode_fields.sql` | Normaliza `qr_code` para refletir `id` (TAG oficial) | Corretiva (Prompt 05) |
+| `0015_create_soft_delete_equipment_rpc.sql` | RPC de soft delete de equipamento | Aditiva |
+| `0016_harden_soft_delete_equipment_rpc.sql` | Reforço de segurança do RPC de soft delete | Corretiva |
+| `0017_fotos_inspecao_storage_policies.sql` | Fotos de inspeção: bucket `inspection-photos` + policies por pasta/owner + colunas `mime_type/size_bytes/created_by` | Aditiva (Prompt 09) |
+| `0018_shared_inspection_permissions_and_audit.sql` | Inspeções compartilhadas: colunas `updated_by`/`updated_by_name` + trigger de auditoria `inspecoes_audit` (imutáveis + `updated_at`/`updated_by`/`updated_by_name`), autores (quem edita = `updated_by`, quem cria = `user_id` fixado), RLS SELECT/INSERT/UPDATE (admin e inspetores) e DELETE (admin apenas), SELECT de `fotos_inspecao` e do Storage compartilhado via `can_access_inspection(inspection_id)`, remoção defensiva das policies amplas de Storage, RPC `recalculate_equipment_from_latest_inspection` (ordem data/created_at/id, `UNAUTH`/`PFORB`/`NOEQPT`/`BADTRIG`, `p_next` só pela vencedora) | Aditiva (Prompt 11/12) |
+
+> A dependência futura descrita na versão anterior deste arquivo (autorizar fotos
+> por permissão sobre a inspeção, e não por pasta/owner) foi implementada na
+> migration `0018`: a policy `p_fotos_select` e a policy de Storage
+> `p_storage_select_shared` usam `can_access_inspection()` (join de
+> `fotos_inspecao.storage_path` com `storage.objects.name`) para liberar a
+> leitura das fotos quando o usuário pode ver a inspeção correspondente.
+
+### Fotos de inspeção
+
+- Blob no Dexie;
+- ObjectURL no preview (`URL.createObjectURL`, revogada em troca/remoção/unmount);
+- Storage remoto (`inspection-photos`, bucket não-público);
+- retry idempotente;
+- storagePath persistido antes do metadata upsert;
+- Base64 somente legado (`legacyBase64`, `blobToDataUrl`/`dataUrlToBlob` mantidos);
+- migration atual das fotos = `0017`;
+- próxima migration disponível = `0019`;
+- fotos compartilhadas entre contas liberadas via `can_access_inspection()` (migration `0018`);
+- download remoto de fotos sob demanda (`downloadInspectionPhoto`) com cache local em Blob — UI em `DetalheInspecao.tsx`.
 
 ---
 
@@ -488,7 +537,7 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 4. **Auditoria SW/PWA**:
    - `vite.config.ts`: Supabase configurado como `NetworkOnly` no runtime caching.
-   - `navigateFallback: '/'` adicionado ao `workbox` para SPA offline — navegação em sub-rotas servirá `index.html`.
+   - `navigateFallback: 'index.html'` (relativo — resolve contra o scope do SW, funciona em `/` e `/firecheck/`); `cleanupOutdatedCaches: true`. Evita o erro Workbox `non-precached-url :: [{"url":"/"}]`.
    - `manifest.json`: `display: standalone`, ícones 16–512px, `start_url: '.'`, cores definidas.
 
 5. **Auditoria de listeners**:
@@ -536,10 +585,86 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 **Fallback em UI de histórico/relatórios**: `inspecao.inspetor || profile.nome || user.email || 'Não informado'` — não implementado nesta etapa pois o fluxo existente já exibe `insp.inspetor` diretamente (válido tanto para inspeções novas quanto antigas).
 
-`npm run lint`: 0 erros, 1 warning pré-existente (mesmo).
+### Prompt 09 — Fotos de inspeção (captura Blob + Storage + hardening pre-merge)
+
+**Branch**: `fix/firecheck-fotos-inspecao`  
+**Status**: concluído  
+**Objetivo**: estabilizar captura, compressão (Blob, sem Base64 no novo fluxo), persistência local (Dexie v6) e sincronização (Supabase Storage + `fotos_inspecao`) das fotos de inspeção.
+
+**Principais entregas**:
+- `compressInspectionImage()` (Blob pipeline) com `createImageBitmap` + orientação EXIF, resize para 1280px, cap de 25 MP no canvas, WebP com fallback JPEG e loop de qualidade ≤ 800 KB.
+- Schema Dexie v6: `LocalInspectionPhoto` (`blob`, `sincronizado`, `syncAction`, `storagePath`); upgrade migra fotos `base64` → `legacyBase64` e as marca pendentes de sync.
+- `addInspection()` com transação `'rw'` atômica (inspeção + foto + equipamento) e `SaveInspectionResult` — sucesso só é reportado após o commit; em rollback a mensagem é única ("Nenhuma alteração foi concluída").
+- `pushInspectionPhotos()` / `pullInspectionPhotos()`: push eq → ins → fotos → planos; `storagePath` persistido no Dexie imediatamente após o upload (retry só refaz o upsert de metadados); `sincronizado` só após storage + metadados confirmados.
+- Preview via Object URL (`URL.createObjectURL`) com revogação em troca/remoção/unmount; Base64 somente legado.
+- Migration `0017` (bucket `inspection-photos` + policies por pasta/owner + colunas de metadados). Próxima migration disponível = `0018`.
+- Extensão de Storage derivada do MIME (`mimeToExtension`: jpeg→.jpg, webp→.webp, png→.png).
+- Zustand só é atualizado após o commit da transação Dexie.
+
+**Riscos registrados**: fotos 48 MP precisam validação em dispositivo real (cap limita o canvas, não o decode inicial); compartilhamento de fotos entre contas depende do futuro modelo de inspeções compartilhadas; download remoto sob demanda ainda sem UI (pull é metadata-only).
+
+`npm run lint`: 0 erros, 2 warnings pré-existentes (NovoEquipamento e EditarEquipamento — `react-hooks/incompatible-library` no `watch()` do RHF).  
 `npm run build`: tsc + vite build sem erros.
 
 ---
+
+### Prompt 10 — Dashboard clicável e filtros (KPIs confiáveis + drill-down)
+
+**Branches**: `fix/firecheck-fotos-inspecao` (base consolidada) → `feat/firecheck-dashboard-filtros`  
+**Status**: concluído  
+**Objetivo**: transformar os cards do Dashboard em KPIs operacionais clicáveis (CADASTRADOS, INSPECIONADOS, EM DIA, PENDENTES) que abrem `/equipamentos?view=...`, com fonte única de verdade garantindo contagem do card == contagem da lista.
+
+**Principais entregas**:
+- `src/utils/equipmentFilters.ts` (criado): selectors puros compartilhados por Dashboard e `Equipamentos.tsx` — `getEquipmentDashboardGroups()`, `getLatestInspectionForEquipment()`, `getDashboardGroupByView()`, `isEquipmentDashboardView()`, `EquipmentDashboardView` (`registered | inspected | up-to-date | pending`).
+- **Definições finais** (matriz real `EquipmentStatus`):
+  - Ativo = sem `pendingDelete` e sem `deletedAt`.
+  - CADASTRADOS = todos os ativos.
+  - INSPECIONADOS = ativos com ≥ 1 inspeção (distintos).
+  - EM DIA = ativo + tem inspeção + última condição `regular` + próxima inspeção não vencida (`status === 'regular'` sozinho não basta).
+  - PENDENTES = ativo + (nunca inspecionado OU última condição `pendente`/`vencido` OU próxima inspeção vencida). Disjunto de EM DIA por construção.
+- **Data civil**: comparações em `YYYY-MM-DD` (string) — `normalizeYmd()`/`getTodayYmd()` evitam o bug de fuso do `new Date('YYYY-MM-DD')`.
+- Dashboard: 4 cards clicáveis via `<Link>` (aria-label, hover, `focus-visible`, botão "Ver equipamentos →") apontando para `/equipamentos?view=...`.
+- `Equipamentos.tsx`: lê `view` (inválida é ignorada), título contextual ("Em dia", "Pendentes"…), contador `X de Y itens`, botão "Limpar filtro" (remove só `view`, preserva `q`), busca movida para query `?q=` aplicada SOBRE o conjunto do view, chips de categoria existentes mantidos, empty states por visão, breadcrumb de contagem refletindo `filtered.length`.
+- Nenhuma gravação de status, nenhuma migration (0018 continua reservada), nenhuma alteração em fotos/sync/RPC/RLS.
+
+**Nota (limitação documentada)**: a entidade `Inspection` não possui `createdAt` na app — o desempate de "última inspeção" com mesma data usa `id` (determinístico e constante entre Dashboard e lista).
+
+`npm run lint`: 0 erros, 2 warnings pré-existentes (mesmos do Prompt 09).  
+`npm run build`: tsc + vite build sem erros.
+
+---
+
+### Prompt 11 — Inspeções compartilhadas, edição, rastreabilidade e conflitos
+
+**Branch**: `feat/firecheck-inspecoes-compartilhadas`  
+**Status**: concluído  
+**Objetivo**: permitir que qualquer admin/inspetor visualize e edite qualquer inspeção (não apenas a própria), com edição offline-first protegida por CAS (compare-and-set via `updated_at`), rastreabilidade de quem editou e quando, exclusão exclusiva de admin, fotos compartilhadas sob demanda, e UI de conflito com resolução manual — sem regressão de status por edição de inspeção antiga e sem merge automático.
+
+**Problema identificado (diagnóstico)**: inspeções eram append-only e a edição era exclusiva do criador; os datilografados de `SomenteLeitura` impediam alterações; editar uma inspeção antiga via UPDATE simples reordenaria a lista por `updated_at` inválido ou poderia regredir o status do equipamento; fotos eram protegidas por pasta/owner (incompatível com inspeções compartilhadas); conflitos de inspeção eram ignorados pelo sync (append-only).
+
+**Migration `0018`** (idempotente):
+- Colunas `updated_by uuid`, `updated_by_name text` em `public.inspecoes` + índices.
+- `is_inspector_or_admin()` (papel em `profiles.role`); `can_access_inspection(p_inspection_id text)` (inspeção existe + usuário autorizado). No Storage, a policy compartilhada casa `fotos_inspecao.storage_path = storage.objects.name` e então chama o helper pelo `inspection_id`.
+- Trigger `inspecoes_audit`: BEFORE INSERT força `user_id = auth.uid()` e `created_at`; BEFORE UPDATE grava `updated_at = now()`, `updated_by = auth.uid()`, `updated_by_name = coalesce(new, old)` e RAISE `IMMUT` exceção se `id/equipment_id/user_id/inspetor/created_at` mudarem.
+- RLS inspecoes: SELECT/INSERT (admin + inspetores), UPDATE (mesmo autores, sem ownership), DELETE (admin apenas). Novas RLS destruídas e recriadas (drop policy if exists) para segurança.
+- Storage `inspection-photos`: policy compartilhada `p_storage_select_shared` via `can_access_inspection`.
+- RPC `recalculate_equipment_from_latest_inspection(p_equipment_id, p_next_inspection_date, p_trigger_inspection_id)` — recalcula status/datas pela inspeção mais recente com ordem determinística **`data DESC, created_at DESC, id DESC`** (`updated_at` NÃO define cronologia operacional); valida autenticação (`UNAUTH`), `is_inspector_or_admin()` (`PFORB`), existência do equipamento (`NOEQPT`) e que o trigger existe e pertence ao equipamento (`BADTRIG`); aplica `p_next` só quando `p_next IS NOT NULL AND p_trigger IS NOT NULL AND p_trigger = vencedora`; equipamento soft-deleted → `applied:false` (não ressuscita status); sem inspeções → `applied:false`. `revoke ... from public` + `grant execute ... to authenticated`.
+- Storage: além da policy compartilhada, remove defensivamente as policies legadas amplas `p_storage_select/insert/update/delete` (0001/0003) — em banco com 0017 aplicada é no-op; mutações seguem owner/admin.
+
+**Frontend**:
+- `Inspection` ganhou campos de auditoria e de conflito (`types/index.ts`); `LocalInspection` estendida + **Dexie v7** (índices `syncAction, syncConflict, updatedAt`) com upgrade vazio preservando dados.
+- `permissions.ts`: `canViewInspection`/`canEditInspection` (role-based, sem ownership) e `canDeleteInspection` (admin-only).
+- `inspectionService.ts`: `upsertInspection` com `select().maybeSingle()`; `fetchInspectionById`; `fetchInspectionRowById`; `updateInspectionRemote` (CAS com distinção `conflict`/`not_found`); `recalculateEquipmentFromLatestInspectionRemote`; `carregarInspecoes` grava `syncBaseUpdatedAt`.
+- `sync.ts`: `pushInspections` reescrito (create com upsert+returning + recalc RPC com `p_next`/`p_trigger`; update via CAS + recalc; delete com pré-checagem de conflito + row-confirm + recalc; `markConflict`; `reconcileStaleStatusFlags` para limpar `statusUpdatePending` órfão); `pullInspections` grava base e preserva linhas em conflito/pendentes.
+- `photoService.ts`: `downloadInspectionPhoto(storagePath)` — download remoto sob demanda com cache Blob (sem tocar flags de sync).
+- Páginas: `DetalheInspecao.tsx` (read-only com rastreabilidade, banner de conflito com KeepLocal/UseRemote e fotos sob demanda) e `EditarInspecao.tsx` (data civil com regex `^\d{4}-\d{2}-\d{2}$`, status 4 opções, observações, editor obrigatório com prefill localStorage) + rotas `/inspecoes/:id` e `/inspecoes/:id/editar` em `App.tsx`.
+- `DetalhesEquipamento.tsx`: badge "Editada", linha "Editada por", Eye → detalhe da inspeção e lápis → editar.
+- `Relatorios.tsx`: pill "Conflito" + botões de resolução no histórico; `Dashboard.tsx`/`Sidebar.tsx`: `conflictCounts.inspections`.
+- `store/index.ts`: `updateInspection` (`InspectionSaveResult {ok, mode:'local'|'cloud', conflict?, message?}`) com **pipeline único** — persiste Dexie/Zustand, dispara `await runSync()` e relê `db.inspecoes.get(id)` para decidir `cloud`/`conflict`/`local` (sem writer direto concorrente); `deleteInspection` é `async` e segue a ordem obrigatória (Dexie `pendingDelete`/`syncAction:'delete'` → Zustand → `await runSync()` → refresh de contadores); `resolveInspectionConflictKeepLocal/UseRemote`; guardas de permissão em `deleteInspection`/`addInspection`.
+
+**Regras de engenharia aplicadas**: datas civis nunca passam por `new Date('YYYY-MM-DD')`; CAS usa o `updated_at` remoto exato (microssegundos) sem reformatação; **todo UPDATE remoto de inspeção é CAS** (`.eq('updated_at', base).select('*').maybeSingle()`) — quando não há base (registro legado) o serviço faz `fetchInspectionRowById` e adota o `updated_at` remoto como base (nunca UPDATE cego); ordem de exclusão: persistir `pendingDelete`/`syncAction:'delete'` antes de sincronizar; sem UPDATE direto do Supabase dentro de páginas (tudo via store/services); sucesso exige `.select().maybeSingle()`; conflitos não contam como erros de sync.
+
+**Validação**: `npm run lint` 0 erros (2 warnings pré-existentes) e `npm run build` OK. Scripts de validação: `scripts/simulate-inspection-cas.mjs` (standalone, sem credenciais — 9 checagens `[PASS]`) e `scripts/validate-inspection-sharing.mjs` (integração RLS/CAS/RPC/fotos com clientes anon autenticados; requer `.env.test.local`). Migration `0018` criada, revisada e **aplicada** ao projeto remoto via `supabase db push`.
 
 ## 10. Branches de Trabalho
 
@@ -555,7 +680,10 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 | `fix/firecheck-05-qrcode-scanner-rastreabilidade` | Concluída |
 | `fix/firecheck-06-auto-sync-confiavel` | Concluída |
 | `fix/firecheck-07-controle-conflitos-updated-at` | Concluída |
-| `fix/firecheck-08-resolucao-manual-conflitos` | Ativa (resolução manual de conflitos + seleção de inspetor) |
+| `fix/firecheck-08-resolucao-manual-conflitos` | Concluída |
+| `fix/firecheck-fotos-inspecao` | Ativa (fotos de inspeção — aguardando merge) |
+| `feat/firecheck-dashboard-filtros` | Ativa (dashboard clicável e filtros — aguardando merge) |
+| `feat/firecheck-inspecoes-compartilhadas` | Ativa (inspeções compartilhadas + edição + rastreabilidade — aguardando merge) |
 
 ---
 
@@ -583,16 +711,16 @@ O auto-sync não é instantâneo — depende de eventos de foco/visibilidade/onl
 
 ## 12. Camada Local: Dexie (`src/db/index.ts`)
 
-### Schema v5
+### Schema
 
-```ts
-db.version(5).stores({
-  equipamentos: 'id, tipo, status, sincronizado',
-  inspecoes:    'id, equipmentId, sincronizado',
-  planosAcao:   'id, equipmentId, status, sincronizado, pendingDelete, syncAction, deletedAt',
-  fotos:        'id, inspectionId',
-  acoes_pendentes: '++id, type, timestamp',
-});
+```
+v5 (base):  equipamentos 'id, tipo, status, sincronizado'
+            inspecoes    'id, equipmentId, sincronizado'
+            planosAcao   'id, equipmentId, status, sincronizado, pendingDelete, syncAction, deletedAt'
+            fotos        'id, inspectionId'
+            acoes_pendentes '++id, type, timestamp'
+v6 (Prompt 09): fotos 'id, inspectionId, sincronizado, syncAction, storagePath'
+v7 (Prompt 11): inspecoes 'id, equipmentId, sincronizado, syncAction, syncConflict, updatedAt'
 ```
 
 ### LocalEquipment (Dexie row)
@@ -611,7 +739,7 @@ type LocalEquipment = Equipment & {
 };
 ```
 
-Mesma estrutura para `LocalActionPlan` e `LocalInspection`.
+Mesma estrutura para `LocalActionPlan` e `LocalInspection`. Estruturas de sync estendidas no Prompt 11: `updatedBy`, `updatedByName`, `syncBaseUpdatedAt`, `syncConflict`, `syncConflictReason`, `remoteUpdatedAtAtConflict`, `syncError`, `syncAction`.
 
 ### Mappers (`src/services/mappers.ts`)
 
@@ -634,7 +762,7 @@ syncAll(options?)
   ├── if !canSync()                → return skip('offline' | 'supabase-not-configured')
   ├── _syncInProgress = true
   ├── pushEquipments()             // local pendentes → Supabase
-  ├── pushInspections()            // inclui RPC de status
+  ├── pushInspections()            // create (upsert+returning), update (CAS por updated_at), delete, recalc RPC, concilia statusUpdatePending
   ├── pushActionPlans()            // create/update/soft delete
   ├── pullEquipments()             // cloud → Dexie + reconciliação
   ├── pullInspections()            // cloud → Dexie + reconciliação
@@ -650,7 +778,8 @@ syncAll(options?)
 - `syncAction === 'update'`: `update`.
 - Legacy (sem `syncAction`): tenta detectar via `findEquipmentById`.
 - `syncError = 'duplicate'` em caso de conflito — mantém dados intactos.
-- `statusUpdatePending`: tratado em `pushInspections` via RPC, não em `pushEquipments`.
+- `statusUpdatePending`: tratado em `pushInspections` via atualização da inspeção mais recente (create/update) com recalc RPC; flags órfãs são reconciliadas ao fim do push (`reconcileStaleStatusFlags`).
+- Inspeções compartilhadas: update usa CAS por `updated_at`; `syncError='conflict'` quando a versão remota divergiu; delete exige admin e pré-checagem de conflito com row-confirm.
 
 ### Pull
 
@@ -765,34 +894,45 @@ matchesEquipmentIdentity(eq, code): boolean    // compara com id, qrCode, qrcode
 
 ## 17. PWA (Progressive Web App)
 
-### Service Worker (`public/sw.js`)
+### Service Worker (`vite-plugin-pwa` → `dist/sw.js`)
 
-Estratégia **cache-first com atualização em background** (stale-while-revalidate):
+Gerado via `vite-plugin-pwa` (Workbox, modo `generateSW`, `registerType: 'autoUpdate'`):
 
-1. `install`: pré-carrega assets estáticos no cache `firecheck-v2`, `skipWaiting()`.
-2. `activate`: limpa caches antigos, `clients.claim()`.
-3. `fetch`: serve do cache se disponível; fetch em background para atualizar.
-4. `message`: escuta `SKIP_WAITING` para ativar novo worker.
+1. `workbox.globPatterns`: `**/*.{js,css,html,ico,png,svg,json}`.
+2. `navigateFallback: 'index.html'` — relativo, resolve contra o scope do SW e funciona tanto para a base `/` (deploy normal) quanto para `/firecheck/` (GitHub Pages). Evita o erro `non-precached-url :: [{"url":"/"}]`.
+3. `cleanupOutdatedCaches: true` — remove caches de versões anteriores do precache.
+4. `runtimeCaching` Supabase → `NetworkOnly`: requisições à nuvem nunca leem cache.
+5. `manifest: false` — o manifesto fica em `public/manifest.json` e é referenciado por `index.html` com `%BASE_URL%`.
 
-### Registro (`src/registerSW.ts`)
+### Registro (`src/hooks/usePwaUpdate.ts` + `virtual:pwa-register`)
 
-Apenas em produção (`import.meta.env.PROD`). Callback `onUpdateAvailable` exibe toast "Nova versão disponível" com ação "Atualizar".
+Registro via `registerSW` do `virtual:pwa-register` (bundle principal, `import.meta.env.PROD`).
+Callback `onUpdateAvailable` exibe toast "Nova versão disponível" com ação "Atualizar".
 
 ### Hook `usePwaUpdate`
 
-- Registra SW com callback de atualização.
+- Registra SW com callback de atualização (`autoUpdate`).
 - Escuta `appinstalled` para toast de sucesso.
 
 ### Hook `usePwaInstall`
 
 Máquina de estados: `unavailable` → `available` → `installed`. Detecta iOS para instruções manuais.
 
+### Resilência offline / sincronização (Prompt 13)
+
+- `src/services/network.ts` — classificação de erros de rede: rejects de `fetch` (`TypeError`/`FetchError`/`AbortError`), códigos HTTP funcionalmente de rede, e mensagens típicas (`Failed to fetch`, `net::ERR_*`, timeouts). Códigos funcionais (401/403/409/`42501`/`23505`, conflitos CAS) são tratados como NÃO-rede.
+- `src/services/networkState.ts` — circuit breaker singleton: `canAttemptNetwork()`, backoff progressivo de 15s→30s→60s→120s→300s após falha real de rede, `clearCooldown()` no evento `online` e na tentativa manual.
+- `src/services/sync.ts` — `syncAll` com short-circuit em cascata: qualquer etapa que comprove backend inalcançável (`network: true`) interrompe a rodada, abre o breaker e retorna `report.networkUnavailable`.
+- `src/store/index.ts` — campo `networkUnavailable` (não persistido) alimenta o `SyncStatusBadge` ("Aguardando conexão"); `hydrate`/gates usam `canAttemptNetwork()` em vez de somente `navigator.onLine`.
+- `src/services/authService.ts` — `resolveSession` tolerante offline: fallback para `user_metadata` quando o breaker está aberto (não desloga o usuário num reload sem internet); `listUsers` gateado por `canAttemptNetwork()`.
+- `src/hooks/useAutoSync.ts` — janela de sync com gate de `canAttemptNetwork()`; no evento `online` chama `clearCooldown()` antes da tentativa.
+
 ### Indicadores de sincronização
 
 | Componente | Onde | Função |
 |-----------|------|--------|
 | `OfflineBanner` | Topo (mobile + desktop) | Faixa âmbar informando modo offline |
-| `SyncStatusBadge` | Top bar (≥768px) | Pill compacto com estado do sync |
+| `SyncStatusBadge` | Top bar (≥768px) | Pill compacto com estado do sync (Sincronizando/Offline/Aguardando conexão/N pendentes/Sincronizado) |
 | `SyncNowButton` | Sidebar | Botão "Sincronizar agora" com contagem |
 | Badge Supabase | Sidebar | Status da conexão com nuvem |
 
@@ -810,18 +950,25 @@ Máquina de estados: `unavailable` → `available` → `installed`. Detecta iOS 
 8. **Planos de ação** têm RLS que precisa ser revisada — atualmente usam `user_id` mas a policy pode não estar alinhada com a de equipamentos.
 9. **Scanner** busca no Supabase apenas por `findEquipmentById` (precisa do código exato) — não faz busca fuzzy.
 10. **Fotos grandes** (>5 MB) em base64 no IndexedDB podem estourar quota do browser.
+11. **Fotos 48 MP** precisam validação em dispositivo real — o cap de 25 MP limita o canvas, mas o decode inicial ainda aloca a resolução original.
+12. ~~Fotos compartilhadas entre contas~~ — resolvido no Prompt 11 (migration `0018`, `can_access_inspection()`).
+13. ~~Download de fotos remotas sob demanda~~ — resolvido no Prompt 11 (`downloadInspectionPhoto` + `DetalheInspecao.tsx`).
+14. **Migration `0018` aplicada no Supabase remoto** via `supabase db push` em 2026-09-17. Pós-validação recomendada com as queries da seção 22.
+15. **Edição de inspeção** depende do CAS por `updated_at`: se dois dispositivos editam a mesma inspeção simultaneamente, o segundo entra em conflito (resolve manualmente) — sem merge campo a campo.
 
 ---
 
 ## 19. Próximos Passos Recomendados
 
-1. **Prompt 09 — Testes finais e deploy**:
+1. **Prompt 12 — Testes finais e deploy**:
+   - Aplicar a migration `0018` no Supabase remoto (validação SQL: policies, trigger, RPC recalc).
    - Testar multiusuário completo:
      - Admin cria equipamento.
      - Usuário comum inspeciona.
      - Status persiste entre dispositivos via RPC.
      - Exclusão propaga corretamente.
-     - Conflito com resolução manual.
+     - Conflito com resolução manual (equipamentos, planos e inspeções).
+     - Validação de CAS por simulação standalone de concorrência.
    - Relatório final com queries SQL de validação.
    - Criar release estável (tag + changelog) e PR.
 2. **Avaliar Supabase Realtime** como evolução para propagação imediata.
@@ -982,6 +1129,12 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-06-21 | `fix/firecheck-07-controle-conflitos-updated-at` | Controle de conflito por updated_at + UI de conflito | `syncBaseUpdatedAt`, `syncConflict`, `fetchById` com `not_found`, conflito bloqueia push/delete, pull preserva conflitos, `ServiceResult<T>` genérico, `conflictCounts` no store, badge "Conflito" em equipamentos/planos, alerta em detalhes, painel Dashboard, indicador Sidebar | Concluído | Prompt 08 — resolução manual de conflito (forçar sync ou descartar alteração local) |
 | 2026-06-21 | `fix/firecheck-08-resolucao-manual-conflitos` | Resolução manual de conflitos + auditoria PWA | `resolveEquipmentConflictKeepLocal/UseRemote`, `resolveActionPlanConflictKeepLocal/UseRemote`, UI de resolução em DetalhesEquipamento e PlanoDeAcao, auditoria migrations (14 seguras), SW/PWA (navigateFallback + NetworkOnly), listeners (sem duplicatas), console.log sanitizados (12 em DEV guard), lint 0 erros, build ok | Concluído | --- |
 | 2026-06-22 | `fix/firecheck-08-resolucao-manual-conflitos` | Seleção de inspetor nas inspeções | `src/config/inspectors.ts` com 4 inspetores fixos; select obrigatório em `Inspecionar.tsx`; persistência em localStorage do último inspetor; `inspetor` agora envia nome selecionado em vez de `user?.nome`; nenhuma migration necessária (coluna já existia); lint 0 erros, build ok | Concluído | Revisão para main |
+| 2026-09-16 | `fix/firecheck-fotos-inspecao` | Fotos de inspeção — captura Blob + Storage | `compressInspectionImage` (pipeline Blob), Dexie v6 com `LocalInspectionPhoto` (migração `base64`→`legacyBase64`), transação atômica + `SaveInspectionResult`, `pushInspectionPhotos`/`pullInspectionPhotos`, preview via Object URL com revogação, storagePath-first no retry, migration `0017` | Concluído | Merge em `main` (Prompt 11 — testes finais e deploy) |
+| 2026-09-16 | `feat/firecheck-dashboard-filtros` | Dashboard clicável e filtros (KPIs confiáveis + drill-down) | `src/utils/equipmentFilters.ts` (fonte única de verdade: `getEquipmentDashboardGroups`, `getLatestInspectionForEquipment`, `getDashboardGroupByView`); 4 cards clicáveis (CADASTRADOS, INSPECIONADOS, EM DIA, PENDENTES) → `/equipamentos?view=...`; busca `?q=` sobre o conjunto do view; títulos contextuais, "Limpar filtro", empty states por visão; data civil `YYYY-MM-DD` (sem bug de fuso); sem migration/backend/fotos; lint 0 erros, build ok | Concluído | Merge em `main` (Prompt 12 — testes finais e deploy) |
+| 2026-09-16 | `feat/firecheck-inspecoes-compartilhadas` | Inspeções compartilhadas, edição, rastreabilidade e conflitos | diagnóstico da auditoria (§2); migration `0018` (updated_by/updated_by_name, trigger `inspecoes_audit`, RLS compartilhada + DELETE admin-only, storage shared, RPC recalc); campos de auditoria/conflito em `Inspection`/`LocalInspection` + Dexie v7; CAS em `updateInspectionRemote`; `pushInspections` reescrito (create/update/delete/recalc/reconcile); `pullInspections` com base; resolvers de conflito no store; `DetalheInspecao`/`EditarInspecao` + rotas; badge "Editada" e lápis em DetalhesEquipamento; pill de conflito + resolução em Relatorios; Dashboard/Sidebar com `conflictCounts.inspections`; lint 0 erros, build ok | Concluído | Aplicar migration `0018` no Supabase remoto e teste multiusuário (Prompt 12 — testes finais e deploy) |
+| 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Hardening offline/PWA (Prompt 13) | circuit breaker + backoff progressivo (`networkState.ts`, 15s→300s); classificação de erros de rede (`utils/network.ts`); `syncAll` com short-circuit em cascata e `networkUnavailable` no report; serviços (equipamentos/inspeções/planos/fotos) propagam `network` e marcam brea em vez de gravar `syncError`; logout preservado offline via `inspectorFromSession`; `useAutoSync` com gate `canAttemptNetwork` + `clearCooldown` no `online`; badge "Aguardando conexão"; `navigateFallback: 'index.html'` + `cleanupOutdatedCaches` (corrige `non-precached-url`); favicons/manifest com `%BASE_URL%`; manifest `id:"./"`; docs atualizadas; lint 0 erros, build ok | Concluído | --- |
+| 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Idempotência de submissão de inspeções (anti-duplicidade) | causa provável: `if (isSaving) return` dependia do render; cada submit gerava novo `INSP-${uuid}`; lock síncrono `submitLockRef` + `submissionIdRef`/`inspectionIdRef` (estáveis por tentativa, reset só em "Nova Inspeção"); `addInspection({ inspectionId })` + guarda idempotente no store (sucesso idempotente/colisão explícita); IDs derivados `FOTO-<inspectionId>`/`PAC-<inspectionId>`; transação Dexie mantida; push create já idempotente (`onConflict:'id'`); `scripts/simulate-inspection-idempotency.mjs` (24 checks, TODOS PASS); lint 0 erros, build ok | Concluído | TESTE 18 de `validate-inspection-sharing.mjs`: conta de teste `firecheck.admin.teste@efetiva.com` está `role=inspector` no remoto (policy exige `is_admin()`); sonda read-only confirmou; exigiria ajuste de role — não executado por regra de imutabilidade de dados |
+| 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Atomicidade do plano de ação + fechamento 56/56 (Prompt 17) | `addInspection`: planosAcao ENTROU na transação Dexie (`inspecoes+fotos+equipamentos+planosAcao`); fim do fire-and-forget (`void db.planosAcao.put`) no `set()` do Zustand; falso sucesso eliminado (falha no plano → rollback TOTAL de inspeção/foto/equipamento/plano); guarda idempotente fortalecida com repair controlado de `PAC-<inspectionId>` ausente (`idempotent + repairedActionPlan`) SEM sobrescrever plano existente; sem repair de foto (atomicidade documentada); sem backfill; `validate-inspection-sharing.mjs` com preflight de roles (TEST ENV MISCONFIGURED aborta antes de E2E); conta de teste `firecheck.admin.teste@efetiva.com` promovida a `role=admin` (autorização explícita, único profile alterado); simulação idempotência 64 checks + CAS 9/9 + remoto **56/56 PASS**; lint 0 erros; tsc+build ok | Concluído | Review/main no próximo merge |
 
 ---
 
@@ -989,9 +1142,13 @@ Sempre que iniciar nova sessão neste projeto:
 
 - [ ] `npm run lint` sem erros.
 - [ ] `npm run build` OK.
-- [ ] Todas as migrations (`0001`–`0014`) aplicadas no Supabase remoto.
+- [ ] Todas as migrations (`0001`–`0018`) aplicadas no Supabase remoto.
 - [ ] Cadastro de equipamento sem duplicidade (local + remoto).
 - [ ] Inspeção sem duplicidade no histórico.
+- [ ] Inspeção compartilhada: inspector edita inspeção de outro usuário e o status não regride (recalc pela mais recente).
+- [ ] Rastreabilidade: `updated_by`/`updated_by_name`/`updated_at` visíveis após edição.
+- [ ] Conflito de inspeção detectado no CAS e resolvível (manter local / usar servidor).
+- [ ] Exclusão de inspeção restrita a admin (RLS + UI).
 - [ ] Status por inspeção persiste entre usuários (RPC).
 - [ ] Planos de ação sincronizam entre dispositivos.
 - [ ] QR Code escaneia corretamente (Zustand → Dexie → Supabase).
@@ -1003,3 +1160,111 @@ Sempre que iniciar nova sessão neste projeto:
 - [ ] Teste multiusuário aprovado (admin + inspector).
 - [ ] Scanner rejeita equipamento excluído.
 - [ ] QR Code sempre codifica a TAG oficial.
+
+---
+
+## 26. Prevenção de Duplicidade de Inspeções (Idempotência de Submissão)
+
+**Sintoma auditado:** uma única inspeção gerava 2–3 registros no histórico com
+mesma data/horário/mensagem (um deles eventualmente editado em teste).
+
+### Causa provável (não há prova exata dos 3 registros originais)
+
+Gap assíncrono de deduplicação: múltiplos `submit` (double-click / Enter
+repetido) atravessam a janela entre o primeiro evento e o próximo render do
+React. A guarda anterior `if (isSaving) return` dependia de estado (`useState`),
+que só atualiza após render. Cada chamada a `addInspection()` gerava um ID novo
+(`INSP-${crypto.randomUUID()}`) → cada submit criava uma inspeção distinta.
+Confirmado que **StrictMode não é a causa** (event handlers não são
+duplamente invocados por StrictMode).
+
+### Atomicidade do plano de ação (Prompt 17)
+
+O plano de ação era criado **fora** da transação (`void db.planosAcao.put(...)`
+fire-and-forget dentro do `set()` do Zustand). Isso permitia: inspeção ✅ + foto ✅
++ equipamento ✅ + plano ❌ com retorno de sucesso (falso sucesso), e o caminho
+idempotente retornava sucesso sem validar `PAC-<inspectionId>`. Correção:
+
+- `db.transaction('rw', db.inspecoes, db.fotos, db.equipamentos, db.planosAcao, ...)`
+  — INSPEÇÃO + FOTO + EQUIPAMENTO + PLANO na MESMA transação. Falha em
+  qualquer obrigatório → rollback TOTAL (nada persiste, equipamento reverte).
+- Plano criado só para `pendente`/`vencido`, com ID `PAC-${inspectionId}`
+  (nunca `Date.now`/`Math.random`/UUID).
+- `set()` do Zustand **sem escrita Dexie** — apenas reflete o que JÁ foi
+  persistido (PERSISTÊNCIA → COMMIT → ZUSTAND → SYNC).
+- Guarda idempotente fortalecida: se `existing.status` é `pendente`/`vencido` e
+  `PAC-${inspectionId}` **não existe** → **repair controlado** (cria SÓ o plano
+  faltante, com check duplo dentro de transação; retorna `idempotent` +
+  `repairedActionPlan`). Sem backfill em massa de históricos antigos.
+- Plano existente **nunca** é sobrescrito (responsável/prazo/status
+  preservados).
+- Foto não tem repair: inspeção+foto são atômicas na mesma transação
+  (documentado) — se a inspeção existe, a foto foi gravada junto.
+
+### Camadas implementadas
+
+1. **Lock síncrono de UI** (`submitLockRef` em `Inspecionar.tsx`) — atribuição
+   imediata, sem depender do render do React. `isSaving` ficou para aparência.
+2. **Identidade estável da tentativa** — `submissionIdRef` (`??= crypto.randomUUID()`)
+   e `inspectionIdRef` (`INSP-<submissionId>`). Retry reutiliza os MESMOS IDs.
+   Liberação do lock apenas em erro; após sucesso só "Nova Inspeção" reseta.
+3. **`addInspection({ inspectionId, ... })`** — o store NÃO gera mais ID: recebe o
+   ID determinístico da tentativa.
+4. **Guarda idempotente no store** — se `db.inspecoes.get(inspectionId)` já existe:
+   - mesmo `equipmentId` → sucesso idempotente (`ok:true, idempotent:true`);
+   - `equipmentId` diferente → erro explícito de colisão (nunca gera outro ID);
+   - `pendente`/`vencido` sem plano → **repair** (idempotent + repairedActionPlan).
+5. **Dexie** — `put()` na chave primária (id). Retry converge para 1 registro.
+6. **Foto** — ID derivado `FOTO-<inspectionId>`: 1 tentativa → ≤1 foto de criação
+   (atômica com a inspeção).
+7. **Plano de ação** — ID derivado `PAC-<inspectionId>`, DENTRO da transação:
+   inspeção pendente/vencida → exatamente 1 plano por tentativa.
+8. **Transação atômica** (inspeção + foto + status do equipamento + plano).
+9. **Sync** — `pushInspections` (create) já usa `upsertInspection` com
+   `onConflict: 'id'`; `public.inspecoes.id` é `text primary key` (0001). Retry
+   remoto converge para 1 linha. A RPC de recálculo é idempotente por design
+   (recalcula pela inspeção mais recente; `p_trigger_inspection_id` preserva
+   `data_proxima_inspecao`). O plano gerado na transação sai com
+   `sincronizado=false, syncAction='create'` e é empurrado por `pushActionPlans`
+   na mesma rodada de sync — que só dispara APÓS o commit.
+
+### Preflight de roles na validação remota (Prompt 17)
+
+`scripts/validate-inspection-sharing.mjs` ganhou **preflight obrigatório**:
+antes de qualquer criação de dado E2E, consulta (read-only) o `profiles.role`
+de cada conta autenticada e exige `TEST_ADMIN=admin`, `TEST_INSPECTOR_A/B=
+inspector`. Se falhar: imprime `TEST ENV MISCONFIGURED`, aborta sem tocar em
+dados e retorna código ≠ 0. O script **nunca** promove/demove usuários.
+A conta `firecheck.admin.teste@efetiva.com` foi promovida a `role=admin` no
+staging (autorização explícita; único profile alterado — conferido por SELECT
+antes/depois; `admin` ficou em 2 = conta real + conta de teste, `inspector` em 7).
+
+### Testes automatizáveis
+
+`scripts/simulate-inspection-idempotency.mjs` (sem Supabase, em memória):
+1 clique / duplo / triplo / Enter repetido / retry após erro / offline /
+foto / plano / nova inspeção / colisão / **rollback por falha do plano** /
+**retry após rollback** / **repair de plano ausente** / **plano existente não
+sobrescrito** / regular / pendente / vencido / foto+pendente (sucesso 1/1/1 e
+falha 0/0/0) / equipamento reverte ao original. Estado: TODOS PASS (64 checks).
+
+`scripts/validate-inspection-sharing.mjs` (remoto, staging): **56/56 PASS**
+(inclui TESTE 18 admin-delete após a correção de role).
+
+### Query SQL de diagnóstico (read-only — NÃO é regra de deduplicação)
+
+```sql
+-- Inspeções potencialmente duplicadas por proximidade temporal (diagnóstico).
+select equipment_id, inspetor, data,
+       date_trunc('minute', created_at) as minuto,
+       count(*) as qtd,
+       string_agg(id, ', ' order by created_at) as ids
+from public.inspecoes
+group by equipment_id, inspetor, data, date_trunc('minute', created_at)
+having count(*) > 1
+order by minuto desc;
+```
+
+Registros pré-existentes (inclusive as 3 inspeções observadas) foram **mantidos
+intactos** — a correção vale apenas para novas submissões. Equipamentos, QR
+Codes e históricos antigos permanecem intactos.
