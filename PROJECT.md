@@ -1135,6 +1135,7 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Hardening offline/PWA (Prompt 13) | circuit breaker + backoff progressivo (`networkState.ts`, 15s→300s); classificação de erros de rede (`utils/network.ts`); `syncAll` com short-circuit em cascata e `networkUnavailable` no report; serviços (equipamentos/inspeções/planos/fotos) propagam `network` e marcam brea em vez de gravar `syncError`; logout preservado offline via `inspectorFromSession`; `useAutoSync` com gate `canAttemptNetwork` + `clearCooldown` no `online`; badge "Aguardando conexão"; `navigateFallback: 'index.html'` + `cleanupOutdatedCaches` (corrige `non-precached-url`); favicons/manifest com `%BASE_URL%`; manifest `id:"./"`; docs atualizadas; lint 0 erros, build ok | Concluído | --- |
 | 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Idempotência de submissão de inspeções (anti-duplicidade) | causa provável: `if (isSaving) return` dependia do render; cada submit gerava novo `INSP-${uuid}`; lock síncrono `submitLockRef` + `submissionIdRef`/`inspectionIdRef` (estáveis por tentativa, reset só em "Nova Inspeção"); `addInspection({ inspectionId })` + guarda idempotente no store (sucesso idempotente/colisão explícita); IDs derivados `FOTO-<inspectionId>`/`PAC-<inspectionId>`; transação Dexie mantida; push create já idempotente (`onConflict:'id'`); `scripts/simulate-inspection-idempotency.mjs` (24 checks, TODOS PASS); lint 0 erros, build ok | Concluído | TESTE 18 de `validate-inspection-sharing.mjs`: conta de teste `firecheck.admin.teste@efetiva.com` está `role=inspector` no remoto (policy exige `is_admin()`); sonda read-only confirmou; exigiria ajuste de role — não executado por regra de imutabilidade de dados |
 | 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Atomicidade do plano de ação + fechamento 56/56 (Prompt 17) | `addInspection`: planosAcao ENTROU na transação Dexie (`inspecoes+fotos+equipamentos+planosAcao`); fim do fire-and-forget (`void db.planosAcao.put`) no `set()` do Zustand; falso sucesso eliminado (falha no plano → rollback TOTAL de inspeção/foto/equipamento/plano); guarda idempotente fortalecida com repair controlado de `PAC-<inspectionId>` ausente (`idempotent + repairedActionPlan`) SEM sobrescrever plano existente; sem repair de foto (atomicidade documentada); sem backfill; `validate-inspection-sharing.mjs` com preflight de roles (TEST ENV MISCONFIGURED aborta antes de E2E); conta de teste `firecheck.admin.teste@efetiva.com` promovida a `role=admin` (autorização explícita, único profile alterado); simulação idempotência 64 checks + CAS 9/9 + remoto **56/56 PASS**; lint 0 erros; tsc+build ok | Concluído | Review/main no próximo merge |
+| 2026-09-18 | `release/firecheck-stabilization` | Integração das 3 branches + smoke staging (Prompt 18) | Grafo auditado: fotos (`e40e556`) e dashboard (`ec6316d`) são **ancestrais completos** de inspecoes-compartilhadas (merge-bases = heads → SKIPPED — already ancestor/included); merge único `--no-ff` de `feat/firecheck-inspecoes-compartilhadas` (contém fotos + dashboard + compartilhamento + offline + idempotência + atomicidade), **sem merge redundante**; migrations `0017`/`0018` idênticas às validadas (diff vazio) e intactas, sem `0019`; smoke staging E2E: preflight roles 3/3 PASS, equipamento/foto/QR/inspeção/plano/dashboard/CAS/conflito A/B/RASTREABILIDADE 56/56 + idempotência 64/64 + CAS 9/9; integridade antes/depois: equipamentos 41→42→41, QR intactos, históricos intactos, **0 linhas reais alteradas**; cleanup E2E completo; lint 0 erros, tsc+build ok, dist/sw.js com `createHandlerBoundToURL("index.html")` | Concluído | Prompt 19 — preflight de produção |
 
 ---
 
@@ -1268,3 +1269,86 @@ order by minuto desc;
 Registros pré-existentes (inclusive as 3 inspeções observadas) foram **mantidos
 intactos** — a correção vale apenas para novas submissões. Equipamentos, QR
 Codes e históricos antigos permanecem intactos.
+
+---
+
+## 27. Integração / Stabilization Release (Prompt 18)
+
+### Base
+
+- `main` SHA: `b3ce7bac1bf7439eb794d01ad7438d7d87231cb5` (HEAD de `origin/main` após `git pull --ff-only`).
+- Branch de integração: `release/firecheck-stabilization` (local + remota) — criada a partir de `main`, sem merge em `main`.
+
+### Grafo / ancestralidade
+
+| Branch | HEAD | Base comum com main | Commits exclusivos (vs main) | Já contida em `feat/firecheck-inspecoes-compartilhadas`? |
+|--------|------|----------------------|------------------------------|--------------------------------------------------------|
+| `fix/firecheck-fotos-inspecao` | `e40e556` | `b3ce7ba` (= main) | `c94d53b`, `e40e556` (2) | **SIM** (ancestral) |
+| `feat/firecheck-dashboard-filtros` | `ec6316d` | `b3ce7ba` (= main) | `c94d53b`, `e40e556`, `ec6316d` (3) | **SIM** (ancestral) |
+| `feat/firecheck-inspecoes-compartilhadas` | `2b0eab9` | `b3ce7ba` (= main) | 10 commits (fotos + dashboard + inspeções compartilhadas + CAS + RLS + edição + offline/PWA + idempotência + atomicidade) | — |
+
+### Estratégia utilizada
+
+- `merge-base fotos × inspecoes = e40e556` (= HEAD de fotos) e `merge-base dashboard × inspecoes = ec6316d` (= HEAD de dashboard) ⇒ **fotos e dashboard são ancestrais completos de inspecoes**. `git log fotos..inspecoes` e `git log dashboard..inspecoes` confirmaram: nenhum commit exclusivo a perder.
+- **Mergeado:** somente `feat/firecheck-inspecoes-compartilhadas` → `--no-ff` (rastreabilidade preservada).
+- **Puladas (nada a integrar):** `fix/firecheck-fotos-inspecao` e `feat/firecheck-dashboard-filtros` — `SKIPPED — already ancestor/included`.
+
+### Merge commits
+
+| SHA | Descrição |
+|-----|-----------|
+| `2cffc52` | Merge: integra inspecoes compartilhadas (contem fotos + dashboard + offline + idempotencia + atomicidade) |
+
+### Conflitos
+
+Nenhum — a integração partiu de `main` (ancestral de todas as branches) e a única branch mergeada já continha as demais; merge `ort` trivial (fast-forward-style com `--no-ff`).
+
+### Migrations
+
+- `0017_fotos_inspecao_storage_policies.sql` (80 linhas) e `0018_shared_inspection_permissions_and_audit.sql` (321 linhas) — **idênticas** às versões validadas nas branches de origem (`git diff` vazio vs `origin/fix/firecheck-fotos-inspecao` e `origin/feat/firecheck-inspecoes-compartilhadas`). Nenhuma renumeração, nenhuma edição semântica, **sem 0019** (nenhuma necessidade real constatada). Nenhuma `supabase db push` executada (0018 já está aplicada no staging).
+
+### Funcionalidades preservadas
+
+- **Fotos:** Blob no Dexie, compressão/redimensionamento, preview ObjectURL + revogação, `storagePath`, retry seguro, bucket privado, download compartilhado por permissão da inspeção, sync offline/online (não regride para base64).
+- **Dashboard:** `src/utils/equipmentFilters.ts` como fonte única (grupos CADASTRADOS/INSPECIONADOS/EM DIA/PENDENTES), drill-down por `?view=` em `Equipamentos`, busca `?q=`, data civil `YYYY-MM-DD`.
+- **Inspeções:** cronologia `data DESC, created_at DESC, id DESC` (nunca `updated_at`); `updated_at` apenas para auditoria/CAS/concorrência.
+- **Compartilhamento:** admin+inspector visualizam/editam; só admin exclui; `user_id`/inspetor original/`created_at` imutáveis; `updated_by`/`updated_by_name`/`updated_at`; CAS; UseRemote/KeepLocal.
+- **Idempotência:** `submissionId` estável → `inspectionId` estável; double/triple submit → 1 inspeção; retry mesmo ID; IDs derivados `FOTO-<inspectionId>`/`PAC-<inspectionId>` (nunca `Date.now`/`Math.random`/UUID novo).
+- **Atomicidade:** `addInspection` com transação única `inspecoes + fotos + equipamentos + planosAcao`; falha de persistência obrigatória → rollback total; Zustand reflete depois do commit; repair controlado de `PAC-<id>` ausente sem sobrescrever plano existente.
+- **Hardening offline:** network classifier, circuit breaker, backoff progressivo, `canAttemptNetwork()`/`clearCooldown()`, short-circuit da rodada, `networkUnavailable`, falha de rede não vira conflito nem `syncError` permanente.
+- **PWA:** `navigateFallback: 'index.html'`, `cleanupOutdatedCaches: true`, Supabase NetworkOnly, favicons/manifest com `%BASE_URL%`, `id: "./"`.
+- **QR Codes:** TAG oficial = `equipment.id`; nenhum QR regenerado.
+
+### Testes
+
+| Pilar | Resultado |
+|-------|-----------|
+| `npx tsc -b` | PASS |
+| `npm run lint` | 0 erros (2 warnings pré-existentes: `react-hooks/incompatible-library`) |
+| `npm run build` | PASS (`tsc -b && vite build`; 70 entries precached) |
+| `dist/sw.js` | `createHandlerBoundToURL("index.html")` presente; `non-precached-url` ausente |
+| CAS (`simulate-inspection-cas.mjs`) | 9/9 PASS |
+| Idempotência (`simulate-inspection-idempotency.mjs`) | 64/64 PASS |
+| RLS/compartilhamento remoto (`validate-inspection-sharing.mjs`, run `MU72GYOM`) | **56/56 PASS**; preflight roles OK (admin/inspector/inspector); bucket privado; admin-delete OK |
+| Smoke integrado | Equipamento E2E criado/editado/excluído; inspeção E2E com CAS A/B; `user_id` imutável; foto upload/download compartilhado; anônimo NEGADO; integridade 41=41; QR intactos; cleanup E2E completo |
+
+Itens que exigem dispositivo/sessão humana (QR físico via celular, toggle offline no DevTools, drill-down por clique na UI, banner de conflito em duas sessões) permanecem como **teste manual documentado** — não foram reafirmados como reexecutados nesta integração.
+
+### Pendências pré-produção (auditadas, sem correção automática)
+
+| Item | Status | Severidade | Observação |
+|------|--------|------------|------------|
+| Paginação do pull remoto | PENDENTE | Média | Pull sem `limit`/`range` (volume atual pequeno); aplicar paginação quando a base crescer |
+| Isolamento de dados locais por sessão/usuário | PENDENTE | Média | Dexie único por origin; múltiplos perfis no mesmo browser compartilham dados locais |
+| Policies de `profiles` | RESOLVIDO | — | Migration `0003`: RLS (select autenticado; update self/admin; delete admin-only; sem auto-rebaixamento) |
+| Provisionamento do primeiro admin | RESOLVIDO | — | Trigger `handle_new_user` (`0003`): primeiro profile vira `admin`, demais `inspector` |
+| Segurança da rota/impressão de QR | PENDENTE | Baixa | `/qrcodes/imprimir` é rota de nível raiz, fora do guard do `AppLayout`; sem dados quando não autenticado, mas sem redirect explícito |
+| Migrations antigas com regras de autoria/NULL | PENDENTE | Média | `0018` cobre autoria de inspeções; consolidação de NOT NULL/autoria em `equipamentos`/`planos_acao` não auditada |
+| Teste físico de foto em celular/câmera de alta resolução | PENDENTE | Média | Decode de 48 MP ainda aloca resolução original antes do cap de 25 MP; requer dispositivo real |
+| Comportamento dos status especiais do Dashboard | RESOLVIDO | — | `equipmentFilters.ts` cobre regular/em dia e pendente/vencido como fonte única de verdade |
+
+### Resultado
+
+- Heads reais consultados (sem assumir os registros anteriores); working tree verificada limpa; nenhum merge redundante; nenhum conflito; migrations 0017/0018 intactas; tsc/lint/build/CAS/idempotência/RLS passando; equipamentos e QRs reais intactos; cleanup 100% E2E.
+- **Resultado desta etapa: INTEGRAÇÃO APROVADA.**
+- Branch final: `release/firecheck-stabilization` — HEAD `2cffc52`. Próximo passo (separado, com decisão do usuário): produção.
