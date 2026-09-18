@@ -52,6 +52,11 @@ export interface SaveInspectionResult {
   /** false quando a foto falhou (ex.: quota do IndexedDB). */
   photoSaved: boolean;
   error?: string;
+  /** ID determinístico da tentativa que originou esta inspeção. */
+  inspectionId?: string;
+  /** true quando a tentativa já existia localmente e o submit foi absorvido
+   *  (retry / double-submit) — NENHUM registro duplicado foi criado. */
+  idempotent?: boolean;
 }
 
 /** Resultado da edição compartilhada de uma inspeção. */
@@ -173,6 +178,10 @@ interface AppState {
   logout: () => Promise<void>;
   setCurrentTab: (tab: Tab) => void;
   addInspection: (data: {
+    /** ID DETERMINÍSTICO da tentativa de criação — gerado UMA vez no
+     *  frontend e reutilizado em retries da mesma tentativa. O store NUNCA
+     *  gera outro ID silenciosamente. */
+    inspectionId: string;
     equipmentId: string;
     data: string;
     inspetor: string;
@@ -1017,11 +1026,45 @@ export const useAppStore = create<AppState>()(
         },
 
         addInspection: async (data) => {
-          const id = `INSP-${crypto.randomUUID()}`;
+          const inspectionId = data.inspectionId;
           const userId = data.userId ?? get().user?.id;
 
+          // -----------------------------------------------------------------
+          // GUARDA DE IDEMPOTÊNCIA da tentativa: se já existe registro local
+          // com este inspectionId, a mesma tentativa foi processada antes
+          // (double/triple submit, retry após erro incerto). NUNCA geramos
+          // outro ID — convergimos para o registro existente.
+          // -----------------------------------------------------------------
+          const existing = await db.inspecoes.get(inspectionId);
+          if (existing) {
+            if (existing.equipmentId === data.equipmentId) {
+              if (import.meta.env.DEV) {
+                console.log(`[inspection-create] existing local inspection reused ${inspectionId}`);
+              }
+              return {
+                ok: true,
+                inspectionSaved: true,
+                photoSaved: true,
+                inspectionId,
+                idempotent: true,
+              };
+            }
+            // Colisão: o ID da tentativa já pertence a outro contexto. Erro
+            // explícito — nunca cria um registro novo em silêncio.
+            return {
+              ok: false,
+              inspectionSaved: false,
+              photoSaved: false,
+              error: 'Conflito de tentativa de inspeção (ID já utilizado em outro equipamento). Recarregue a tela e tente novamente.',
+            };
+          }
+
+          // Foto com ID derivado da tentativa: mesmo retry usa a MESMA foto
+          // (FOTO-<inspectionId>) — no máximo 1 registro de foto por tentativa.
+          const photoId = data.photo ? `FOTO-${inspectionId}` : undefined;
+
           const stamped: Inspection = {
-            id,
+            id: inspectionId,
             equipmentId: data.equipmentId,
             data: data.data,
             inspetor: data.inspetor,
@@ -1046,11 +1089,10 @@ export const useAppStore = create<AppState>()(
                 updatedAt: now,
               } as LocalInspection);
 
-              if (data.photo) {
-                const now = new Date().toISOString();
+              if (data.photo && photoId) {
                 await db.fotos.put({
-                  id: `FOTO-${crypto.randomUUID()}`,
-                  inspectionId: id,
+                  id: photoId,
+                  inspectionId,
                   blob: data.photo.blob,
                   mimeType: data.photo.mimeType,
                   width: data.photo.width,
@@ -1098,7 +1140,9 @@ export const useAppStore = create<AppState>()(
             if (data.status === 'vencido' || data.status === 'pendente') {
               const eq = updatedEquipments.find((e) => e.id === data.equipmentId);
               const descObs = data.observacoes || 'Não conformidade identificada durante inspeção';
-              actionPlanId = `PAC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+              // Plano com ID DERIVADO da tentativa: mesmo retry gera o MESMO
+              // plano (`PAC-<inspectionId>`) — convergência, não duplicata.
+              actionPlanId = `PAC-${inspectionId}`;
               const now = new Date().toISOString();
               const newPlan: ActionPlan = {
                 id: actionPlanId,
@@ -1114,7 +1158,7 @@ export const useAppStore = create<AppState>()(
                 updatedAt: now,
               };
 
-              // Also write to Dexie
+              // Also write to Dexie (put idempotente na chave `id`).
               void db.planosAcao.put({
                 ...newPlan,
                 sincronizado: false,
@@ -1140,7 +1184,7 @@ export const useAppStore = create<AppState>()(
           // 3. Trigger sync once
           void runSync().then(() => get().refreshPendingCount());
 
-          return { ok: true, inspectionSaved: true, photoSaved: true };
+          return { ok: true, inspectionSaved: true, photoSaved: true, inspectionId };
         },
 
         addActionPlan: (plan) => {

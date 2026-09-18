@@ -538,6 +538,13 @@ export default function Inspecionar() {
   const [inspectorName, setInspectorName] = useState(() => localStorage.getItem('firecheck_last_inspector_name') || '');
   const [isSaving, setIsSaving] = useState(false);
 
+  // Idempotência de submissão: lock síncrono (imediato, sem depender do render)
+  // + identidade estável da tentativa (submissionId → inspectionId). Retry da
+  // mesma tentativa reutiliza os MESMOS IDs.
+  const submitLockRef = useRef(false);
+  const submissionIdRef = useRef<string | null>(null);
+  const inspectionIdRef = useRef<string | null>(null);
+
   const [online, setOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -610,18 +617,35 @@ export default function Inspecionar() {
 
   const handleFinalize = async (e: FormEvent) => {
     e.preventDefault();
+
+    // LOCK SÍNCRONO — primeira camada de idempotência. Atribuição imediata,
+    // sem depender do próximo render do React (defende double/triple click e
+    // Enter repetido que atravessam a janela antes de `disabled`/`isSaving`).
+    if (submitLockRef.current) {
+      if (import.meta.env.DEV) console.log('[inspection-submit] duplicate submit ignored (lock síncrono)');
+      return;
+    }
+
     if (!selectedEquipment) {
       setErrorMsg('Por favor, selecione um equipamento.');
       return;
     }
 
-    // Prevent double-click
-    if (isSaving) return;
-
     if (!inspectorName) {
       setErrorMsg('Selecione o inspetor responsável pela inspeção.');
-      setIsSaving(false);
       return;
+    }
+
+    submitLockRef.current = true;
+
+    // IDENTIDADE DA TENTATIVA — gerada UMA vez por tentativa. Retry da mesma
+    // tentativa reutiliza submissionId/inspectionId (nunca um novo UUID).
+    submissionIdRef.current ??= crypto.randomUUID();
+    inspectionIdRef.current ??= `INSP-${submissionIdRef.current}`;
+    const inspectionId = inspectionIdRef.current;
+
+    if (import.meta.env.DEV) {
+      console.log(`[inspection-submit] accepted ${submissionIdRef.current}`);
     }
 
     // Determine status logic.
@@ -651,6 +675,7 @@ export default function Inspecionar() {
     try {
       localStorage.setItem('firecheck_last_inspector_name', inspectorName);
       const result = await addInspection({
+        inspectionId,
         equipmentId: selectedEquipment.id,
         data: new Date().toISOString().split('T')[0],
         inspetor: inspectorName,
@@ -671,20 +696,38 @@ export default function Inspecionar() {
 
       if (!result.ok) {
         setErrorMsg(result.error ?? 'Erro ao salvar inspeção. Tente novamente.');
+        // B) erro antes de persistir → libera lock para nova tentativa da
+        // MESMA tentativa (o inspectionId é mantido)
+        submitLockRef.current = false;
+        if (import.meta.env.DEV) console.log(`[inspection-submit] lock liberado (erro) ${submissionIdRef.current}`);
         return;
       }
 
+      // C) sucesso → lock permanece fechado (mesmo formulário não aceita novo
+      // submit). Apenas "Nova Inspeção" reseta lock + IDs.
       setSuccess(true);
+      if (result.idempotent) {
+        if (import.meta.env.DEV) console.log(`[inspection-submit] submit idempotente absorvido ${submissionIdRef.current}`);
+      }
     } catch (err) {
       console.error(err);
       setErrorMsg('Erro ao salvar inspeção. Tente novamente.');
+      submitLockRef.current = false;
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleNewInspection = () => {
+    // Reset TOTAL do estado de submissão: nova tentativa → novo submissionId,
+    // novo inspectionId, lock reaberto. (Item 10/34/40 do plano de idempotência.)
+    submitLockRef.current = false;
+    submissionIdRef.current = null;
+    inspectionIdRef.current = null;
+
     setSuccess(false);
+    setErrorMsg('');
+    setIsSaving(false);
     setObservacoes('');
     setPhotoDraft(null);
     setPhotoProcessing(false);

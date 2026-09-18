@@ -1133,6 +1133,7 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-09-16 | `feat/firecheck-dashboard-filtros` | Dashboard clicável e filtros (KPIs confiáveis + drill-down) | `src/utils/equipmentFilters.ts` (fonte única de verdade: `getEquipmentDashboardGroups`, `getLatestInspectionForEquipment`, `getDashboardGroupByView`); 4 cards clicáveis (CADASTRADOS, INSPECIONADOS, EM DIA, PENDENTES) → `/equipamentos?view=...`; busca `?q=` sobre o conjunto do view; títulos contextuais, "Limpar filtro", empty states por visão; data civil `YYYY-MM-DD` (sem bug de fuso); sem migration/backend/fotos; lint 0 erros, build ok | Concluído | Merge em `main` (Prompt 12 — testes finais e deploy) |
 | 2026-09-16 | `feat/firecheck-inspecoes-compartilhadas` | Inspeções compartilhadas, edição, rastreabilidade e conflitos | diagnóstico da auditoria (§2); migration `0018` (updated_by/updated_by_name, trigger `inspecoes_audit`, RLS compartilhada + DELETE admin-only, storage shared, RPC recalc); campos de auditoria/conflito em `Inspection`/`LocalInspection` + Dexie v7; CAS em `updateInspectionRemote`; `pushInspections` reescrito (create/update/delete/recalc/reconcile); `pullInspections` com base; resolvers de conflito no store; `DetalheInspecao`/`EditarInspecao` + rotas; badge "Editada" e lápis em DetalhesEquipamento; pill de conflito + resolução em Relatorios; Dashboard/Sidebar com `conflictCounts.inspections`; lint 0 erros, build ok | Concluído | Aplicar migration `0018` no Supabase remoto e teste multiusuário (Prompt 12 — testes finais e deploy) |
 | 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Hardening offline/PWA (Prompt 13) | circuit breaker + backoff progressivo (`networkState.ts`, 15s→300s); classificação de erros de rede (`utils/network.ts`); `syncAll` com short-circuit em cascata e `networkUnavailable` no report; serviços (equipamentos/inspeções/planos/fotos) propagam `network` e marcam brea em vez de gravar `syncError`; logout preservado offline via `inspectorFromSession`; `useAutoSync` com gate `canAttemptNetwork` + `clearCooldown` no `online`; badge "Aguardando conexão"; `navigateFallback: 'index.html'` + `cleanupOutdatedCaches` (corrige `non-precached-url`); favicons/manifest com `%BASE_URL%`; manifest `id:"./"`; docs atualizadas; lint 0 erros, build ok | Concluído | --- |
+| 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Idempotência de submissão de inspeções (anti-duplicidade) | causa provável: `if (isSaving) return` dependia do render; cada submit gerava novo `INSP-${uuid}`; lock síncrono `submitLockRef` + `submissionIdRef`/`inspectionIdRef` (estáveis por tentativa, reset só em "Nova Inspeção"); `addInspection({ inspectionId })` + guarda idempotente no store (sucesso idempotente/colisão explícita); IDs derivados `FOTO-<inspectionId>`/`PAC-<inspectionId>`; transação Dexie mantida; push create já idempotente (`onConflict:'id'`); `scripts/simulate-inspection-idempotency.mjs` (24 checks, TODOS PASS); lint 0 erros, build ok | Concluído | TESTE 18 de `validate-inspection-sharing.mjs`: conta de teste `firecheck.admin.teste@efetiva.com` está `role=inspector` no remoto (policy exige `is_admin()`); sonda read-only confirmou; exigiria ajuste de role — não executado por regra de imutabilidade de dados |
 
 ---
 
@@ -1158,3 +1159,68 @@ Sempre que iniciar nova sessão neste projeto:
 - [ ] Teste multiusuário aprovado (admin + inspector).
 - [ ] Scanner rejeita equipamento excluído.
 - [ ] QR Code sempre codifica a TAG oficial.
+
+---
+
+## 26. Prevenção de Duplicidade de Inspeções (Idempotência de Submissão)
+
+**Sintoma auditado:** uma única inspeção gerava 2–3 registros no histórico com
+mesma data/horário/mensagem (um deles eventualmente editado em teste).
+
+### Causa provável (não há prova exata dos 3 registros originais)
+
+Gap assíncrono de deduplicação: múltiplos `submit` (double-click / Enter
+repetido) atravessam a janela entre o primeiro evento e o próximo render do
+React. A guarda anterior `if (isSaving) return` dependia de estado (`useState`),
+que só atualiza após render. Cada chamada a `addInspection()` gerava um ID novo
+(`INSP-${crypto.randomUUID()}`) → cada submit criava uma inspeção distinta.
+Confirmado que **StrictMode não é a causa** (event handlers não são
+duplamente invocados por StrictMode).
+
+### Camadas implementadas
+
+1. **Lock síncrono de UI** (`submitLockRef` em `Inspecionar.tsx`) — atribuição
+   imediata, sem depender do render do React. `isSaving` ficou para aparência.
+2. **Identidade estável da tentativa** — `submissionIdRef` (`??= crypto.randomUUID()`)
+   e `inspectionIdRef` (`INSP-<submissionId>`). Retry reutiliza os MESMOS IDs.
+   Liberação do lock apenas em erro; após sucesso só "Nova Inspeção" reseta.
+3. **`addInspection({ inspectionId, ... })`** — o store NÃO gera mais ID: recebe o
+   ID determinístico da tentativa.
+4. **Guarda idempotente no store** — se `db.inspecoes.get(inspectionId)` já existe:
+   - mesmo `equipmentId` → sucesso idempotente (`ok:true, idempotent:true`);
+   - `equipmentId` diferente → erro explícito de colisão (nunca gera outro ID).
+5. **Dexie** — `put()` na chave primária (id). Retry converge para 1 registro.
+6. **Foto** — ID derivado `FOTO-<inspectionId>`: 1 tentativa → ≤1 foto de criação.
+7. **Plano de ação** — ID derivado `PAC-<inspectionId>` (put idempotente):
+   inspeção pendente/vencida → ≤1 plano por tentativa.
+8. **Transação atômica** mantida (inspeção + foto + status do equipamento).
+9. **Sync** — `pushInspections` (create) já usa `upsertInspection` com
+   `onConflict: 'id'`; `public.inspecoes.id` é `text primary key` (0001). Retry
+   remoto converge para 1 linha. A RPC de recálculo é idempotente por design
+   (recalcula pela inspeção mais recente; `p_trigger_inspection_id` preserva
+   `data_proxima_inspecao`).
+
+### Testes automatizáveis
+
+`scripts/simulate-inspection-idempotency.mjs` (sem Supabase, em memória):
+1 clique / duplo clique / triplo clique / Enter repetido / retry após erro /
+offline double-tap / foto / plano / nova inspeção legítima / colisão de contexto.
+Estado: TODOS PASS.
+
+### Query SQL de diagnóstico (read-only — NÃO é regra de deduplicação)
+
+```sql
+-- Inspeções potencialmente duplicadas por proximidade temporal (diagnóstico).
+select equipment_id, inspetor, data,
+       date_trunc('minute', created_at) as minuto,
+       count(*) as qtd,
+       string_agg(id, ', ' order by created_at) as ids
+from public.inspecoes
+group by equipment_id, inspetor, data, date_trunc('minute', created_at)
+having count(*) > 1
+order by minuto desc;
+```
+
+Registros pré-existentes (inclusive as 3 inspeções observadas) foram **mantidos
+intactos** — a correção vale apenas para novas submissões. Equipamentos, QR
+Codes e históricos antigos permanecem intactos.
