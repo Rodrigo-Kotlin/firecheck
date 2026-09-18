@@ -1,18 +1,23 @@
 #!/usr/bin/env node
 /**
  * Simulação standalone da máquina de estados de SUBMISSÃO de inspeções do
- * FireCheck — idempotência da criação.
+ * FireCheck — idempotência e atomicidade da criação.
  *
  * NÃO acessa o Supabase e NÃO depende de credenciais. Replica, em memória, a
- * semântica implementada:
+ * semântica implementada em `src/store/index.ts`:
  *
  *   • lock síncrono (`submitLockRef`) — atribuição imediata na UI;
  *   • `submissionId`/`inspectionId` estáveis por tentativa (retry reutiliza
  *     os MESMOS IDs — nunca um novo UUID);
  *   • guarda idempotente no store (registro local existente com mesmo id →
  *     sucesso idempotente; contexto diferente → colisão explícita);
- *   • foto com ID derivado (`FOTO-<inspectionId>`);
- *   • plano de ação com ID derivado (`PAC-<inspectionId>`);
+ *   • transação Dexie ATOMIICA: INSPEÇÃO + FOTO + EQUIPAMENTO + PLANO DE
+ *     AÇÃO na mesma transação — falha em qualquer obrigatório → rollback total;
+ *   • plano automático apenas para status `pendente`/`vencido`, ID derivado
+ *     `PAC-<inspectionId>` (nunca Date.now/Math.random/UUID);
+ *   • plano no caminho idempotente NUNCA sobrescreve plano existente;
+ *   • repair controlado: PAC-<inspectionId> ausente → cria SÓ o plano faltante
+ *     (sem nova inspeção), retorna idempotent + repairedActionPlan;
  *   • "Nova Inspeção" → reset total (novo submissionId + novo inspectionId).
  *
  * Uso:
@@ -32,8 +37,21 @@ function check(label, condition) {
   }
 }
 
+function inferCriticidade(inspectionObs, eqTipo) {
+  const obs = String(inspectionObs || '').toLowerCase();
+  const tipo = String(eqTipo || '').toLowerCase();
+  if (
+    obs.includes('sem carga') || obs.includes('sem lacre') || obs.includes('sem acesso') ||
+    obs.includes('sem mangueira') || obs.includes('inoperante') ||
+    (tipo.includes('extintor') && obs.includes('vencido'))
+  ) return 'Crítico';
+  if (obs.includes('sinalização') || obs.includes('mangueira') || obs.includes('abrigo')) return 'Alto';
+  if (obs.includes('etiqueta') || obs.includes('sujeira') || obs.includes('avaria')) return 'Médio';
+  return 'Baixo';
+}
+
 // ---------------------------------------------------------------------------
-// "IndexedDB" em memória (put/get com a mesma semântica de chave primária).
+// "IndexedDB" em memória (put/get/atômic com snapshot/restore).
 // ---------------------------------------------------------------------------
 function createTable({ delayMs = 0 } = {}) {
   const rows = new Map();
@@ -47,60 +65,116 @@ function createTable({ delayMs = 0 } = {}) {
       if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
       rows.set(row.id, { ...row });
     },
+    snapshot: () => new Map(rows),
+    restore: (snap) => {
+      rows.clear();
+      for (const [k, v] of snap) rows.set(k, { ...v });
+    },
   };
 }
 
-function createRepository({ persistDelayMs = 0, failPersist = false } = {}) {
+function createRepository({ persistDelayMs = 0, failPlanPut = false, failPersist = false } = {}) {
   return {
     inspecoes: createTable({ delayMs: persistDelayMs }),
     fotos: createTable(),
     planosAcao: createTable(),
     equipamentos: createTable(),
+    failPlanPut,
     failPersist,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Replica de `store.addInspection` (guarda idempotente + transação atômica +
-// foto/plano com IDs derivados + equipamento).
+// Replica de `store.addInspection` (guarda idempotente + repair + transação
+// atômica com plano dentro).
 // ---------------------------------------------------------------------------
 async function addInspection(repo, input) {
-  const { inspectionId, equipmentId, status, photo } = input;
+  const { inspectionId, equipmentId, status, photo, observacoes } = input;
 
-  // Guarda: mesma tentativa já persistida → sucesso idempotente.
+  // Guarda: mesma tentativa já persistida → caminho idempotente.
   const existing = await repo.inspecoes.get(inspectionId);
   if (existing) {
-    if (existing.equipmentId === equipmentId) {
-      return { ok: true, inspectionSaved: true, photoSaved: true, inspectionId, idempotent: true };
+    if (existing.equipmentId !== equipmentId) {
+      return {
+        ok: false,
+        inspectionSaved: false,
+        photoSaved: false,
+        error: 'Conflito de tentativa de inspeção (ID já utilizado em outro equipamento).',
+      };
     }
-    return {
-      ok: false,
-      inspectionSaved: false,
-      photoSaved: false,
-      error: 'Conflito de tentativa de inspeção (ID já utilizado em outro equipamento).',
-    };
+
+    // Foto: persiste na MESMA transação da inspeção (atomicidade) → NÃO há
+    // repair de foto.
+
+    // Fortalecimento: pendente/vencido exigem PAC-<inspectionId>.
+    if (existing.status === 'pendente' || existing.status === 'vencido') {
+      const planId = `PAC-${inspectionId}`;
+      const plan = await repo.planosAcao.get(planId);
+      if (!plan) {
+        // REPARO CONTROLADO: cria SÓ o plano faltante. Nunca sobrescreve.
+        const eq = await repo.equipamentos.get(existing.equipmentId);
+        const descObs = existing.observacoes || 'Não conformidade identificada durante inspeção';
+        await repo.planosAcao.put({
+          id: planId,
+          equipmentId: existing.equipmentId,
+          local: eq?.local || 'Local não especificado',
+          descricao: descObs,
+          criticidade: inferCriticidade(descObs, eq?.tipo || ''),
+          responsavel: '',
+          prazo: '',
+          status: 'Aberta',
+          sincronizado: false,
+          syncAction: 'create',
+        });
+        return { ok: true, inspectionSaved: true, photoSaved: true, inspectionId, idempotent: true, repairedActionPlan: true };
+      }
+      // Plano existe → idempotente simples (sem tocar em nada).
+    }
+    return { ok: true, inspectionSaved: true, photoSaved: true, inspectionId, idempotent: true };
   }
 
   const photoId = photo ? `FOTO-${inspectionId}` : undefined;
+  const needsPlan = status === 'pendente' || status === 'vencido';
 
-  // "Transação" — em caso de falha, nada é gravado (rollback total).
-  if (repo.failPersist) {
-    repo.failPersist = false; // só falha a primeira tentativa (retry converge)
-    return { ok: false, inspectionSaved: false, photoSaved: !photo, error: 'Falha simulada de persistência.' };
-  }
+  // "Transação" atômica com rollback total se qualquer gravação obrigatória
+  // falhar (inclusive o plano) — §5/§7/§16/§22/§23.
+  const snapshots = {
+    inspecoes: repo.inspecoes.snapshot(),
+    fotos: repo.fotos.snapshot(),
+    equipamentos: repo.equipamentos.snapshot(),
+    planosAcao: repo.planosAcao.snapshot(),
+  };
 
-  await repo.inspecoes.put({ id: inspectionId, equipmentId, status, sincronizado: false, syncAction: 'create' });
-  if (photoId) await repo.fotos.put({ id: photoId, inspectionId, sincronizado: false, syncAction: 'create' });
-  await repo.equipamentos.put({ id: equipmentId, status, sincronizado: false, statusUpdatePending: true });
+  try {
+    if (repo.failPersist) {
+      repo.failPersist = false; // só falha a primeira tentativa
+      throw new Error('Falha simulada de persistência (transação abortada)');
+    }
+    await repo.inspecoes.put({ id: inspectionId, equipmentId, status, observacoes, sincronizado: false, syncAction: 'create' });
+    if (photoId) {
+      await repo.fotos.put({ id: photoId, inspectionId, sincronizado: false, syncAction: 'create' });
+    }
+    await repo.equipamentos.put({ id: equipmentId, status, sincronizado: false, statusUpdatePending: true });
 
-  if (status === 'vencido' || status === 'pendente') {
-    await repo.planosAcao.put({
-      id: `PAC-${inspectionId}`,
-      equipmentId,
-      status: 'Aberta',
-      sincronizado: false,
-      syncAction: 'create',
-    });
+    if (needsPlan) {
+      if (repo.failPlanPut) {
+        repo.failPlanPut = false; // só falha a primeira tentativa (retry converge)
+        throw new Error('Falha simulada de planosAcao.put');
+      }
+      await repo.planosAcao.put({
+        id: `PAC-${inspectionId}`,
+        equipmentId,
+        status: 'Aberta',
+        sincronizado: false,
+        syncAction: 'create',
+      });
+    }
+  } catch (err) {
+    // Rollback TOTAAL: nada persiste.
+    for (const t of ['inspecoes', 'fotos', 'equipamentos', 'planosAcao']) {
+      repo[t].restore(snapshots[t]);
+    }
+    return { ok: false, inspectionSaved: false, photoSaved: !photo, error: err.message };
   }
 
   return { ok: true, inspectionSaved: true, photoSaved: true, inspectionId };
@@ -115,7 +189,7 @@ function createSubmissionController(repo) {
   let inspectionId = null;
 
   return {
-    /** Retorna sempre: { accepted, ok?, idempotent?, inspectionId?, error? } */
+    /** Retorna sempre: { accepted, ok?, idempotent?, repairedActionPlan?, inspectionId?, error? } */
     async attempt(input) {
       if (locked) return { accepted: false, inspectionId };
       locked = true;
@@ -143,7 +217,7 @@ const EQ = 'E-001';
 // 1) Um clique.
 {
   const repo = createRepository();
-  await repo.equipamentos.put({ id: EQ });
+  await repo.equipamentos.put({ id: EQ, local: 'Local A', tipo: 'Extintor' });
   const ctrl = createSubmissionController(repo);
   const r1 = await ctrl.attempt({ equipmentId: EQ, status: 'regular', photo: { blob: 1 } });
   check('[1 clique] aceito uma vez', r1.accepted && r1.ok);
@@ -194,7 +268,7 @@ const EQ = 'E-001';
   check('[enter repetido] 1 inspeção', repo.inspecoes.size() === 1);
 }
 
-// 5) Retry após erro: primeira persistência falha, retry reutiliza MESMO id.
+// 5) Retry após erro de persistência genérica: primeira falha, retry MESMO id.
 {
   const repo = createRepository({ failPersist: true });
   await repo.equipamentos.put({ id: EQ });
@@ -258,13 +332,156 @@ const EQ = 'E-001';
   await repo.equipamentos.put({ id: EQ });
   const ctrl = createSubmissionController(repo);
   const r1 = await ctrl.attempt({ equipmentId: EQ, status: 'regular' });
-  // Tenta reutilizar o MESMO id (como chegaria de um retry externo) com outro equipamento.
   const res = await addInspection(repo, {
     inspectionId: r1.inspectionId,
     equipmentId: 'E-002',
     status: 'regular',
   });
   check('[colisão] erro explícito, sem registro novo', !res.ok && repo.inspecoes.size() === 1);
+}
+
+// 11) FALHA TRANSACIONAL DO PLANO — rollback total + retry converge (§16).
+{
+  const repo = createRepository({ failPlanPut: true });
+  await repo.equipamentos.put({ id: EQ, statusText: 'regular', status: 'regular' });
+  const ctrl = createSubmissionController(repo);
+  const r1 = await ctrl.attempt({ equipmentId: EQ, status: 'pendente', photo: { blob: 1 } });
+  check('[rollback plano] 1ª tentativa falhou (ok=false)', r1.accepted && !r1.ok);
+  check('[rollback plano] inspeções = 0', repo.inspecoes.size() === 0);
+  check('[rollback plano] fotos = 0', repo.fotos.size() === 0);
+  check('[rollback plano] planos = 0', repo.planosAcao.size() === 0);
+  check('[rollback plano] equipamento continua regular', repo.equipamentos.rows()[0]?.status === 'regular');
+
+  const r2 = await ctrl.attempt({ equipmentId: EQ, status: 'pendente', photo: { blob: 1 } });
+  check('[rollback plano] retry aceito e ok', r2.accepted && r2.ok);
+  check('[rollback plano] retry mesmo inspectionId', r1.inspectionId === r2.inspectionId);
+  check('[rollback plano] 1 inspeção final', repo.inspecoes.size() === 1);
+  check('[rollback plano] 1 plano final (PAC-<id>)', repo.planosAcao.size() === 1 && repo.planosAcao.rows()[0]?.id === `PAC-${r1.inspectionId}`);
+}
+
+// 12) REPAIR — PAC ausente; re-entrada da MESMA tentativa cria SÓ o plano (§12/§17).
+{
+  const repo = createRepository();
+  await repo.equipamentos.put({ id: EQ, local: 'Local X', tipo: 'Extintor' });
+  const ctrl = createSubmissionController(repo);
+  const r1 = await ctrl.attempt({ equipmentId: EQ, status: 'pendente', observacoes: 'sem lacre' });
+  // Simula falha parcial de versão anterior: remove o plano, mantém a inspeção.
+  repo.planosAcao.restore(new Map());
+  // Re-entrada da MESMA tentativa no nível do store (independente do lock de UI).
+  const r2 = await addInspection(repo, {
+    inspectionId: r1.inspectionId,
+    equipmentId: EQ,
+    status: 'pendente',
+    observacoes: 'sem lacre',
+  });
+  check('[repair] nenhuma nova inspeção', repo.inspecoes.size() === 1);
+  check('[repair] plano criado', repo.planosAcao.size() === 1);
+  check('[repair] retorno idempotent + repaired', r2.idempotent === true && r2.repairedActionPlan === true);
+  check('[repair] mesmo inspectionId', r1.inspectionId === r2.inspectionId);
+  check('[repair] id do plano derivado', repo.planosAcao.rows()[0]?.id === `PAC-${r1.inspectionId}`);
+}
+
+// 13) PLANO EXISTENTE não é sobrescrito (§13/§18).
+{
+  const repo = createRepository();
+  await repo.equipamentos.put({ id: EQ });
+  const ctrl = createSubmissionController(repo);
+  const r1 = await ctrl.attempt({ equipmentId: EQ, status: 'pendente', observacoes: 'sem lacre' });
+  // Usuário preencheu o plano (responsável/prazo/status).
+  const planId = `PAC-${r1.inspectionId}`;
+  await repo.planosAcao.put({
+    id: planId,
+    equipmentId: EQ,
+    local: 'Local X',
+    descricao: 'sem lacre',
+    criticidade: 'Crítico',
+    responsavel: 'Fulano',
+    prazo: '2026-10-01',
+    status: 'Em andamento',
+    sincronizado: false,
+    syncAction: 'update',
+  });
+  // Re-entrada da MESMA tentativa.
+  const r2 = await addInspection(repo, {
+    inspectionId: r1.inspectionId,
+    equipmentId: EQ,
+    status: 'pendente',
+    observacoes: 'sem lacre',
+  });
+  const plan = repo.planosAcao.rows().find((p) => p.id === planId);
+  check('[plano existente] idempotente simples', r2.idempotent === true && r2.repairedActionPlan !== true);
+  check('[plano existente] responsavel preservado', plan.responsavel === 'Fulano');
+  check('[plano existente] prazo preservado', plan.prazo === '2026-10-01');
+  check('[plano existente] status preservado', plan.status === 'Em andamento');
+  check('[plano existente] não resetou para Aberta', plan.status !== 'Aberta');
+  check('[plano existente] 1 único plano', repo.planosAcao.size() === 1);
+}
+
+// 14) REGULAR não gera plano (§19).
+{
+  const repo = createRepository();
+  await repo.equipamentos.put({ id: EQ });
+  const ctrl = createSubmissionController(repo);
+  const r1 = await ctrl.attempt({ equipmentId: EQ, status: 'regular' });
+  await ctrl.attempt({ equipmentId: EQ, status: 'regular' });
+  check('[regular] inspeção criada', repo.inspecoes.size() === 1);
+  check('[regular] plano não criado', repo.planosAcao.size() === 0);
+}
+
+// 15) PENDENTE gera exatamente 1 plano; double-click continua 1+1 (§20).
+{
+  const repo = createRepository({ persistDelayMs: 25 });
+  await repo.equipamentos.put({ id: EQ });
+  const ctrl = createSubmissionController(repo);
+  const r1 = await ctrl.attempt({ equipmentId: EQ, status: 'pendente' });
+  await ctrl.attempt({ equipmentId: EQ, status: 'pendente' });
+  check('[pendente] 1 inspeção', repo.inspecoes.size() === 1);
+  check('[pendente] 1 plano', repo.planosAcao.size() === 1);
+  check('[pendente] PAC-<inspectionId>', repo.planosAcao.rows()[0]?.id === `PAC-${r1.inspectionId}`);
+}
+
+// 16) VENCIDO gera exatamente 1 plano (§21).
+{
+  const repo = createRepository({ persistDelayMs: 20 });
+  await repo.equipamentos.put({ id: EQ });
+  const ctrl = createSubmissionController(repo);
+  const r1 = await ctrl.attempt({ equipmentId: EQ, status: 'vencido' });
+  await ctrl.attempt({ equipmentId: EQ, status: 'vencido' });
+  check('[vencido] 1 inspeção', repo.inspecoes.size() === 1);
+  check('[vencido] 1 plano', repo.planosAcao.size() === 1);
+  check('[vencido] PAC-<inspectionId>', repo.planosAcao.rows()[0]?.id === `PAC-${r1.inspectionId}`);
+}
+
+// 17) FOTO + pendente — sucesso 1/1/1; falha no plano → 0/0/0 (§22).
+{
+  const repo = createRepository({ failPlanPut: true });
+  await repo.equipamentos.put({ id: EQ, local: 'Local Z' });
+  const ctrl = createSubmissionController(repo);
+  const r1 = await ctrl.attempt({ equipmentId: EQ, status: 'pendente', photo: { blob: 1 } });
+  check('[foto+pendente] falhou por plano', r1.accepted && !r1.ok);
+  check('[foto+pendente] inspeção = 0', repo.inspecoes.size() === 0);
+  check('[foto+pendente] foto = 0', repo.fotos.size() === 0);
+  check('[foto+pendente] plano = 0', repo.planosAcao.size() === 0);
+
+  const r2 = await ctrl.attempt({ equipmentId: EQ, status: 'pendente', photo: { blob: 1 } });
+  check('[foto+pendente] retry ok', r2.accepted && r2.ok);
+  check('[foto+pendente] 1 inspeção', repo.inspecoes.size() === 1);
+  check('[foto+pendente] 1 foto', repo.fotos.size() === 1);
+  check('[foto+pendente] 1 plano', repo.planosAcao.size() === 1);
+  check('[foto+pendente] mesmo inspectionId', r1.inspectionId === r2.inspectionId);
+}
+
+// 18) EQUIPAMENTO — rollback devolve status original (§23).
+{
+  const repo = createRepository({ failPlanPut: true });
+  await repo.equipamentos.put({ id: EQ, local: 'Local W', status: 'regular' });
+  const ctrl = createSubmissionController(repo);
+  await ctrl.attempt({ equipmentId: EQ, status: 'vencido' });
+  const eq = repo.equipamentos.rows()[0];
+  check('[equipamento] regular antes', eq.status === 'regular');
+  check('[equipamento] 1ª tentativa falhou', repo.inspecoes.size() === 0 && repo.planosAcao.size() === 0);
+  const r2 = await ctrl.attempt({ equipmentId: EQ, status: 'vencido' });
+  check('[equipamento] retry ok → pendente', r2.accepted && r2.ok && repo.equipamentos.rows()[0]?.status === 'vencido');
 }
 
 // ---------------------------------------------------------------------------

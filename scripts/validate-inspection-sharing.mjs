@@ -160,6 +160,35 @@ async function main() {
   record('TESTE 1: Autenticação de todos os perfis', true);
 
   // =========================================================================
+  // §31/§32 — PREFLIGHT DE ROLES (TEST ENV MISCONFIGURED guard).
+  // Consulta read-only de profiles ANTES de qualquer criação de dado E2E.
+  // O script NUNCA promove/demove usuários — só valida a configuração do
+  // staging. Se falhar: aborta sem tocar em dados e retorna código != 0.
+  // =========================================================================
+  console.log('\n--- [PREFLIGHT] Validação de roles dos perfis de teste ---');
+  const preflight = [
+    { label: 'TEST_ADMIN', client: admin, uid: adminUid, wanted: 'admin' },
+    { label: 'TEST_INSPECTOR_A', client: inspA, uid: uidA, wanted: 'inspector' },
+    { label: 'TEST_INSPECTOR_B', client: inspB, uid: uidB, wanted: 'inspector' },
+  ];
+  let preflightBlocked = false;
+  for (const p of preflight) {
+    const r = await p.client.from('profiles').select('role').eq('id', p.uid).maybeSingle();
+    const actual = r.data?.role ?? null;
+    if (actual !== p.wanted) {
+      preflightBlocked = true;
+      console.error(`  [BLOCKED] ${p.label} está role=${actual ?? 'sem profile'}; esperado ${p.wanted}.`);
+    } else {
+      console.log(`  [PASS] ${p.label} role=${actual}`);
+    }
+  }
+  if (preflightBlocked) {
+    console.error('\nTEST ENV MISCONFIGURED — Nenhum dado E2E foi criado.');
+    console.error('Corrija as roles no staging e reexecute o script.');
+    process.exit(2);
+  }
+
+  // =========================================================================
   // §5 — INVENTÁRIO DE PROTEÇÃO
   // =========================================================================
   console.log('\n--- [SAFETY] Snapshot de equipamentos existentes ---');

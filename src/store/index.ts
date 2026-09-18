@@ -6,13 +6,11 @@ import { syncAll, pendingSyncCount, conflictCount } from '../services/sync';
 import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById } from '../services/equipmentService';
 import { carregarInspecoes, fetchInspectionById, updateInspectionRemote, recalculateEquipmentFromLatestInspectionRemote } from '../services/inspectionService';
 import { carregarPlanosDeAcao, fetchActionPlanById, updateActionPlanRemote } from '../services/actionPlanService';
+import { stripActionPlanSyncMeta } from '../services/mappers';
 import { canViewInspection, canEditInspection, canDeleteInspection } from '../services/permissions';
 import { getLatestInspectionForEquipment } from '../utils/equipmentFilters';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
-import {
-  canAttemptNetwork,
-  ensureNetworkListeners,
-} from '../services/networkState';
+import { canAttemptNetwork, ensureNetworkListeners } from '../services/networkState';
 import {
   loginUser,
   registerUser,
@@ -57,6 +55,10 @@ export interface SaveInspectionResult {
   /** true quando a tentativa já existia localmente e o submit foi absorvido
    *  (retry / double-submit) — NENHUM registro duplicado foi criado. */
   idempotent?: boolean;
+  /** true quando, no caminho idempotente, o plano de ação derivado
+   *  (`PAC-<inspectionId>`) estava ausente e foi recriado de forma controlada
+   *  — sem nova inspeção e sem sobrescrever plano existente. */
+  repairedActionPlan?: boolean;
 }
 
 /** Resultado da edição compartilhada de uma inspeção. */
@@ -1038,6 +1040,63 @@ export const useAppStore = create<AppState>()(
           const existing = await db.inspecoes.get(inspectionId);
           if (existing) {
             if (existing.equipmentId === data.equipmentId) {
+              // A inspeção e a foto são persistidas NA MESMA transação, logo,
+              // se a inspeção existe, a foto (quando havia) também foi gravada
+              // atomicamente — NÃO há repair de foto (documentado, §15).
+              if (existing.status === 'pendente' || existing.status === 'vencido') {
+                const planId = `PAC-${inspectionId}`;
+                const plan = await db.planosAcao.get(planId);
+                if (!plan) {
+                  // REPARO IDEMPOTENTE CONTROLADO (§12/§13/§14): plano
+                  // derivado ausente (criado por versão anterior ou falha
+                  // parcial). NÃO cria nova inspeção; cria SÓ o plano faltante
+                  // com o ID determinístico — e jamais sobrescreve plano
+                  // existente (check duplo dentro da transação).
+                  const eq = await db.equipamentos.get(existing.equipmentId);
+                  const descObs = existing.observacoes || 'Não conformidade identificada durante inspeção';
+                  const now = new Date().toISOString();
+                  const repairedPlan: LocalActionPlan = {
+                    id: planId,
+                    equipmentId: existing.equipmentId,
+                    local: eq?.local || 'Local não especificado',
+                    descricao: descObs,
+                    criticidade: inferCriticidade(descObs, eq?.tipo || ''),
+                    responsavel: '',
+                    prazo: '',
+                    status: 'Aberta',
+                    createdAt: now.split('T')[0],
+                    userId,
+                    updatedAt: now,
+                    sincronizado: false,
+                    pendingDelete: false,
+                    syncAction: 'create',
+                    deletedAt: null,
+                    deletedBy: null,
+                  };
+                  await db.transaction('rw', db.planosAcao, async () => {
+                    if (await db.planosAcao.get(planId)) return;
+                    await db.planosAcao.put(repairedPlan);
+                  });
+                  // Zustand reflete APENAS o que já foi gravado no Dexie.
+                  set((state) => ({
+                    actionPlans: [stripActionPlanSyncMeta(repairedPlan), ...state.actionPlans],
+                  }));
+                  void runSync().then(() => get().refreshPendingCount());
+                  if (import.meta.env.DEV) {
+                    console.log(`[inspection-create] repaired missing action plan ${planId}`);
+                  }
+                  return {
+                    ok: true,
+                    inspectionSaved: true,
+                    photoSaved: true,
+                    inspectionId,
+                    idempotent: true,
+                    repairedActionPlan: true,
+                  };
+                }
+                // Plano já existe → NÃO recriar / resetar responsável / prazo /
+                // status. Sucesso idempotente simples.
+              }
               if (import.meta.env.DEV) {
                 console.log(`[inspection-create] existing local inspection reused ${inspectionId}`);
               }
@@ -1063,6 +1122,34 @@ export const useAppStore = create<AppState>()(
           // (FOTO-<inspectionId>) — no máximo 1 registro de foto por tentativa.
           const photoId = data.photo ? `FOTO-${inspectionId}` : undefined;
 
+          // Plano automático (quando aplicável) construído ANTES da transação,
+          // com base no equipamento atual — será persistido DENTRO da mesma
+          // transação atômica (§5/§6/§7). ID obrigatório: PAC-<inspectionId>.
+          let newPlan: LocalActionPlan | null = null;
+          if (data.status === 'pendente' || data.status === 'vencido') {
+            const eq = get().equipments.find((e) => e.id === data.equipmentId);
+            const descObs = data.observacoes || 'Não conformidade identificada durante inspeção';
+            const now = new Date().toISOString();
+            newPlan = {
+              id: `PAC-${inspectionId}`,
+              equipmentId: data.equipmentId,
+              local: eq?.local || 'Local não especificado',
+              descricao: descObs,
+              criticidade: inferCriticidade(descObs, eq?.tipo || ''),
+              responsavel: '',
+              prazo: '',
+              status: 'Aberta',
+              createdAt: now.split('T')[0],
+              userId,
+              updatedAt: now,
+              sincronizado: false,
+              pendingDelete: false,
+              syncAction: 'create',
+              deletedAt: null,
+              deletedBy: null,
+            };
+          }
+
           const stamped: Inspection = {
             id: inspectionId,
             equipmentId: data.equipmentId,
@@ -1073,14 +1160,14 @@ export const useAppStore = create<AppState>()(
             userId,
           };
 
-          // 1. Persist inspeção + foto (se houver) + status do equipamento
-          //    atomicamente. A transação só é considerada sucesso quando termina
-          //    sem lançar exceção — se qualquer gravação falhar, o Dexie reverte
-          //    TUDO (inspeção não existe, equipamento inalterado) e retornamos
-          //    o resultado granular sem falso sucesso.
+          // 1. Persistir inspeção + foto (se houver) + status do equipamento +
+          //    plano de ação (se aplicável) ATOMICAMENTE. Se QUALQUER gravação
+          //    falhar (inclusive o plano), o Dexie reverte TUDO — inspeção não
+          //    existe, foto não existe, equipamento inalterado, plano não existe
+          //    — e retornamos erro sem falso sucesso (§7/§10/§16–§23).
           try {
             const now = new Date().toISOString();
-            await db.transaction('rw', db.inspecoes, db.fotos, db.equipamentos, async () => {
+            await db.transaction('rw', db.inspecoes, db.fotos, db.equipamentos, db.planosAcao, async () => {
               await db.inspecoes.put({
                 ...stamped,
                 sincronizado: false,
@@ -1114,6 +1201,12 @@ export const useAppStore = create<AppState>()(
                   eq.dataProximaInspecao = data.dataProximaInspecao;
                 }
               });
+
+              // Plano DENTRO da transação (nunca fire-and-forget): se este put
+              // falhar a transação inteira faz rollback.
+              if (newPlan) {
+                await db.planosAcao.put(newPlan);
+              }
             });
           } catch (err) {
             console.error('[store.addInspection] erro ao persistir inspeção no Dexie:', err);
@@ -1125,63 +1218,24 @@ export const useAppStore = create<AppState>()(
             };
           }
 
-          // 2. Update Zustand state
-          let actionPlanId: string | null = null;
+          // 2. Update Zustand state — APÓS o commit da transação. Reflete
+          //    apenas o que JÁ foi persistido. Nenhuma escrita Dexie aqui.
           set((state) => {
-            const updatedInspections = [stamped, ...state.inspections];
             const updatedEquipments = state.equipments.map((eq) =>
               eq.id === data.equipmentId
                 ? { ...eq, status: data.status, dataProximaInspecao: data.dataProximaInspecao ?? eq.dataProximaInspecao }
                 : eq,
             );
 
-            let updatedActionPlans = [...state.actionPlans];
-
-            if (data.status === 'vencido' || data.status === 'pendente') {
-              const eq = updatedEquipments.find((e) => e.id === data.equipmentId);
-              const descObs = data.observacoes || 'Não conformidade identificada durante inspeção';
-              // Plano com ID DERIVADO da tentativa: mesmo retry gera o MESMO
-              // plano (`PAC-<inspectionId>`) — convergência, não duplicata.
-              actionPlanId = `PAC-${inspectionId}`;
-              const now = new Date().toISOString();
-              const newPlan: ActionPlan = {
-                id: actionPlanId,
-                equipmentId: data.equipmentId,
-                local: eq?.local || 'Local não especificado',
-                descricao: descObs,
-                criticidade: inferCriticidade(descObs, eq?.tipo || ''),
-                responsavel: '',
-                prazo: '',
-                status: 'Aberta',
-                createdAt: now.split('T')[0],
-                userId,
-                updatedAt: now,
-              };
-
-              // Also write to Dexie (put idempotente na chave `id`).
-              void db.planosAcao.put({
-                ...newPlan,
-                sincronizado: false,
-                pendingDelete: false,
-                syncAction: 'create',
-                deletedAt: null,
-                deletedBy: null,
-              } as LocalActionPlan).catch((err) => {
-                console.error('[store.addInspection] erro ao persistir plano no Dexie:', err);
-              });
-
-              updatedActionPlans = [newPlan, ...state.actionPlans];
-            }
-
             return {
-              inspections: updatedInspections,
+              inspections: [stamped, ...state.inspections],
               equipments: updatedEquipments,
               stats: recomputeStats(updatedEquipments),
-              actionPlans: updatedActionPlans,
+              actionPlans: newPlan ? [stripActionPlanSyncMeta(newPlan), ...state.actionPlans] : state.actionPlans,
             };
           });
 
-          // 3. Trigger sync once
+          // 3. Trigger sync once — após commit (§24/§25).
           void runSync().then(() => get().refreshPendingCount());
 
           return { ok: true, inspectionSaved: true, photoSaved: true, inspectionId };

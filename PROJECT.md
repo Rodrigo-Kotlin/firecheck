@@ -1134,6 +1134,7 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-09-16 | `feat/firecheck-inspecoes-compartilhadas` | Inspeções compartilhadas, edição, rastreabilidade e conflitos | diagnóstico da auditoria (§2); migration `0018` (updated_by/updated_by_name, trigger `inspecoes_audit`, RLS compartilhada + DELETE admin-only, storage shared, RPC recalc); campos de auditoria/conflito em `Inspection`/`LocalInspection` + Dexie v7; CAS em `updateInspectionRemote`; `pushInspections` reescrito (create/update/delete/recalc/reconcile); `pullInspections` com base; resolvers de conflito no store; `DetalheInspecao`/`EditarInspecao` + rotas; badge "Editada" e lápis em DetalhesEquipamento; pill de conflito + resolução em Relatorios; Dashboard/Sidebar com `conflictCounts.inspections`; lint 0 erros, build ok | Concluído | Aplicar migration `0018` no Supabase remoto e teste multiusuário (Prompt 12 — testes finais e deploy) |
 | 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Hardening offline/PWA (Prompt 13) | circuit breaker + backoff progressivo (`networkState.ts`, 15s→300s); classificação de erros de rede (`utils/network.ts`); `syncAll` com short-circuit em cascata e `networkUnavailable` no report; serviços (equipamentos/inspeções/planos/fotos) propagam `network` e marcam brea em vez de gravar `syncError`; logout preservado offline via `inspectorFromSession`; `useAutoSync` com gate `canAttemptNetwork` + `clearCooldown` no `online`; badge "Aguardando conexão"; `navigateFallback: 'index.html'` + `cleanupOutdatedCaches` (corrige `non-precached-url`); favicons/manifest com `%BASE_URL%`; manifest `id:"./"`; docs atualizadas; lint 0 erros, build ok | Concluído | --- |
 | 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Idempotência de submissão de inspeções (anti-duplicidade) | causa provável: `if (isSaving) return` dependia do render; cada submit gerava novo `INSP-${uuid}`; lock síncrono `submitLockRef` + `submissionIdRef`/`inspectionIdRef` (estáveis por tentativa, reset só em "Nova Inspeção"); `addInspection({ inspectionId })` + guarda idempotente no store (sucesso idempotente/colisão explícita); IDs derivados `FOTO-<inspectionId>`/`PAC-<inspectionId>`; transação Dexie mantida; push create já idempotente (`onConflict:'id'`); `scripts/simulate-inspection-idempotency.mjs` (24 checks, TODOS PASS); lint 0 erros, build ok | Concluído | TESTE 18 de `validate-inspection-sharing.mjs`: conta de teste `firecheck.admin.teste@efetiva.com` está `role=inspector` no remoto (policy exige `is_admin()`); sonda read-only confirmou; exigiria ajuste de role — não executado por regra de imutabilidade de dados |
+| 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Atomicidade do plano de ação + fechamento 56/56 (Prompt 17) | `addInspection`: planosAcao ENTROU na transação Dexie (`inspecoes+fotos+equipamentos+planosAcao`); fim do fire-and-forget (`void db.planosAcao.put`) no `set()` do Zustand; falso sucesso eliminado (falha no plano → rollback TOTAL de inspeção/foto/equipamento/plano); guarda idempotente fortalecida com repair controlado de `PAC-<inspectionId>` ausente (`idempotent + repairedActionPlan`) SEM sobrescrever plano existente; sem repair de foto (atomicidade documentada); sem backfill; `validate-inspection-sharing.mjs` com preflight de roles (TEST ENV MISCONFIGURED aborta antes de E2E); conta de teste `firecheck.admin.teste@efetiva.com` promovida a `role=admin` (autorização explícita, único profile alterado); simulação idempotência 64 checks + CAS 9/9 + remoto **56/56 PASS**; lint 0 erros; tsc+build ok | Concluído | Review/main no próximo merge |
 
 ---
 
@@ -1177,6 +1178,29 @@ que só atualiza após render. Cada chamada a `addInspection()` gerava um ID nov
 Confirmado que **StrictMode não é a causa** (event handlers não são
 duplamente invocados por StrictMode).
 
+### Atomicidade do plano de ação (Prompt 17)
+
+O plano de ação era criado **fora** da transação (`void db.planosAcao.put(...)`
+fire-and-forget dentro do `set()` do Zustand). Isso permitia: inspeção ✅ + foto ✅
++ equipamento ✅ + plano ❌ com retorno de sucesso (falso sucesso), e o caminho
+idempotente retornava sucesso sem validar `PAC-<inspectionId>`. Correção:
+
+- `db.transaction('rw', db.inspecoes, db.fotos, db.equipamentos, db.planosAcao, ...)`
+  — INSPEÇÃO + FOTO + EQUIPAMENTO + PLANO na MESMA transação. Falha em
+  qualquer obrigatório → rollback TOTAL (nada persiste, equipamento reverte).
+- Plano criado só para `pendente`/`vencido`, com ID `PAC-${inspectionId}`
+  (nunca `Date.now`/`Math.random`/UUID).
+- `set()` do Zustand **sem escrita Dexie** — apenas reflete o que JÁ foi
+  persistido (PERSISTÊNCIA → COMMIT → ZUSTAND → SYNC).
+- Guarda idempotente fortalecida: se `existing.status` é `pendente`/`vencido` e
+  `PAC-${inspectionId}` **não existe** → **repair controlado** (cria SÓ o plano
+  faltante, com check duplo dentro de transação; retorna `idempotent` +
+  `repairedActionPlan`). Sem backfill em massa de históricos antigos.
+- Plano existente **nunca** é sobrescrito (responsável/prazo/status
+  preservados).
+- Foto não tem repair: inspeção+foto são atômicas na mesma transação
+  (documentado) — se a inspeção existe, a foto foi gravada junto.
+
 ### Camadas implementadas
 
 1. **Lock síncrono de UI** (`submitLockRef` em `Inspecionar.tsx`) — atribuição
@@ -1188,24 +1212,44 @@ duplamente invocados por StrictMode).
    ID determinístico da tentativa.
 4. **Guarda idempotente no store** — se `db.inspecoes.get(inspectionId)` já existe:
    - mesmo `equipmentId` → sucesso idempotente (`ok:true, idempotent:true`);
-   - `equipmentId` diferente → erro explícito de colisão (nunca gera outro ID).
+   - `equipmentId` diferente → erro explícito de colisão (nunca gera outro ID);
+   - `pendente`/`vencido` sem plano → **repair** (idempotent + repairedActionPlan).
 5. **Dexie** — `put()` na chave primária (id). Retry converge para 1 registro.
-6. **Foto** — ID derivado `FOTO-<inspectionId>`: 1 tentativa → ≤1 foto de criação.
-7. **Plano de ação** — ID derivado `PAC-<inspectionId>` (put idempotente):
-   inspeção pendente/vencida → ≤1 plano por tentativa.
-8. **Transação atômica** mantida (inspeção + foto + status do equipamento).
+6. **Foto** — ID derivado `FOTO-<inspectionId>`: 1 tentativa → ≤1 foto de criação
+   (atômica com a inspeção).
+7. **Plano de ação** — ID derivado `PAC-<inspectionId>`, DENTRO da transação:
+   inspeção pendente/vencida → exatamente 1 plano por tentativa.
+8. **Transação atômica** (inspeção + foto + status do equipamento + plano).
 9. **Sync** — `pushInspections` (create) já usa `upsertInspection` com
    `onConflict: 'id'`; `public.inspecoes.id` é `text primary key` (0001). Retry
    remoto converge para 1 linha. A RPC de recálculo é idempotente por design
    (recalcula pela inspeção mais recente; `p_trigger_inspection_id` preserva
-   `data_proxima_inspecao`).
+   `data_proxima_inspecao`). O plano gerado na transação sai com
+   `sincronizado=false, syncAction='create'` e é empurrado por `pushActionPlans`
+   na mesma rodada de sync — que só dispara APÓS o commit.
+
+### Preflight de roles na validação remota (Prompt 17)
+
+`scripts/validate-inspection-sharing.mjs` ganhou **preflight obrigatório**:
+antes de qualquer criação de dado E2E, consulta (read-only) o `profiles.role`
+de cada conta autenticada e exige `TEST_ADMIN=admin`, `TEST_INSPECTOR_A/B=
+inspector`. Se falhar: imprime `TEST ENV MISCONFIGURED`, aborta sem tocar em
+dados e retorna código ≠ 0. O script **nunca** promove/demove usuários.
+A conta `firecheck.admin.teste@efetiva.com` foi promovida a `role=admin` no
+staging (autorização explícita; único profile alterado — conferido por SELECT
+antes/depois; `admin` ficou em 2 = conta real + conta de teste, `inspector` em 7).
 
 ### Testes automatizáveis
 
 `scripts/simulate-inspection-idempotency.mjs` (sem Supabase, em memória):
-1 clique / duplo clique / triplo clique / Enter repetido / retry após erro /
-offline double-tap / foto / plano / nova inspeção legítima / colisão de contexto.
-Estado: TODOS PASS.
+1 clique / duplo / triplo / Enter repetido / retry após erro / offline /
+foto / plano / nova inspeção / colisão / **rollback por falha do plano** /
+**retry após rollback** / **repair de plano ausente** / **plano existente não
+sobrescrito** / regular / pendente / vencido / foto+pendente (sucesso 1/1/1 e
+falha 0/0/0) / equipamento reverte ao original. Estado: TODOS PASS (64 checks).
+
+`scripts/validate-inspection-sharing.mjs` (remoto, staging): **56/56 PASS**
+(inclui TESTE 18 admin-delete após a correção de role).
 
 ### Query SQL de diagnóstico (read-only — NÃO é regra de deduplicação)
 
