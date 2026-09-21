@@ -1383,3 +1383,58 @@ Itens que exigem dispositivo/sessão humana (QR físico via celular, toggle offl
 - Sharing staging: 56/56 PASS; equipamento, QR Codes, históricos, profiles e roles preservados; cleanup E2E concluído.
 - Produção intocada e nenhum deploy/merge em `main` realizado.
 - Gates manuais ainda requerem navegador: navegação de guards, F5 offline autenticado e cross-account E2E real de Dexie; teste físico de alta resolução permanece pendente.
+
+## 30. Regressão Final e Status dos Gates (Prompt 20 — Continuação)
+
+### Regressão automática (executada em 2026-09-21)
+
+| Teste | Resultado | Observação |
+|-------|-----------|------------|
+| `npx tsc -b` | PASS | Sem erros |
+| `npm run lint` | PASS | 0 erros, 2 warnings pré-existentes (`react-hooks/incompatible-library` em `watch()`) |
+| `npm run build` | PASS | 70 entries, `dist/sw.js` com `createHandlerBoundToURL("index.html")` |
+| CAS (`simulate-inspection-cas.mjs`) | **9/9 PASS** | Nenhuma sobrescrita silenciosa |
+| Idempotência (`simulate-inspection-idempotency.mjs`) | **64/64 PASS** | Duplo clique, retry, rollback, repair, equipamento, foto+pendente |
+| Paginação (`simulate-sync-pagination.mjs`) | **TODOS PASS** | 0–1501, falhas páginas 0–3, snapshot parcial, MAX_PAGES |
+| Ownership (`simulate-sync-ownership.mjs`) | **TODOS PASS** | 4 domínios × 3 ações, legacy unowned, logout/login, mapper exclusion |
+| Security (`validate-preproduction-security.mjs`) | **PASS** | Guards, paginação, ownership, Dexie v8 |
+| Sharing staging (`validate-inspection-sharing.mjs`) | **56/56 PASS** | Preflight roles OK; cleanup completo; integridade 41→41 |
+
+### Integridade staging
+
+| Verificação | Resultado |
+|-------------|-----------|
+| Equipamentos pré-existentes | 41 — intactos |
+| QR Codes pré-existentes | Intactos |
+| Dados E2E removidos | Sim (storage + metadata + inspeções + equipamento) |
+| Roles preservadas | Sim (admin/inspector) |
+
+### Gates manuais — status real
+
+| Gate | Status | Motivo |
+|------|--------|--------|
+| Cross-account E2E real (Dexie, duas sessões) | **PENDENTE MANUAL** | Requer browser com duas contas Inspector no staging; não executável via CLI |
+| Route guards (anônimo, inspector, admin) | **PENDENTE MANUAL** | Requer janela incognito e navegação real |
+| Offline F5 autenticado | **PENDENTE MANUAL** | Requer DevTools + F5 + sessão cacheada |
+| Foto física alta resolução (≥12 MP) | **PENDENTE MANUAL** | Requer dispositivo com câmera |
+
+### Produção
+
+| Item | Status |
+|------|--------|
+| Migration 0018 | Intacta no repo |
+| Migration 0019 | Intacta no repo; aplicada SOMENTE staging |
+| Migration 0020 | Intacta no repo; aplicada SOMENTE staging |
+| Deploy em `main` | NENHUM |
+| Modificação em Auth | NENHUMA |
+
+**INVENTÁRIO DE PRODUÇÃO: NÃO VERIFICADO** (sem acesso read-only disponível neste ambiente)
+
+### Resultado parcial desta etapa
+
+- Regressão automática: **TODOS PASS**
+- Integridade staging: **PASS**
+- Produção: **NÃO ALTERADA**
+- Gates manuais: **PENDENTES** (4 de 4 não executáveis via CLI)
+
+**HARDENING BLOQUEADO — gates manuais requerem sessão humana com browser.**
