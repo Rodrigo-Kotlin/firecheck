@@ -10,23 +10,28 @@ import type { ActionPlan } from '../types';
 import type { FetchResult, ServiceResult } from './equipmentService';
 import { isNetworkUnavailableError } from '../utils/network';
 import { canAttemptNetwork } from './networkState';
+import { fetchAllPages } from './pagination';
 
 const isDev = import.meta.env.DEV;
 
 export async function fetchActionPlans(): Promise<FetchResult<ActionPlan>> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, data: null, network: false };
+    return { ok: false, data: null, complete: false, network: false };
   }
-  const { data, error } = await supabase
-    .from('planos_acao')
-    .select('*')
-    .order('created_at', { ascending: false });
-  if (error) {
-    const network = isNetworkUnavailableError(error);
-    console.error('[actionPlan.fetch]', network ? '(rede)' : '', error);
-    return { ok: false, data: null, network };
+  const result = await fetchAllPages(async (from, to) => {
+    const { data, error } = await supabase!
+      .from('planos_acao')
+      .select('*')
+      .order('id', { ascending: true })
+      .range(from, to);
+    return { data: data as DbPlanoAcao[] | null, error };
+  });
+  if (result.error) {
+    const network = isNetworkUnavailableError(result.error);
+    console.error('[actionPlan.fetch]', network ? '(rede)' : '', result.error);
+    return { ok: false, data: result.rows.map(dbToActionPlan), complete: false, network };
   }
-  return { ok: true, data: (data as DbPlanoAcao[]).map(dbToActionPlan) };
+  return { ok: true, data: result.rows.map(dbToActionPlan), complete: result.complete, network: false };
 }
 
 export async function createActionPlanRemote(plan: ActionPlan): Promise<ServiceResult> {

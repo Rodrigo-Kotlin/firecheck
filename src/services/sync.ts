@@ -50,6 +50,7 @@ import {
   markNetworkFailure,
   markNetworkSuccess,
 } from './networkState';
+import { fetchAllPages } from './pagination';
 
 /** Concurrency guard — prevents overlapping sync runs. */
 let _syncInProgress = false;
@@ -1119,6 +1120,8 @@ interface PullResult {
   empty: boolean;
   /** Comprovado que o backend está inalcançável (erro real de rede). */
   network?: boolean;
+  /** True only when the pull is a complete remote snapshot. */
+  complete: boolean;
 }
 
 /** Import cloud equipment rows, reconcile orphans, preserve pending changes.
@@ -1137,7 +1140,7 @@ async function pullEquipments(): Promise<PullResult> {
   // --- Erro remoto: preservar tudo ---
   if (!result.ok) {
     console.error('[sync] pullEquipments erro: preservando dados locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false, network: result.network ?? false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, complete: false, network: result.network ?? false };
   }
 
   const cloud = result.data ?? [];
@@ -1203,6 +1206,8 @@ async function pullEquipments(): Promise<PullResult> {
     //   syncError                 → conflito conhecido
     //   deletedAt preenchido      → já reconciliado
     // ---
+    if (!result.complete) return;
+
     const now = new Date().toISOString();
     const allLocal = await db.equipamentos.toArray();
 
@@ -1239,7 +1244,7 @@ async function pullEquipments(): Promise<PullResult> {
     console.log('[sync] pullEquipments final: cloud=%d imported=%d reconciled=%d empty=%s',
       cloud.length, imported, reconciled, cloud.length === 0 ? 'true' : 'false');
   }
-  return { imported, reconciled, error: false, empty: cloud.length === 0 };
+  return { imported, reconciled, error: !result.complete, empty: cloud.length === 0, complete: result.complete };
 }
 
 async function pullInspections(): Promise<PullResult> {
@@ -1249,7 +1254,7 @@ async function pullInspections(): Promise<PullResult> {
   // --- Erro remoto: preservar tudo ---
   if (!result.ok) {
     console.error('[sync] pullInspections erro: preservando dados locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false, network: result.network ?? false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, complete: false, network: result.network ?? false };
   }
 
   const cloud = result.data ?? [];
@@ -1277,6 +1282,8 @@ async function pullInspections(): Promise<PullResult> {
     }
 
     // --- Reconciliação de órfãos locais ---
+    if (!result.complete) return;
+
     const allLocal = await db.inspecoes.toArray();
     for (const local of allLocal) {
       if (cloudIds.has(local.id)) continue;
@@ -1303,7 +1310,7 @@ async function pullInspections(): Promise<PullResult> {
     console.log('[sync] pullInspections final: imported=%d reconciled=%d error=false empty=%s',
       imported, reconciled, cloud.length === 0 ? 'true' : 'false');
   }
-  return { imported, reconciled, error: false, empty: cloud.length === 0 };
+  return { imported, reconciled, error: !result.complete, empty: cloud.length === 0, complete: result.complete };
 }
 
 async function pullActionPlans(): Promise<PullResult> {
@@ -1312,7 +1319,7 @@ async function pullActionPlans(): Promise<PullResult> {
 
   if (!result.ok) {
     console.error('[sync] pullActionPlans erro: preservando dados locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false, network: result.network ?? false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, complete: false, network: result.network ?? false };
   }
 
   const cloud = result.data ?? [];
@@ -1364,6 +1371,8 @@ async function pullActionPlans(): Promise<PullResult> {
     }
 
     // --- Reconciliação de órfãos locais ---
+    if (!result.complete) return;
+
     const now = new Date().toISOString();
     const allLocal = await db.planosAcao.toArray();
 
@@ -1393,7 +1402,7 @@ async function pullActionPlans(): Promise<PullResult> {
     console.log('[sync] pullActionPlans final: cloud=%d imported=%d reconciled=%d empty=%s',
       cloud.length, imported, reconciled, cloud.length === 0 ? 'true' : 'false');
   }
-  return { imported, reconciled, error: false, empty: cloud.length === 0 };
+  return { imported, reconciled, error: !result.complete, empty: cloud.length === 0, complete: result.complete };
 }
 
 // ---------------------------------------------------------------------------
@@ -1416,16 +1425,22 @@ async function pullActionPlans(): Promise<PullResult> {
 async function pullInspectionPhotos(): Promise<PullResult> {
   if (import.meta.env.DEV) console.log('[sync] pullInspectionPhotos...');
   if (!supabase) {
-    return { imported: 0, reconciled: 0, error: true, empty: false };
+    return { imported: 0, reconciled: 0, error: true, empty: false, complete: false };
   }
-  const { data, error } = await supabase.from('fotos_inspecao').select('*');
-  if (error) {
-    const network = isNetworkUnavailableError(error);
+  const result = await fetchAllPages(async (from, to) => {
+    const { data, error } = await supabase!.from('fotos_inspecao')
+      .select('*')
+      .order('id', { ascending: true })
+      .range(from, to);
+    return { data: data as DbFotoInspecao[] | null, error };
+  });
+  if (result.error) {
+    const network = isNetworkUnavailableError(result.error);
     console.error('[sync] pullInspectionPhotos erro: preservando fotos locais');
-    return { imported: 0, reconciled: 0, error: true, empty: false, network };
+    return { imported: 0, reconciled: 0, error: true, empty: false, complete: false, network };
   }
 
-  const rows = (data ?? []) as DbFotoInspecao[];
+  const rows = result.rows;
   const now = new Date().toISOString();
   let imported = 0;
 
@@ -1468,7 +1483,7 @@ async function pullInspectionPhotos(): Promise<PullResult> {
     console.log('[sync] pullInspectionPhotos final: cloud=%d imported=%d empty=%s',
       rows.length, imported, rows.length === 0 ? 'true' : 'false');
   }
-  return { imported, reconciled: 0, error: false, empty: rows.length === 0, network: false };
+  return { imported, reconciled: 0, error: !result.complete, empty: rows.length === 0, complete: result.complete, network: false };
 }
 
 // ---------------------------------------------------------------------------

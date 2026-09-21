@@ -14,6 +14,7 @@ import type { Equipment } from '../types';
 import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
 import { isNetworkUnavailableError } from '../utils/network';
 import { canAttemptNetwork } from './networkState';
+import { fetchAllPages } from './pagination';
 
 const isDev = import.meta.env.DEV;
 
@@ -42,6 +43,8 @@ export interface ServiceResult<T = Equipment> {
 export interface FetchResult<T> {
   ok: boolean;
   data: T[] | null;
+  /** True only when every remote page was fetched successfully. */
+  complete: boolean;
   /** Comprovado que o backend está inalcançável (erro real de rede). */
   network?: boolean;
 }
@@ -52,18 +55,22 @@ export interface FetchResult<T> {
 
 export async function fetchEquipments(): Promise<FetchResult<Equipment>> {
   if (!isSupabaseConfigured || !supabase) {
-    return { ok: false, data: null, network: false };
+    return { ok: false, data: null, complete: false, network: false };
   }
-  const { data, error } = await supabase
-    .from('equipamentos')
-    .select('*')
-    .order('id');
-  if (error) {
-    const network = isNetworkUnavailableError(error);
-    console.error('[equipment.fetchEquipments]', network ? '(rede)' : '', error);
-    return { ok: false, data: null, network };
+  const result = await fetchAllPages(async (from, to) => {
+    const { data, error } = await supabase!
+      .from('equipamentos')
+      .select('*')
+      .order('id', { ascending: true })
+      .range(from, to);
+    return { data: data as DbEquipamento[] | null, error };
+  });
+  if (result.error) {
+    const network = isNetworkUnavailableError(result.error);
+    console.error('[equipment.fetchEquipments]', network ? '(rede)' : '', result.error);
+    return { ok: false, data: result.rows.map(dbToEquipment), complete: false, network };
   }
-  return { ok: true, data: (data as DbEquipamento[]).map(dbToEquipment) };
+  return { ok: true, data: result.rows.map(dbToEquipment), complete: result.complete, network: false };
 }
 
 export async function findEquipmentById(id: string): Promise<Equipment | null> {
