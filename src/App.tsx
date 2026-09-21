@@ -7,6 +7,7 @@ import AppLayout from './components/layout/AppLayout';
 import Toaster from './components/Toaster';
 import { usePwaUpdate } from './hooks/usePwaUpdate';
 import { useAppStore } from './store';
+import { AdminRoute, ProtectedRoute } from './components/auth/RouteGuards';
 
 const Login = lazy(() => import('./pages/login/Login'));
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'));
@@ -71,9 +72,23 @@ export default function App() {
           <Route path="/recuperar-senha" element={<RecuperarSenha />} />
           <Route path="/redefinir-senha" element={<RedefinirSenha />} />
 
-          <Route path="/qrcodes/imprimir" element={<QrCodesImprimir />} />
+          <Route
+            path="/qrcodes/imprimir"
+            element={
+              <ProtectedRoute>
+                <QrCodesImprimir />
+              </ProtectedRoute>
+            }
+          />
 
-          <Route path="/" element={<AppLayout />}>
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <AppLayout />
+              </ProtectedRoute>
+            }
+          >
             <Route index element={<Dashboard />} />
             <Route path="equipamentos" element={<Equipamentos />} />
             <Route path="equipamentos/novo" element={<NovoEquipamento />} />
@@ -94,7 +109,14 @@ export default function App() {
             <Route path="qrcodes" element={<QrCodes />} />
             <Route path="planodeacao" element={<PlanoDeAcao />} />
             <Route path="configuracoes" element={<Configuracoes />} />
-            <Route path="admin/usuarios" element={<AdminUsuarios />} />
+            <Route
+              path="admin/usuarios"
+              element={
+                <AdminRoute>
+                  <AdminUsuarios />
+                </AdminRoute>
+              }
+            />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />
