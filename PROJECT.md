@@ -1137,6 +1137,7 @@ Sempre que iniciar nova sessão neste projeto:
 | 2026-09-18 | `feat/firecheck-inspecoes-compartilhadas` | Atomicidade do plano de ação + fechamento 56/56 (Prompt 17) | `addInspection`: planosAcao ENTROU na transação Dexie (`inspecoes+fotos+equipamentos+planosAcao`); fim do fire-and-forget (`void db.planosAcao.put`) no `set()` do Zustand; falso sucesso eliminado (falha no plano → rollback TOTAL de inspeção/foto/equipamento/plano); guarda idempotente fortalecida com repair controlado de `PAC-<inspectionId>` ausente (`idempotent + repairedActionPlan`) SEM sobrescrever plano existente; sem repair de foto (atomicidade documentada); sem backfill; `validate-inspection-sharing.mjs` com preflight de roles (TEST ENV MISCONFIGURED aborta antes de E2E); conta de teste `firecheck.admin.teste@efetiva.com` promovida a `role=admin` (autorização explícita, único profile alterado); simulação idempotência 64 checks + CAS 9/9 + remoto **56/56 PASS**; lint 0 erros; tsc+build ok | Concluído | Review/main no próximo merge |
 | 2026-09-18 | `release/firecheck-stabilization` | Integração das 3 branches + smoke staging (Prompt 18) | Grafo auditado: fotos (`e40e556`) e dashboard (`ec6316d`) são **ancestrais completos** de inspecoes-compartilhadas (merge-bases = heads → SKIPPED — already ancestor/included); merge único `--no-ff` de `feat/firecheck-inspecoes-compartilhadas` (contém fotos + dashboard + compartilhamento + offline + idempotência + atomicidade), **sem merge redundante**; migrations `0017`/`0018` idênticas às validadas (diff vazio) e intactas, sem `0019`; smoke staging E2E: preflight roles 3/3 PASS, equipamento/foto/QR/inspeção/plano/dashboard/CAS/conflito A/B/RASTREABILIDADE 56/56 + idempotência 64/64 + CAS 9/9; integridade antes/depois: equipamentos 41→42→41, QR intactos, históricos intactos, **0 linhas reais alteradas**; cleanup E2E completo; lint 0 erros, tsc+build ok, dist/sw.js com `createHandlerBoundToURL("index.html")` | Concluído | Prompt 19 — preflight de produção |
 | 2026-09-19 | `release/firecheck-stabilization` | Preflight de produção (Prompt 19) — auditoria RLS `profiles` + race do primeiro admin | Auditoria de enumeração de `profiles` (SELECT direto, dump de profiles, RLS, `listUsers`, `fetchOwnProfile`, darwin, RPC): **sem escalada real** — o caminho operacional usa inspeções/equipamentos/fotos compartilhadas (RLS própria), não `profiles`; `profiles` só lida por `listUsers` (admin-gated `is_admin()`) e `fetchOwnProfile` (filtro por uid) — auditoria de `0018` e `darwin` não o propagam à UI | Migration `0019_fix_first_admin_race_and_profiles_enumeration.sql` (criada; aplicada **SOMENTE staging** via dry-run→`db push --linked`, ref `sgweag...` staging; **produção intocada**): (a) primeiro admin: `handle_new_user` antes com `count`+`insert` desacoplados → dois admins em corrida (race, P0); agora tudo dentro de transação com `pg_advisory_xact_lock(0x66695265)` + `INSERT ... ON CONFLICT DO UPDATE`/seletivo para garantir um único admin; (b) RLS `profiles`: policy pública `using (true)` antes expunha email/nome/tipo de qualquer inspector ($ P1); agora `is_admin() OR id = auth.uid()` (leitura restrita ao próprio ou admin) — inspector condivide inspeções via policies de inspeção, não de profiles | 0001-0018 INTACTAS (git status: só 0019 untracked; nenhu diff; lint 0, build ok); testes remotos staging pós-0019: validate inspection sharing **56/56 PASS**, CAS **9/9 PASS**, idempotência **64/64 PASS** — policy restrita de profiles NÃO quebrou compartilhamento | Concluído | Prompt 20 — decidir merge de `0019` em produção + aplicar demais pendências app (paginação pull, isolamento por sessão, guard de rota QR) |
+| 2026-09-21 | `release/firecheck-stabilization` | Prompt 20 — hardening final | Helper de paginação versionado (`3807f6d`), guards centrais (`81ad480`), pulls paginados nos 4 domínios com `complete`/gate de órfãos (`dd4e2cc`), ownership local Dexie v8 e filtros cross-account (`94c398b`); scripts `simulate-sync-pagination`, `simulate-sync-ownership` e `validate-preproduction-security`; staging sharing **56/56 PASS**, CAS **9/9 PASS**, idempotência **64/64 PASS**, produção intocada, migrations 0019/0020 intactas | Em validação final | Prompt 21 — somente após gates manuais e cross-account E2E |
 
 ---
 
@@ -1339,11 +1340,11 @@ Itens que exigem dispositivo/sessão humana (QR físico via celular, toggle offl
 
 | Item | Status | Severidade | Observação |
 |------|--------|------------|------------|
-| Paginação do pull remoto | PENDENTE | Média | Pull sem `limit`/`range` (volume atual pequeno); aplicar paginação quando a base crescer |
-| Isolamento de dados locais por sessão/usuário | PENDENTE | Média | Dexie único por origin; múltiplos perfis no mesmo browser compartilham dados locais |
+| Paginação do pull remoto | RESOLVIDO | — | `fetchAllPages`, page size 500, ordenação determinística e gate `complete` nos quatro domínios |
+| Isolamento de mutations locais por sessão/usuário | RESOLVIDO | — | `syncOwnerUserId` em Dexie v8; cache pode ser compartilhado, mas pending sem owner ou de outra conta não faz push |
 | Policies de `profiles` | RESOLVIDO | — | Migration `0003`: RLS (select autenticado; update self/admin; delete admin-only; sem auto-rebaixamento) |
 | Provisionamento do primeiro admin | RESOLVIDO | — | Trigger `handle_new_user` (`0003`): primeiro profile vira `admin`, demais `inspector` |
-| Segurança da rota/impressão de QR | PENDENTE | Baixa | `/qrcodes/imprimir` é rota de nível raiz, fora do guard do `AppLayout`; sem dados quando não autenticado, mas sem redirect explícito |
+| Segurança da rota/impressão de QR | RESOLVIDO | — | `/qrcodes/imprimir` protegido por `ProtectedRoute`; `/admin/usuarios` protegido por `AdminRoute` |
 | Migrations antigas com regras de autoria/NULL | PENDENTE | Média | `0018` cobre autoria de inspeções; consolidação de NOT NULL/autoria em `equipamentos`/`planos_acao` não auditada |
 | Teste físico de foto em celular/câmera de alta resolução | PENDENTE | Média | Decode de 48 MP ainda aloca resolução original antes do cap de 25 MP; requer dispositivo real |
 | Comportamento dos status especiais do Dashboard | RESOLVIDO | — | `equipmentFilters.ts` cobre regular/em dia e pendente/vencido como fonte única de verdade |
@@ -1353,3 +1354,32 @@ Itens que exigem dispositivo/sessão humana (QR físico via celular, toggle offl
 - Heads reais consultados (sem assumir os registros anteriores); working tree verificada limpa; nenhum merge redundante; nenhum conflito; migrations 0017/0018 intactas; tsc/lint/build/CAS/idempotência/RLS passando; equipamentos e QRs reais intactos; cleanup 100% E2E.
 - **Resultado desta etapa: INTEGRAÇÃO APROVADA.**
 - Branch final: `release/firecheck-stabilization` — HEAD `2cffc52`. Próximo passo (separado, com decisão do usuário): produção.
+
+## 29. Hardening Final do App / Prompt 20
+
+### Incremento 1
+
+- Guards centralizados em `RouteGuards.tsx`: todas as rotas operacionais e `/qrcodes/imprimir` exigem sessão; `/admin/usuarios` exige `isAdmin`; `authReady` preserva sessão cacheada offline.
+- `fetchAllPages` usa `PULL_PAGE_SIZE=500`, `.range()`, ordenação determinística por `id`, limite `MAX_PAGES=2000` e `complete=false` em falha parcial.
+- Equipamentos, inspeções, planos de ação e fotos usam paginação. Reconciliação de órfãos ocorre apenas com snapshot completo; pendências/conflitos são preservados.
+
+### Incremento 2
+
+- `syncOwnerUserId` é metadata somente local. Dexie foi atualizado de v7 para v8 de forma não destrutiva, sem limpeza ou remoção de dados.
+- CREATE, UPDATE e DELETE de Equipment, Inspection, Photo e ActionPlan registram o usuário autenticado. Push só seleciona mutations do usuário atual; legacy pending sem owner nunca é adotado.
+- O owner é preservado em rede/conflito/logout e removido somente após confirmação. Mappers não enviam `syncOwnerUserId` ao Supabase.
+
+### Scripts e validações
+
+- `scripts/simulate-sync-pagination.mjs`: tamanhos 0–1501, falhas em todas as posições, snapshot parcial e `MAX_PAGES` — PASS.
+- `scripts/simulate-sync-ownership.mjs`: quatro domínios, create/update/delete, logout/login, legacy pending e payload — PASS.
+- `scripts/validate-preproduction-security.mjs`: guards, paginação, gate parcial, ownership e migration Dexie — automático PASS.
+- Regressão: `npm ci`, `npx tsc -b`, `npm run build`, CAS, idempotência e sharing staging executados; lint sem erros, com dois warnings pré-existentes do React Hook Form.
+- PWA: `dist/sw.js` gerado com `createHandlerBoundToURL("index.html")`; Supabase permanece NetworkOnly.
+
+### Banco, staging e produção
+
+- Migrations 0019 e 0020 permanecem intactas e aplicadas somente em staging. Nenhuma migration 0021 foi criada.
+- Sharing staging: 56/56 PASS; equipamento, QR Codes, históricos, profiles e roles preservados; cleanup E2E concluído.
+- Produção intocada e nenhum deploy/merge em `main` realizado.
+- Gates manuais ainda requerem navegador: navegação de guards, F5 offline autenticado e cross-account E2E real de Dexie; teste físico de alta resolução permanece pendente.
