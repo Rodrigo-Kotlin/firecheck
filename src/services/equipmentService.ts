@@ -408,11 +408,13 @@ function stripSyncMeta(row: Partial<LocalEquipment>): Equipment {
     syncAction: _a, syncError: _e, statusUpdatePending: _su,
     syncBaseUpdatedAt: _b, syncConflict: _cf, syncConflictReason: _cr,
     remoteUpdatedAtAtConflict: _ru,
+    syncOwnerUserId: _o,
     deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u,
     ...eq
   } = row;
   void _s; void _p; void _a; void _e; void _su;
   void _b; void _cf; void _cr; void _ru;
+  void _o;
   void _d; void _db; void _c; void _u;
   return eq as Equipment;
 }

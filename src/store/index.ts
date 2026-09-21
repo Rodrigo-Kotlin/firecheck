@@ -232,9 +232,9 @@ export const useAppStore = create<AppState>()(
           .filter((p) => !p.pendingDelete && !p.deletedAt)
           .toArray();
         return rows.map(({
-          sincronizado: _s, pendingDelete: _p, syncAction: _a, ...rest
-        }) => {
-          void _s; void _p; void _a;
+            sincronizado: _s, pendingDelete: _p, syncAction: _a, syncOwnerUserId: _o, ...rest
+          }) => {
+          void _s; void _p; void _a; void _o;
           return rest as ActionPlan;
         });
       };
@@ -268,18 +268,18 @@ export const useAppStore = create<AppState>()(
               if (e.pendingDelete || e.deletedAt) continue;
               const {
                 sincronizado: _s, pendingDelete: _p,
-                syncAction: _sa, statusUpdatePending: _su,
+                syncAction: _sa, syncOwnerUserId: _o, statusUpdatePending: _su,
                 ...clean
               } = e;
-              void _s; void _p; void _sa; void _su;
+              void _s; void _p; void _sa; void _o; void _su;
               freshEqs.push(clean as unknown as Equipment);
             }
 
             const freshInsps: Inspection[] = [];
             for (const i of dbInsps) {
               if (i.pendingDelete) continue;
-              const { sincronizado: _s2, pendingDelete: _p2, ...clean } = i;
-              void _s2; void _p2;
+              const { sincronizado: _s2, pendingDelete: _p2, syncAction: _a2, syncOwnerUserId: _o2, ...clean } = i;
+              void _s2; void _p2; void _a2; void _o2;
               freshInsps.push(clean as unknown as Inspection);
             }
 
@@ -429,8 +429,8 @@ export const useAppStore = create<AppState>()(
             if (import.meta.env.DEV) console.log(`[conflict-resolution] equipment ${id} not found or not in conflict`);
             return;
           }
-          const { sincronizado: _s, pendingDelete: _p, syncAction: _sa, statusUpdatePending: _su, syncConflict: _sc, syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru, syncError: _se, syncBaseUpdatedAt: _sb, deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u, ...clean } = local;
-          void _s; void _p; void _sa; void _su; void _sc; void _cr; void _ru; void _se; void _sb; void _d; void _db; void _c; void _u;
+          const { sincronizado: _s, pendingDelete: _p, syncAction: _sa, statusUpdatePending: _su, syncConflict: _sc, syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru, syncError: _se, syncBaseUpdatedAt: _sb, syncOwnerUserId: _o, deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u, ...clean } = local;
+          void _s; void _p; void _sa; void _su; void _sc; void _cr; void _ru; void _se; void _sb; void _o; void _d; void _db; void _c; void _u;
           const result = await updateEquipmentRemote(clean as Equipment);
           if (result.ok) {
             const now = new Date().toISOString();
@@ -443,6 +443,7 @@ export const useAppStore = create<AppState>()(
               syncConflict: false,
               syncConflictReason: undefined,
               remoteUpdatedAtAtConflict: null,
+              syncOwnerUserId: undefined,
               syncBaseUpdatedAt: remoteUpdatedAt ?? now,
               updatedAt: remoteUpdatedAt ?? now,
             });
@@ -509,8 +510,8 @@ export const useAppStore = create<AppState>()(
             if (import.meta.env.DEV) console.log(`[conflict-resolution] action plan ${id} not found or not in conflict`);
             return;
           }
-          const { sincronizado: _s, pendingDelete: _p, syncAction: _sa, syncConflict: _sc, syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru, syncError: _se, syncBaseUpdatedAt: _sb, deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u, ...clean } = local;
-          void _s; void _p; void _sa; void _sc; void _cr; void _ru; void _se; void _sb; void _d; void _db; void _c; void _u;
+          const { sincronizado: _s, pendingDelete: _p, syncAction: _sa, syncConflict: _sc, syncConflictReason: _cr, remoteUpdatedAtAtConflict: _ru, syncError: _se, syncBaseUpdatedAt: _sb, syncOwnerUserId: _o, deletedAt: _d, deletedBy: _db, createdAt: _c, updatedAt: _u, ...clean } = local;
+          void _s; void _p; void _sa; void _sc; void _cr; void _ru; void _se; void _sb; void _o; void _d; void _db; void _c; void _u;
           const result = await updateActionPlanRemote(clean as ActionPlan);
           if (result.ok) {
             const now = new Date().toISOString();
@@ -523,6 +524,7 @@ export const useAppStore = create<AppState>()(
               syncConflict: false,
               syncConflictReason: undefined,
               remoteUpdatedAtAtConflict: null,
+              syncOwnerUserId: undefined,
               syncBaseUpdatedAt: remoteUpdatedAt ?? now,
               updatedAt: remoteUpdatedAt ?? now,
             });
@@ -630,6 +632,7 @@ export const useAppStore = create<AppState>()(
               sincronizado: false,
               pendingDelete: false,
               syncAction: 'create',
+              syncOwnerUserId: get().user?.id,
               deletedAt: null,
               deletedBy: null,
             } as LocalEquipment);
@@ -657,6 +660,7 @@ export const useAppStore = create<AppState>()(
                 sincronizado: true,
                 syncAction: undefined,
                 syncError: undefined,
+                syncOwnerUserId: undefined,
               });
               mode = 'cloud';
             } else if (result.code === 'duplicate') {
@@ -704,6 +708,7 @@ export const useAppStore = create<AppState>()(
               ...updated,
               sincronizado: false,
               syncAction: 'update',
+              syncOwnerUserId: get().user?.id,
             } as Partial<LocalEquipment>);
           } catch (err) {
             console.error('[store.updateEquipment] erro ao atualizar no Dexie:', err);
@@ -728,6 +733,7 @@ export const useAppStore = create<AppState>()(
                 sincronizado: true,
                 syncAction: undefined,
                 syncError: undefined,
+                syncOwnerUserId: undefined,
               });
               return { ok: true, mode: 'cloud' };
             }
@@ -769,6 +775,7 @@ export const useAppStore = create<AppState>()(
             updatedByName: updates.updatedByName,
             sincronizado: false,
             syncAction: 'update',
+            syncOwnerUserId: get().user?.id,
           };
 
           // A edição NUNCA ajusta autoria original da inspeção.
@@ -808,6 +815,7 @@ export const useAppStore = create<AppState>()(
               dataUltimaInspecao: safeUpdates.data ?? current.data,
               sincronizado: false,
               statusUpdatePending: true,
+              syncOwnerUserId: get().user?.id,
               updatedAt: now,
             } as Partial<LocalEquipment>);
             set((state) => ({
@@ -890,6 +898,7 @@ export const useAppStore = create<AppState>()(
             syncConflict: false,
             syncConflictReason: undefined,
             remoteUpdatedAtAtConflict: null,
+            syncOwnerUserId: undefined,
             syncBaseUpdatedAt: result.row.updated_at,
             updatedAt: result.row.updated_at,
             updatedBy: result.row.updated_by ?? undefined,
@@ -994,6 +1003,7 @@ export const useAppStore = create<AppState>()(
             pendingDelete: true,
             sincronizado: false,
             syncAction: 'delete',
+            syncOwnerUserId: userId,
             deletedAt: now,
             deletedBy: userId ?? null,
             updatedAt: now,
@@ -1016,6 +1026,7 @@ export const useAppStore = create<AppState>()(
             pendingDelete: true,
             sincronizado: false,
             syncAction: 'delete',
+            syncOwnerUserId: get().user?.id,
           });
 
           set((state) => ({
@@ -1029,7 +1040,9 @@ export const useAppStore = create<AppState>()(
 
         addInspection: async (data) => {
           const inspectionId = data.inspectionId;
-          const userId = data.userId ?? get().user?.id;
+          // A pending mutation is always owned by the authenticated session,
+          // never by a caller-supplied identity from cached/UI data.
+          const userId = get().user?.id;
 
           // -----------------------------------------------------------------
           // GUARDA DE IDEMPOTÊNCIA da tentativa: se já existe registro local
@@ -1070,6 +1083,7 @@ export const useAppStore = create<AppState>()(
                     sincronizado: false,
                     pendingDelete: false,
                     syncAction: 'create',
+                    syncOwnerUserId: userId,
                     deletedAt: null,
                     deletedBy: null,
                   };
@@ -1145,6 +1159,7 @@ export const useAppStore = create<AppState>()(
               sincronizado: false,
               pendingDelete: false,
               syncAction: 'create',
+              syncOwnerUserId: userId,
               deletedAt: null,
               deletedBy: null,
             };
@@ -1172,6 +1187,7 @@ export const useAppStore = create<AppState>()(
                 ...stamped,
                 sincronizado: false,
                 syncAction: 'create',
+                syncOwnerUserId: userId,
                 createdAt: now,
                 updatedAt: now,
               } as LocalInspection);
@@ -1187,6 +1203,7 @@ export const useAppStore = create<AppState>()(
                   size: data.photo.size,
                   sincronizado: false,
                   syncAction: 'create',
+                  syncOwnerUserId: userId,
                   createdAt: now,
                   updatedAt: now,
                 } as LocalInspectionPhoto);
@@ -1196,6 +1213,7 @@ export const useAppStore = create<AppState>()(
                 eq.status = data.status;
                 eq.sincronizado = false;
                 eq.statusUpdatePending = true;
+                eq.syncOwnerUserId = userId;
                 eq.updatedAt = new Date().toISOString();
                 if (data.dataProximaInspecao) {
                   eq.dataProximaInspecao = data.dataProximaInspecao;
@@ -1258,6 +1276,7 @@ export const useAppStore = create<AppState>()(
             sincronizado: false,
             pendingDelete: false,
             syncAction: 'create',
+            syncOwnerUserId: get().user?.id,
             deletedAt: null,
             deletedBy: null,
           } as LocalActionPlan).then(() => {
@@ -1274,6 +1293,7 @@ export const useAppStore = create<AppState>()(
             ...updates,
             sincronizado: false,
             syncAction: 'update',
+            syncOwnerUserId: get().user?.id,
             updatedAt: now,
           } as Partial<LocalActionPlan>).then(() => {
             set((state) => ({
@@ -1293,6 +1313,8 @@ export const useAppStore = create<AppState>()(
               void db.planosAcao.update(id, {
                 pendingDelete: true,
                 sincronizado: false,
+                syncAction: 'delete',
+                syncOwnerUserId: get().user?.id,
                 deletedAt: now,
                 updatedAt: now,
               } as Partial<LocalActionPlan>);

@@ -55,6 +55,14 @@ import { fetchAllPages } from './pagination';
 /** Concurrency guard — prevents overlapping sync runs. */
 let _syncInProgress = false;
 
+function ownsPending(row: { syncOwnerUserId?: string }, userId: string | undefined, domain: string, id: string): boolean {
+  if (row.syncOwnerUserId === userId && !!userId) return true;
+  if (import.meta.env.DEV && !row.syncOwnerUserId) {
+    console.warn(`[sync] legacy-unowned-pending skipped: ${domain}/${id}`);
+  }
+  return false;
+}
+
 export interface SyncReport {
   pushed: number;
   pulled: number;
@@ -158,7 +166,8 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
   };
 
   // 1) pending deletes — soft delete com verificação de conflito
-  const toDelete = await db.equipamentos.filter((e) => !!e.pendingDelete).toArray();
+  const toDelete = (await db.equipamentos.filter((e) => !!e.pendingDelete).toArray())
+    .filter((e) => ownsPending(e, userId, 'equipment', e.id));
   if (import.meta.env.DEV && toDelete.length > 0) {
     console.log(`[sync] pushEquipments: ${toDelete.length} exclusões pendentes (${toDelete.map(e => e.id).join(', ')})`);
   }
@@ -173,6 +182,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
           pendingDelete: false,
           sincronizado: true,
           syncAction: undefined,
+          syncOwnerUserId: undefined,
           syncConflict: false,
           syncConflictReason: undefined,
           syncError: undefined,
@@ -208,6 +218,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         pendingDelete: false,
         sincronizado: true,
         syncAction: undefined,
+        syncOwnerUserId: undefined,
         syncConflict: false,
         syncConflictReason: undefined,
         syncError: undefined,
@@ -231,9 +242,9 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
 
   // 2) pending sync — create / update (exclui syncError e itens com statusUpdatePending
   //    sem syncAction — são sincronizados via RPC em pushInspections)
-  const pending = await db.equipamentos
+  const pending = (await db.equipamentos
     .filter((e) => !e.sincronizado && !e.pendingDelete && !e.syncError && !(e.statusUpdatePending && !e.syncAction))
-    .toArray();
+    .toArray()).filter((e) => ownsPending(e, userId, 'equipment', e.id));
   if (import.meta.env.DEV && pending.length > 0) {
     console.log(`[sync] pushEquipments: ${pending.length} pendentes (${pending.map(e => e.id).join(', ')})`);
   }
@@ -256,6 +267,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
         await db.equipamentos.update(eq.id, {
           sincronizado: true,
           syncAction: undefined,
+          syncOwnerUserId: undefined,
           syncError: undefined,
           syncConflict: false,
           syncConflictReason: undefined,
@@ -285,6 +297,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
             await db.equipamentos.update(eq.id, {
               sincronizado: true,
               syncAction: undefined,
+              syncOwnerUserId: undefined,
               syncError: undefined,
               syncConflict: false,
               syncConflictReason: undefined,
@@ -323,6 +336,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
             await db.equipamentos.update(eq.id, {
               sincronizado: true,
               syncAction: undefined,
+              syncOwnerUserId: undefined,
               syncError: undefined,
               syncConflict: false,
               syncConflictReason: undefined,
@@ -357,6 +371,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
           await db.equipamentos.update(eq.id, {
             sincronizado: true,
             syncAction: undefined,
+            syncOwnerUserId: undefined,
             syncError: undefined,
             syncConflict: false,
             syncConflictReason: undefined,
@@ -383,6 +398,7 @@ async function pushEquipments(userId?: string): Promise<{ ok: number; errors: nu
           await db.equipamentos.update(eq.id, {
             sincronizado: true,
             syncAction: undefined,
+            syncOwnerUserId: undefined,
             syncError: undefined,
             syncConflict: false,
             syncConflictReason: undefined,
@@ -438,6 +454,7 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
     const patch: Partial<LocalEquipment> = {
       sincronizado: true,
       statusUpdatePending: undefined,
+      syncOwnerUserId: undefined,
     };
     if (typeof rpcData.status === 'string') patch.status = rpcData.status as Equipment['status'];
     if (typeof rpcData.data_ultima_inspecao === 'string') patch.dataUltimaInspecao = rpcData.data_ultima_inspecao;
@@ -451,9 +468,9 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
    *  inspeção pendente associada (ex.: exclusão de inspeção já aplicada).
    *  Recálculo idempotente a partir da inspeção mais recente do servidor. */
   const reconcileStaleStatusFlags = async () => {
-    const eqs = await db.equipamentos
+    const eqs = (await db.equipamentos
       .filter((e) => !!e.statusUpdatePending && !e.syncAction && !e.pendingDelete && !e.syncError)
-      .toArray();
+      .toArray()).filter((e) => ownsPending(e, userId, 'equipment', e.id));
     if (eqs.length === 0) return;
 
     // Pula equipamentos que ainda têm inspeções pendentes este round (o RPC
@@ -483,7 +500,8 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
   };
 
   // 1) pending deletes — ADMIN ONLY (RLS) com confirmação de linha.
-  const toDelete = await db.inspecoes.filter((i) => !!i.pendingDelete).toArray();
+  const toDelete = (await db.inspecoes.filter((i) => !!i.pendingDelete).toArray())
+    .filter((i) => ownsPending(i, userId, 'inspection', i.id));
   for (const insp of toDelete) {
     if (!supabase) {
       console.warn('[sync.pushInspections] Supabase não configurado — exclusão local não enviada');
@@ -545,9 +563,9 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
   }
 
   // 2) pending sync — create / update.
-  const pending = await db.inspecoes
+  const pending = (await db.inspecoes
     .filter((i) => !i.sincronizado && !i.pendingDelete && !i.syncError)
-    .toArray();
+    .toArray()).filter((i) => ownsPending(i, userId, 'inspection', i.id));
   for (const insp of pending) {
     let toSync = insp;
     if (!insp.userId && userId) {
@@ -597,6 +615,7 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
       await db.inspecoes.update(insp.id, {
         sincronizado: true,
         syncAction: undefined,
+        syncOwnerUserId: undefined,
         syncError: undefined,
         syncConflict: false,
         syncConflictReason: undefined,
@@ -663,6 +682,7 @@ async function pushInspections(userId?: string): Promise<{ ok: number; errors: n
     await db.inspecoes.update(insp.id, {
       sincronizado: true,
       syncAction: undefined,
+      syncOwnerUserId: undefined,
       syncError: undefined,
       syncConflict: false,
       syncConflictReason: undefined,
@@ -722,7 +742,8 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
   };
 
   // 1) pending deletes — soft delete com verificação de conflito
-  const toDelete = await db.planosAcao.filter((p) => !!p.pendingDelete).toArray();
+  const toDelete = (await db.planosAcao.filter((p) => !!p.pendingDelete).toArray())
+    .filter((p) => ownsPending(p, userId, 'action-plan', p.id));
   for (const plan of toDelete) {
     // Verificar conflito antes de deletar
     const remoteResult = await fetchActionPlanById(plan.id);
@@ -734,6 +755,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
           pendingDelete: false,
           sincronizado: true,
           syncAction: undefined,
+          syncOwnerUserId: undefined,
           syncConflict: false,
           syncConflictReason: undefined,
           syncError: undefined,
@@ -765,6 +787,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         pendingDelete: false,
         sincronizado: true,
         syncAction: undefined,
+        syncOwnerUserId: undefined,
         syncConflict: false,
         syncConflictReason: undefined,
         syncError: undefined,
@@ -786,9 +809,9 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
   }
 
   // 2) pending sync — create / update
-  const pending = await db.planosAcao
+  const pending = (await db.planosAcao
     .filter((p) => !p.sincronizado && !p.pendingDelete && !p.syncError)
-    .toArray();
+    .toArray()).filter((p) => ownsPending(p, userId, 'action-plan', p.id));
   if (import.meta.env.DEV && pending.length > 0) {
     console.log(`[sync] pushActionPlans: ${pending.length} pendentes (${pending.map(p => p.id).join(', ')})`);
   }
@@ -805,6 +828,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
         await db.planosAcao.update(plan.id, {
           sincronizado: true,
           syncAction: undefined,
+          syncOwnerUserId: undefined,
           syncError: undefined,
           syncConflict: false,
           syncConflictReason: undefined,
@@ -832,6 +856,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
             await db.planosAcao.update(plan.id, {
               sincronizado: true,
               syncAction: undefined,
+              syncOwnerUserId: undefined,
               syncError: undefined,
               syncConflict: false,
               syncConflictReason: undefined,
@@ -867,6 +892,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
             await db.planosAcao.update(plan.id, {
               sincronizado: true,
               syncAction: undefined,
+              syncOwnerUserId: undefined,
               syncError: undefined,
               syncConflict: false,
               syncConflictReason: undefined,
@@ -901,6 +927,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
           await db.planosAcao.update(plan.id, {
             sincronizado: true,
             syncAction: undefined,
+            syncOwnerUserId: undefined,
             syncError: undefined,
             syncConflict: false,
             syncConflictReason: undefined,
@@ -925,6 +952,7 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
           await db.planosAcao.update(plan.id, {
             sincronizado: true,
             syncAction: undefined,
+            syncOwnerUserId: undefined,
             syncError: undefined,
             syncConflict: false,
             syncConflictReason: undefined,
@@ -978,7 +1006,8 @@ async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; 
   let skipped = 0;
   let network = false;
 
-  const pending = await db.fotos.filter((p) => !p.sincronizado).toArray();
+  const pending = (await db.fotos.filter((p) => !p.sincronizado).toArray())
+    .filter((p) => ownsPending(p, userId, 'photo', p.id));
   if (import.meta.env.DEV && pending.length > 0) {
     console.log(`[sync] pushInspectionPhotos: ${pending.length} pendentes (${pending.map(p => p.id).join(', ')})`);
   }
@@ -1079,6 +1108,7 @@ async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; 
       await db.fotos.update(photo.id, {
         sincronizado: true,
         syncAction: undefined,
+        syncOwnerUserId: undefined,
         syncError: undefined,
         storagePath: path,
         remoteId: photo.id,

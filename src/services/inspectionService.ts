@@ -344,8 +344,13 @@ export async function carregarInspecoes(): Promise<Inspection[]> {
 }
 
 function stripSyncMeta(row: { sincronizado: boolean; pendingDelete?: boolean } & Inspection): Inspection {
-  const { sincronizado: _s, pendingDelete: _p, ...rest } = row;
-  void _s; void _p;
+  const { sincronizado: _s, pendingDelete: _p, syncAction: _a, syncOwnerUserId: _o, ...rest } = row as Inspection & {
+    sincronizado: boolean;
+    pendingDelete?: boolean;
+    syncAction?: string;
+    syncOwnerUserId?: string;
+  };
+  void _s; void _p; void _a; void _o;
   return rest;
 }
 

@@ -52,6 +52,8 @@ export interface LocalInspectionPhoto {
   remoteId?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** Conta que criou a mutation local pendente; nunca vai para Supabase. */
+  syncOwnerUserId?: string;
 }
 
 /** Equipment row as stored in Dexie (adds sync metadata). */
@@ -79,6 +81,8 @@ export type LocalEquipment = Equipment & {
   syncConflictReason?: string | null;
   /** Valor remoto de updatedAt no momento em que o conflito foi detectado. */
   remoteUpdatedAtAtConflict?: string | null;
+  /** Conta que criou a mutation local pendente; nunca vai para Supabase. */
+  syncOwnerUserId?: string;
 };
 
 /** Action plan row as stored in Dexie (adds sync metadata). */
@@ -102,6 +106,8 @@ export type LocalActionPlan = ActionPlan & {
   syncConflictReason?: string | null;
   /** Valor remoto de updatedAt no momento em que o conflito foi detectado. */
   remoteUpdatedAtAtConflict?: string | null;
+  /** Conta que criou a mutation local pendente; nunca vai para Supabase. */
+  syncOwnerUserId?: string;
 };
 
 /** Inspection row as stored in Dexie (adds sync metadata + audit fields). */
@@ -125,6 +131,8 @@ export type LocalInspection = Inspection & {
   updatedAt?: string;
   updatedBy?: string;
   updatedByName?: string;
+  /** Conta que criou a mutation local pendente; nunca vai para Supabase. */
+  syncOwnerUserId?: string;
 };
 
 const LEGACY_SESSION_KEY = 'firecheck-auth-session';
@@ -235,6 +243,16 @@ export class FireCheckDatabase extends Dexie {
       inspecoes: 'id, equipmentId, sincronizado, syncAction, syncConflict, updatedAt',
       planosAcao: 'id, equipmentId, status, sincronizado, pendingDelete, syncAction, deletedAt',
       fotos: 'id, inspectionId, sincronizado, syncAction, storagePath',
+      acoes_pendentes: '++id, type, timestamp',
+    });
+
+    // v8 — ownership local das mutations pendentes. A migration só adiciona
+    // índices e preserva integralmente rows, Blobs, tombstones e conflitos.
+    this.version(8).stores({
+      equipamentos: 'id, tipo, status, sincronizado, syncOwnerUserId',
+      inspecoes: 'id, equipmentId, sincronizado, syncAction, syncConflict, updatedAt, syncOwnerUserId',
+      planosAcao: 'id, equipmentId, status, sincronizado, pendingDelete, syncAction, deletedAt, syncOwnerUserId',
+      fotos: 'id, inspectionId, sincronizado, syncAction, storagePath, syncOwnerUserId',
       acoes_pendentes: '++id, type, timestamp',
     });
   }
