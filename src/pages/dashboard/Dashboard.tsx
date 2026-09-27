@@ -1,8 +1,7 @@
 import { useMemo, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { Plus, AlertTriangle, ShieldAlert, ArrowRight, ClipboardList, CheckCircle2, Package, Clock, AlertOctagon, WifiOff, ShieldCheck, Eye, FileText, RotateCcw } from 'lucide-react';
-import { isAdmin } from '../../services/permissions';
+import { Plus, AlertTriangle, ShieldAlert, ClipboardList, CheckCircle2, Package, Clock, AlertOctagon, WifiOff, ShieldCheck, Eye, FileText } from 'lucide-react';
 import { getControlCenterIndicators, type ControlCenterIndicators } from '../../utils/controlCenterIndicators';
 import { getControlCenterCharts, getControlCenterPeriodRange, type ControlCenterChartsResult, type PeriodOption } from '../../utils/controlCenterCharts';
 import ControlCenterFilters from '../../components/dashboard/ControlCenterFilters';
@@ -65,13 +64,9 @@ function formatDeadlineStatus(status: string): { label: string; className: strin
 
 export default function Dashboard() {
   const {
-    user,
     equipments,
     inspections,
     actionPlans,
-    conflictCounts,
-    pending,
-    lastSyncAt,
     networkUnavailable,
     setCurrentTab,
   } = useAppStore();
@@ -132,15 +127,6 @@ export default function Dashboard() {
       return next;
     });
   };
-
-  const handleNewInspection = () => {
-    setCurrentTab('inspecionar');
-    navigate('/scan');
-  };
-
-  const initials = user?.nome
-    ? user.nome.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase()
-    : 'FC';
 
   const indicators = useMemo<ControlCenterIndicators>(
     () => getControlCenterIndicators(filteredData.equipments, filteredData.inspections, filteredData.actionPlans, { todayYmd }),
@@ -221,48 +207,33 @@ export default function Dashboard() {
     return items.slice(0, 5);
   }, [indicators, filteredData.equipments, filteredData.actionPlans]);
 
-  const formatLastSync = (ts: number | null, nowMs: number): string => {
-    if (!ts) return 'Nunca';
-    const diff = nowMs - ts;
-    const minutes = Math.floor(diff / 60000);
-    if (minutes < 1) return 'Agora mesmo';
-    if (minutes < 60) return `${minutes}min atrás`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h atrás`;
-    const days = Math.floor(hours / 24);
-    return `${days}d atrás`;
-  };
-
   const mainIndicators = [
     {
-      label: 'Equipamentos cadastrados',
+      label: 'Cadastrados',
       value: indicators.equipment.registered.count,
       icon: Package,
       iconBg: 'bg-gray-100 text-gray-500',
       color: 'text-gray-700',
       accent: 'border-l-gray-300',
-      sub: 'Não excluídos logicamente',
        href: withControlCenterParams('/equipamentos', filters, { view: 'registered' }),
     },
     {
-      label: 'Cobertura das inspeções',
+      label: 'Cobertura',
       value: `${indicators.equipment.coverage.inspectedIds.length} / ${indicators.equipment.coverage.eligibleIds.length}`,
       percent: `${indicators.equipment.coverage.percentage}%`,
       icon: ClipboardList,
       iconBg: 'bg-blue-50 text-blue-600',
       color: 'text-blue-600',
       accent: 'border-l-blue-500',
-      sub: 'Equipamentos elegíveis com inspeção',
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'inspected' }),
     },
     {
-      label: 'Equipamentos em dia',
+      label: 'Em dia',
       value: indicators.equipment.upToDate.count,
       icon: CheckCircle2,
       iconBg: 'bg-green-50 text-success',
       color: 'text-success',
       accent: 'border-l-success',
-      sub: 'Regular + prazo vigente',
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'up-to-date' }),
     },
     {
@@ -272,7 +243,6 @@ export default function Dashboard() {
       iconBg: 'bg-red-50 text-critical',
       color: 'text-critical',
       accent: 'border-l-critical',
-      sub: 'Equipamentos distintos',
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'attention' }),
     },
   ];
@@ -328,8 +298,6 @@ export default function Dashboard() {
     },
   ];
 
-  const hasConflicts = conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0 || conflictCounts.inspections > 0;
-
   const charts = useMemo<ControlCenterChartsResult>(
     () => getControlCenterCharts(filteredData.equipments, filteredData.inspections, filteredData.actionPlans, { todayYmd, period: chartPeriod }),
     [filteredData, todayYmd, chartPeriod]
@@ -339,65 +307,7 @@ export default function Dashboard() {
     navigate(withControlCenterParams('/equipamentos', filters, { ccView, ...extra }));
 
   return (
-    <div className="space-y-4 sm:space-y-6">
-      {/* Header */}
-      <header className="page-header flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="flex-1 min-w-0 flex items-center gap-3 sm:gap-4">
-          <div className="w-10 h-10 sm:w-11 sm:h-11 bg-primary rounded-xl flex items-center justify-center text-white font-black text-sm sm:text-base shadow-sm flex-shrink-0">
-            {initials}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-base sm:text-lg lg:text-xl font-black text-gray-900 truncate">
-                Olá, {user?.nome?.split(' ')[0] || 'Inspetor'}!
-              </h2>
-              {isAdmin(user) && (
-                <span className="text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary text-white flex-shrink-0">
-                  Admin
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-gray-500 truncate">
-              {user?.cargo || 'Inspetor'} · Central de Controle
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-            <span className={`relative flex h-2 w-2 ${networkUnavailable ? 'bg-gray-400' : 'bg-success'}`}>
-              {networkUnavailable && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-gray-400 opacity-75" />}
-            </span>
-            {networkUnavailable ? 'Offline' : 'Online'}
-          </div>
-          {pending > 0 && (
-            <span className="pill bg-amber-100 text-pending text-[10px] font-bold flex items-center gap-1">
-              <RotateCcw className="w-3 h-3 animate-spin" />
-              {pending} pendente{pending > 1 ? 's' : ''}
-            </span>
-          )}
-          {hasConflicts && (
-            <span className="pill bg-red-100 text-critical text-[10px] font-bold flex items-center gap-1">
-              <AlertOctagon className="w-3 h-3" />
-              Conflito{conflictCounts.equipments + conflictCounts.actionPlans + conflictCounts.inspections > 1 ? 's' : ''}
-            </span>
-          )}
-          {lastSyncAt && (
-            <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-medium text-gray-500">
-              <RotateCcw className="w-3 h-3" />
-              Atualizado: {formatLastSync(lastSyncAt, now.getTime())}
-            </span>
-          )}
-          <button
-            onClick={handleNewInspection}
-            className="btn-primary btn-sm btn-auto sm:hidden"
-            aria-label="Nova inspeção"
-          >
-            <Plus className="w-4 h-4" />
-            Nova Inspeção
-          </button>
-        </div>
-      </header>
-
+    <div className="space-y-3 sm:space-y-4">
       {/* Data source notice when offline */}
       {networkUnavailable && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800 flex items-center gap-2">
@@ -415,7 +325,7 @@ export default function Dashboard() {
       />
 
       {/* Main Indicators */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
         {mainIndicators.map((indicator, idx) => {
           const Icon = indicator.icon;
           const isCoverage = idx === 1;
@@ -423,8 +333,8 @@ export default function Dashboard() {
             <Link
               key={indicator.label}
               to={indicator.href}
-              aria-label={`Ver ${indicator.label.toLowerCase()}`}
-              className={`kpi-card border-l-[3px] ${indicator.accent} cursor-pointer no-underline hover:border-gray-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary active:scale-[0.99]`}
+              aria-label={`Ver ${indicator.label.toLowerCase()}${isCoverage ? `: ${indicator.percent}, ${indicator.value} equipamentos` : `: ${indicator.value}`}`}
+              className={`kpi-card kpi-card--compact border-l-[3px] ${indicator.accent} cursor-pointer no-underline hover:border-gray-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary active:scale-[0.99]`}
             >
               <div className="flex items-start justify-between gap-2">
                 <span className="label-uppercase">{indicator.label}</span>
@@ -432,15 +342,8 @@ export default function Dashboard() {
                   <Icon className="w-4 h-4" />
                 </span>
               </div>
-              <span className={`kpi-card__value ${indicator.color}`}>{indicator.value}</span>
-              {isCoverage && indicator.percent && (
-                <span className="kpi-card__sub text-blue-600 font-medium">{indicator.percent}</span>
-              )}
-              <span className="kpi-card__sub">{indicator.sub}</span>
-              <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-primary">
-                Ver detalhes
-                <ArrowRight className="w-3.5 h-3.5" />
-              </span>
+              <span className={`kpi-card__value ${indicator.color}`}>{isCoverage ? indicator.percent : indicator.value}</span>
+              {isCoverage && <span className="sr-only">{indicator.value} equipamentos elegíveis com inspeção</span>}
             </Link>
           );
         })}
@@ -454,13 +357,13 @@ export default function Dashboard() {
             <Link
               key={indicator.label}
               to={indicator.href}
-              className="card-subtle bg-white p-3 sm:p-4 flex flex-col gap-2 hover:border-primary transition-colors"
+              className="card-subtle bg-white p-2.5 sm:p-3 flex flex-col gap-1.5 hover:border-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             >
               <div className="flex items-center gap-2">
                 <span className={`kpi-card__icon ${indicator.iconBg}`}>
                   <Icon className="w-4 h-4" />
                 </span>
-                <span className="label-uppercase text-[10px] flex-1 truncate">{indicator.label}</span>
+                <span className="label-uppercase text-[10px] flex-1 leading-tight min-h-[2.25rem]">{indicator.label}</span>
               </div>
               <span className={`text-xl font-black ${indicator.color}`}>{indicator.count}</span>
             </Link>

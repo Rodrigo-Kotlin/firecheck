@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { Menu, User, Download, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { Menu, User, Download, RefreshCw, Wifi, WifiOff, AlertOctagon, Plus } from 'lucide-react';
 import { showToast } from '../../hooks/useToasts';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
 import { useAutoSync } from '../../hooks/useAutoSync';
@@ -13,7 +13,7 @@ import { Sidebar } from './Sidebar';
 
 export default function AppLayout() {
   useAutoSync();
-  const { user, authReady, setCurrentTab, pending, syncing, syncEnabled, networkUnavailable, triggerSync } = useAppStore();
+  const { user, authReady, setCurrentTab, pending, syncing, syncEnabled, networkUnavailable, conflictCounts, triggerSync } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -93,6 +93,9 @@ export default function AppLayout() {
     : location.pathname === '/inspecionar' ? 'Inspecionar'
     : location.pathname === '/scan' ? 'Escanear QR'
     : 'FireCheck';
+  const initials = user?.nome
+    ? user.nome.split(' ').slice(0, 2).map(name => name[0]).join('').toUpperCase()
+    : 'FC';
 
   if (!authReady) {
     return (
@@ -124,7 +127,26 @@ export default function AppLayout() {
               <h1 className="text-sm sm:text-base font-black text-gray-900 uppercase tracking-wide truncate">{currentTitle}</h1>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+            <div className="flex order-3 basis-full sm:order-none sm:basis-auto items-center gap-2 min-w-0 border-l border-gray-200 pl-3">
+              <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center text-[10px] font-black flex-shrink-0">
+                {initials}
+              </div>
+              <div className="min-w-0 leading-tight">
+                <div className="text-[11px] font-bold text-gray-900 truncate">Olá, {user?.nome?.split(' ')[0] || 'Inspetor'}</div>
+                <div className="text-[10px] text-gray-500 truncate">Perfil: {user?.cargo || 'Inspetor'}</div>
+              </div>
+            </div>
+            {location.pathname === '/' && (
+              <button
+                onClick={() => { setCurrentTab('inspecionar'); navigate('/scan'); }}
+                className="btn-primary btn-sm btn-auto sm:hidden"
+                aria-label="Nova inspeção"
+              >
+                <Plus className="w-4 h-4" />
+                Nova inspeção
+              </button>
+            )}
             {install.state === 'available' && (
               <button
                 onClick={() => { void handleInstallClick(); }}
@@ -141,9 +163,15 @@ export default function AppLayout() {
               </button>
             )}
             {syncEnabled && (
-              <div className="hidden md:block">
+              <div>
                 <SyncStatusBadge isOnline={isOnline} syncing={syncing} pending={pending} networkUnavailable={networkUnavailable} onClick={handleTriggerSync} />
               </div>
+            )}
+            {(conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0 || conflictCounts.inspections > 0) && (
+              <span className="pill bg-red-100 text-critical text-[10px] font-bold flex items-center gap-1" role="status">
+                <AlertOctagon className="w-3 h-3" />
+                Conflitos pendentes
+              </span>
             )}
             <button
               onClick={() => navigate('/configuracoes')}

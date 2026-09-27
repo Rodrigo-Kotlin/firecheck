@@ -17,18 +17,15 @@ export default function ControlCenterFilters({ options, value, active, onChange,
   ];
 
   return (
-    <section className="card-subtle bg-white p-4" aria-labelledby="control-center-filters-title">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-        <div className="flex-1 min-w-0">
+    <section className="card-subtle bg-white p-3" aria-labelledby="control-center-filters-title">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-end">
+        <div className="flex items-center gap-2 lg:w-40 lg:flex-shrink-0">
           <div className="flex items-center gap-2">
             <h2 id="control-center-filters-title" className="text-xs font-black uppercase tracking-wider text-gray-700">Filtros globais</h2>
-            {active && <span className="pill bg-primary/10 text-primary">Visão filtrada</span>}
+            {active && <span className="pill bg-primary/10 text-primary">Ativos</span>}
           </div>
-          <p className="text-xs text-gray-500 mt-1">
-            {active ? `Exibindo ${value.setor || 'todos os setores'} · ${value.local || 'todos os locais'} · ${value.tipo || 'todos os tipos'}` : 'Selecione setor, localização e tipo para atualizar a central.'}
-          </p>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 lg:w-3/4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 flex-1 min-w-0">
           {fields.map(field => (
             <label key={field.key} className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
               {field.label}

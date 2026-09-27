@@ -27,7 +27,8 @@ describe('ControlCenterFilters', () => {
     const setor = screen.getByLabelText('Setor');
     fireEvent.change(setor, { target: { value: 'Estacionamento' } });
     expect(onChange).toHaveBeenCalledWith('setor', 'Estacionamento');
-    expect(screen.getByText('Selecione setor, localização e tipo para atualizar a central.')).toBeTruthy();
+    expect(screen.getByText('Filtros globais')).toBeTruthy();
+    expect(screen.queryByText('Selecione setor, localização e tipo para atualizar a central.')).toBeNull();
   });
 
   it('renders active context, clear action and keyboard-focusable controls', () => {
@@ -42,8 +43,8 @@ describe('ControlCenterFilters', () => {
       />,
     );
 
-    expect(screen.getByText('Visão filtrada')).toBeTruthy();
-    expect(screen.getByText('Exibindo Estacionamento · todos os locais · Extintor')).toBeTruthy();
+    expect(screen.getByText('Ativos')).toBeTruthy();
+    expect(screen.queryByText('Exibindo Estacionamento · todos os locais · Extintor')).toBeNull();
     const clear = screen.getByRole('button', { name: /Limpar filtros/i });
     fireEvent.click(clear);
     expect(onClear).toHaveBeenCalledTimes(1);
