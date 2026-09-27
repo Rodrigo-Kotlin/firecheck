@@ -78,6 +78,7 @@ export default function ActionPlansChart({ data, overdueData, title, description
               fill="#6b7280"
               radius={[0, 4, 4, 0]}
               maxBarSize={32}
+              isAnimationActive={false}
             >
               {data.map((item, index) => (
                 <Cell key={`cell-${index}`} fill={item.color} />

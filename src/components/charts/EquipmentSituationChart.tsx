@@ -44,8 +44,9 @@ export default function EquipmentSituationChart({ data, title, description }: Eq
                 paddingAngle={2}
                 dataKey="value"
                 nameKey="label"
-                label={({ name, percent }) => `${name} ${(percent ?? 0 * 100).toFixed(0)}%`}
+                label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
                 labelLine={false}
+                isAnimationActive={false}
               >
                 {data.map((item, index) => (
                   <Cell key={`cell-${index}`} fill={item.color} />

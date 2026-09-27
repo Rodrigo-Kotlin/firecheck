@@ -89,6 +89,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               fill="#16a34a"
               radius={[0, 4, 4, 0]}
               maxBarSize={32}
+              isAnimationActive={false}
             />
             <Bar
               dataKey="observacao"
@@ -97,6 +98,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               fill="#ca8a04"
               radius={[0, 4, 4, 0]}
               maxBarSize={32}
+              isAnimationActive={false}
             />
             <Bar
               dataKey="pendente"
@@ -105,6 +107,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               fill="#f59e0b"
               radius={[0, 4, 4, 0]}
               maxBarSize={32}
+              isAnimationActive={false}
             />
             <Bar
               dataKey="vencido"
@@ -113,6 +116,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               fill="#dc2626"
               radius={[0, 4, 4, 0]}
               maxBarSize={32}
+              isAnimationActive={false}
             />
           </BarChart>
         </ResponsiveContainer>

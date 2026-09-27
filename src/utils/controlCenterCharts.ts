@@ -223,6 +223,8 @@ export function getControlCenterCharts(
   const currentDate = new Date(periodStart + 'T00:00:00');
   const endDate = new Date(periodEnd + 'T00:00:00');
 
+  if (period === '6m' || period === '12m') currentDate.setDate(1);
+
   while (currentDate <= endDate) {
     const key = getPeriodKey(currentDate, period);
     periodMap.set(key, { regular: 0, observacao: 0, pendente: 0, vencido: 0, total: 0 });
@@ -233,7 +235,10 @@ export function getControlCenterCharts(
     }
   }
 
+  const seenInspectionIds = new Set<string>();
   for (const insp of inspections) {
+    if (seenInspectionIds.has(insp.id)) continue;
+    seenInspectionIds.add(insp.id);
     const inspDate = normalizeYmd(insp.data);
     if (!inspDate) continue;
     if (!isWithinPeriod(inspDate, periodStart, periodEnd)) continue;
@@ -292,10 +297,7 @@ export function getControlCenterCharts(
       planStatusCounts[plan.status as keyof typeof planStatusCounts]++;
 
       const planDate = normalizeYmd(plan.prazo);
-      if (planDate && isYmdBefore(planDate, today)) {
-        overduePlansCount++;
-      }
-      if (plan.status === 'Vencida') {
+      if (plan.status === 'Vencida' || (planDate !== null && isYmdBefore(planDate, today))) {
         overduePlansCount++;
       }
     }

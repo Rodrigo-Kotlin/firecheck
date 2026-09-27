@@ -69,6 +69,7 @@ export default function SectorOccurrencesChart({ data, title, description }: Sec
               fill="#dc2626"
               radius={[0, 4, 4, 0]}
               maxBarSize={28}
+              isAnimationActive={false}
             />
           </BarChart>
         </ResponsiveContainer>
