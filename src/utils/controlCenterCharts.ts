@@ -8,8 +8,17 @@ import {
 } from './equipmentFilters';
 
 export type PeriodOption = '30d' | '90d' | '6m' | '12m';
+export type EquipmentSituationCategory =
+  | 'em_dia'
+  | 'observacao'
+  | 'nao_conforme'
+  | 'sem_inspecao'
+  | 'prazo_vencido'
+  | 'sem_prazo'
+  | 'fora_operacao';
 
 export interface EquipmentSituationChartData {
+  category?: EquipmentSituationCategory;
   label: string;
   value: number;
   color: string;
@@ -17,6 +26,7 @@ export interface EquipmentSituationChartData {
 }
 
 export interface InspectionsByPeriodChartData {
+  periodKey?: string;
   period: string;
   regular: number;
   observacao: number;
@@ -26,6 +36,7 @@ export interface InspectionsByPeriodChartData {
 }
 
 export interface ActionPlanChartData {
+  status?: ActionPlanStatus;
   label: string;
   value: number;
   color: string;
@@ -44,15 +55,25 @@ export interface SectorOccurrencesChartData {
 
 export interface ControlCenterChartsResult {
   equipmentSituation: EquipmentSituationChartData[];
+  equipmentSituationIds: Record<EquipmentSituationCategory, string[]>;
   inspectionsByPeriod: InspectionsByPeriodChartData[];
+  inspectionIdsByPeriod: Record<string, string[]>;
   actionPlans: ActionPlanChartData[];
+  actionPlanIds: Record<ActionPlanStatus, string[]>;
   overduePlans: OverduePlansChartData[];
+  overduePlanIds: string[];
   sectorOccurrences: SectorOccurrencesChartData[];
+  sectorEquipmentIds: Record<string, string[]>;
 }
 
 export interface ControlCenterChartsOptions {
   todayYmd?: string;
   period?: PeriodOption;
+}
+
+export interface ControlCenterPeriodRange {
+  startYmd: string;
+  endYmd: string;
 }
 
 function parseTimestamp(value: string | null | undefined): number | null {
@@ -88,7 +109,7 @@ function normalizeSetor(setor: string | undefined): string {
   return setor.trim().replace(/\s+/g, ' ');
 }
 
-function getPeriodStartDate(today: string, period: PeriodOption): string {
+export function getControlCenterPeriodRange(today: string, period: PeriodOption): ControlCenterPeriodRange {
   const date = new Date(today + 'T00:00:00');
   switch (period) {
     case '30d':
@@ -104,7 +125,10 @@ function getPeriodStartDate(today: string, period: PeriodOption): string {
       date.setFullYear(date.getFullYear() - 1);
       break;
   }
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  return {
+    startYmd: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
+    endYmd: today,
+  };
 }
 
 function formatPeriodLabel(date: Date, period: PeriodOption): string {
@@ -149,6 +173,9 @@ export function getControlCenterCharts(
     sem_prazo: 0,
     fora_operacao: 0,
   };
+  const equipmentSituationIds: Record<EquipmentSituationCategory, string[]> = {
+    em_dia: [], observacao: [], nao_conforme: [], sem_inspecao: [], prazo_vencido: [], sem_prazo: [], fora_operacao: [],
+  };
 
   for (const eq of activeEquipments) {
     const status = eq.status;
@@ -157,11 +184,13 @@ export function getControlCenterCharts(
 
     if (status === 'em_manutencao' || status === 'inativo' || status === 'substituido' || status === 'extraviado') {
       situationCounts.fora_operacao++;
+      equipmentSituationIds.fora_operacao.push(eq.id);
       continue;
     }
 
     if (!lastInspection) {
       situationCounts.sem_inspecao++;
+      equipmentSituationIds.sem_inspecao.push(eq.id);
       continue;
     }
 
@@ -170,15 +199,20 @@ export function getControlCenterCharts(
     if (lastStatus === 'regular') {
       if (nextDate && !isYmdBefore(nextDate, today)) {
         situationCounts.em_dia++;
+        equipmentSituationIds.em_dia.push(eq.id);
       } else if (nextDate && isYmdBefore(nextDate, today)) {
         situationCounts.prazo_vencido++;
+        equipmentSituationIds.prazo_vencido.push(eq.id);
       } else {
         situationCounts.sem_prazo++;
+        equipmentSituationIds.sem_prazo.push(eq.id);
       }
     } else if (lastStatus === 'observacao') {
       situationCounts.observacao++;
+      equipmentSituationIds.observacao.push(eq.id);
     } else if (lastStatus === 'pendente' || lastStatus === 'vencido') {
       situationCounts.nao_conforme++;
+      equipmentSituationIds.nao_conforme.push(eq.id);
     }
   }
 
@@ -207,6 +241,7 @@ export function getControlCenterCharts(
     .filter(([, value]) => value > 0)
     .map(([key, value]) => ({
       label: situationLabels[key],
+      category: key as EquipmentSituationCategory,
       value,
       color: situationColors[key],
       percentage: situationTotal > 0 ? Math.round((value / situationTotal) * 100) : 0,
@@ -215,10 +250,10 @@ export function getControlCenterCharts(
   // ============================================
   // GRÁFICO 2: Inspeções por Período
   // ============================================
-  const periodStart = getPeriodStartDate(today, period);
-  const periodEnd = today;
+  const { startYmd: periodStart, endYmd: periodEnd } = getControlCenterPeriodRange(today, period);
 
   const periodMap = new Map<string, { regular: number; observacao: number; pendente: number; vencido: number; total: number }>();
+  const inspectionIdsByPeriod: Record<string, string[]> = {};
 
   const currentDate = new Date(periodStart + 'T00:00:00');
   const endDate = new Date(periodEnd + 'T00:00:00');
@@ -228,6 +263,7 @@ export function getControlCenterCharts(
   while (currentDate <= endDate) {
     const key = getPeriodKey(currentDate, period);
     periodMap.set(key, { regular: 0, observacao: 0, pendente: 0, vencido: 0, total: 0 });
+    inspectionIdsByPeriod[key] = [];
     if (period === '30d' || period === '90d') {
       currentDate.setDate(currentDate.getDate() + 1);
     } else {
@@ -247,6 +283,7 @@ export function getControlCenterCharts(
     const entry = periodMap.get(key);
     if (entry) {
       entry.total++;
+      inspectionIdsByPeriod[key].push(insp.id);
       switch (insp.status) {
         case 'regular':
           entry.regular++;
@@ -269,6 +306,7 @@ export function getControlCenterCharts(
       const dateParts = key.split('-').map(Number);
       const date = new Date(dateParts[0], dateParts[1] - 1, dateParts[2] || 1);
       return {
+        periodKey: key,
         period: formatPeriodLabel(date, period),
         ...data,
       };
@@ -283,8 +321,12 @@ export function getControlCenterCharts(
     Vencida: 0,
     Concluída: 0,
   };
+  const actionPlanIds: Record<ActionPlanStatus, string[]> = {
+    Aberta: [], 'Em andamento': [], Vencida: [], Concluída: [],
+  };
 
   let overduePlansCount = 0;
+  const overduePlanIds: string[] = [];
 
   for (const plan of actionPlans) {
     if (plan.deletedAt) continue;
@@ -293,12 +335,15 @@ export function getControlCenterCharts(
 
     if (plan.status === 'Concluída') {
       planStatusCounts.Concluída++;
+      actionPlanIds.Concluída.push(plan.id);
     } else {
       planStatusCounts[plan.status as keyof typeof planStatusCounts]++;
+      actionPlanIds[plan.status].push(plan.id);
 
       const planDate = normalizeYmd(plan.prazo);
       if (plan.status === 'Vencida' || (planDate !== null && isYmdBefore(planDate, today))) {
         overduePlansCount++;
+        overduePlanIds.push(plan.id);
       }
     }
   }
@@ -315,6 +360,7 @@ export function getControlCenterCharts(
     .map(([label, value]) => ({
       label,
       value,
+      status: label as ActionPlanStatus,
       color: planStatusColors[label],
     }));
 
@@ -326,6 +372,7 @@ export function getControlCenterCharts(
   // GRÁFICO 4: Ocorrências por Setor
   // ============================================
   const sectorMap = new Map<string, number>();
+  const sectorEquipmentIdMap = new Map<string, string[]>();
 
   for (const eq of activeEquipments) {
     const lastInspection = latestInspectionIndex.get(eq.id);
@@ -336,6 +383,9 @@ export function getControlCenterCharts(
 
     const setor = normalizeSetor(eq.setor);
     sectorMap.set(setor, (sectorMap.get(setor) || 0) + 1);
+    const ids = sectorEquipmentIdMap.get(setor) ?? [];
+    ids.push(eq.id);
+    sectorEquipmentIdMap.set(setor, ids);
   }
 
   const sortedSectors = Array.from(sectorMap.entries())
@@ -355,10 +405,21 @@ export function getControlCenterCharts(
 
   return {
     equipmentSituation,
+    equipmentSituationIds,
     inspectionsByPeriod,
+    inspectionIdsByPeriod,
     actionPlans: actionPlansData,
+    actionPlanIds,
     overduePlans,
+    overduePlanIds,
     sectorOccurrences,
+    sectorEquipmentIds: Object.fromEntries(
+      [...topSectors].map(([setor]) => [setor, sectorEquipmentIdMap.get(setor) ?? []]).concat(
+        othersCount > 0
+          ? [['Outros setores', sortedSectors.slice(8).flatMap(([setor]) => sectorEquipmentIdMap.get(setor) ?? [])] as [string, string[]]]
+          : [],
+      ),
+    ),
   };
 }
 

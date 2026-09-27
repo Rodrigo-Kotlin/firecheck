@@ -5,9 +5,10 @@ interface SectorOccurrencesChartProps {
   data: SectorOccurrencesChartData[];
   title: string;
   description: string;
+  onSelectSector?: (sector: string) => void;
 }
 
-export default function SectorOccurrencesChart({ data, title, description }: SectorOccurrencesChartProps) {
+export default function SectorOccurrencesChart({ data, title, description, onSelectSector }: SectorOccurrencesChartProps) {
   const total = data.reduce((sum, item) => sum + item.count, 0);
 
   if (total === 0) {
@@ -74,10 +75,19 @@ export default function SectorOccurrencesChart({ data, title, description }: Sec
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <div className="mt-3 pt-2 border-t border-gray-100 flex items-center gap-2 text-xs font-medium">
+       <div className="mt-3 pt-2 border-t border-gray-100 flex items-center gap-2 text-xs font-medium">
         <span className="text-gray-500 flex-1">Total de equipamentos com NC</span>
         <span className="font-bold text-gray-900 tabular-nums">{total}</span>
-      </div>
+       </div>
+       {onSelectSector && (
+         <div className="mt-2 flex flex-wrap gap-1">
+           {data.map(item => (
+             <button key={item.setor} type="button" onClick={() => onSelectSector(item.setor)} className="text-[10px] text-gray-500 hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded px-1">
+               Ver {item.setor}
+             </button>
+           ))}
+         </div>
+       )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useAppStore } from '../../store';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { ActionPlanStatus, Criticidade } from '../../types';
 import { showToast } from '../../hooks/useToasts';
 import {
@@ -25,6 +25,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { canEditActionPlan, canDeleteActionPlan } from '../../services/permissions';
+import { filterControlCenterData, getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
+import { getTodayYmd, normalizeYmd } from '../../utils/equipmentFilters';
 
 const CRITICIDADE_STYLES: Record<Criticidade, string> = {
   'Crítico': 'bg-red-100 text-critical border-red-200',
@@ -112,8 +114,18 @@ function getEquipLabel(eqId: string, equipments: { id: string; tipo?: string; lo
 export default function PlanoDeAcao() {
   const { actionPlans, addActionPlan, updateActionPlan, deleteActionPlan, equipments, user, users, resolveActionPlanConflictKeepLocal, resolveActionPlanConflictUseRemote } = useAppStore();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filterOptions = useMemo(() => getControlCenterFilterOptions(equipments), [equipments]);
+  const controlCenterFilters = useMemo<ControlCenterFilters>(() => parseControlCenterFilters(searchParams, filterOptions), [searchParams, filterOptions]);
+  const scopedPlans = useMemo(
+    () => filterControlCenterData(equipments, [], actionPlans, controlCenterFilters).actionPlans,
+    [equipments, actionPlans, controlCenterFilters],
+  );
+  const planIdFilter = searchParams.get('planId');
+  const overdueFilter = searchParams.get('overdue') === '1';
+  const urlStatus = searchParams.get('status');
 
-  const [statusFilter, setStatusFilter] = useState<'Todos' | ActionPlanStatus>('Todos');
+  const [statusFilter, setStatusFilter] = useState<'Todos' | ActionPlanStatus>(() => STATUS_OPTIONS.includes(urlStatus as ActionPlanStatus) ? urlStatus as ActionPlanStatus : 'Todos');
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
 
@@ -125,31 +137,43 @@ export default function PlanoDeAcao() {
   const [formPrazo, setFormPrazo] = useState('');
   const [formStatus, setFormStatus] = useState<ActionPlanStatus>('Aberta');
 
+  const urlStatusFilter = searchParams.has('status') && STATUS_OPTIONS.includes(urlStatus as ActionPlanStatus)
+    ? urlStatus as ActionPlanStatus
+    : searchParams.has('status') ? 'Todos' : statusFilter;
+
   const filtered = useMemo(() => {
-    return actionPlans.filter(p => {
-      const matchStatus = statusFilter === 'Todos' || p.status === statusFilter;
+    return scopedPlans.filter(p => {
+      const matchStatus = urlStatusFilter === 'Todos' || p.status === urlStatusFilter;
+      const matchPlan = !planIdFilter || p.id === planIdFilter;
+      const prazo = normalizeYmd(p.prazo);
+      const matchOverdue = !overdueFilter || (p.status !== 'Concluída' && (p.status === 'Vencida' || (prazo !== null && prazo < getTodayYmd())));
       const term = search.toLowerCase();
       const matchSearch = !term ||
         p.equipmentId.toLowerCase().includes(term) ||
         p.local.toLowerCase().includes(term) ||
         p.descricao.toLowerCase().includes(term) ||
         (p.responsavel && p.responsavel.toLowerCase().includes(term));
-      return matchStatus && matchSearch;
+      return matchStatus && matchSearch && matchPlan && matchOverdue;
     });
-  }, [actionPlans, statusFilter, search]);
+  }, [scopedPlans, urlStatusFilter, search, planIdFilter, overdueFilter]);
 
   const counts = useMemo(() => {
     return STATUS_OPTIONS.reduce<Record<ActionPlanStatus, number>>((acc, s) => {
-      acc[s] = actionPlans.filter(p => p.status === s).length;
+      acc[s] = scopedPlans.filter(p => p.status === s).length;
       return acc;
     }, {} as Record<ActionPlanStatus, number>);
-  }, [actionPlans]);
+  }, [scopedPlans]);
 
-  const hasActiveFilters = statusFilter !== 'Todos' || search.length > 0;
+  const hasActiveFilters = urlStatusFilter !== 'Todos' || search.length > 0 || Boolean(planIdFilter || overdueFilter || controlCenterFilters.setor || controlCenterFilters.local || controlCenterFilters.tipo);
 
   const clearFilters = () => {
     setStatusFilter('Todos');
     setSearch('');
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      for (const key of ['status', 'overdue', 'planId', 'setor', 'local', 'tipo']) next.delete(key);
+      return next;
+    });
   };
 
   const resetForm = () => {
@@ -257,13 +281,21 @@ export default function PlanoDeAcao() {
       {/* Status filter chips — responsive with flex-wrap on small screens */}
       <div className="flex flex-wrap gap-1.5">
         {(['Todos', ...STATUS_OPTIONS] as const).map(s => {
-          const isActive = statusFilter === s;
-          const count = s === 'Todos' ? actionPlans.length : counts[s];
+           const isActive = urlStatusFilter === s;
+           const count = s === 'Todos' ? scopedPlans.length : counts[s];
           return (
             <button
               key={s}
               type="button"
-              onClick={() => setStatusFilter(s)}
+               onClick={() => {
+                 setStatusFilter(s);
+                 setSearchParams(prev => {
+                   const next = new URLSearchParams(prev);
+                   if (s === 'Todos') next.delete('status');
+                   else next.set('status', s);
+                   return next;
+                 });
+               }}
               className={`flex-none px-2.5 py-1.5 rounded-full text-[10px] sm:text-xs font-black uppercase whitespace-nowrap border transition-all ${
                 isActive
                   ? 'bg-primary text-white border-primary'

@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { FileText, ChevronDown, ShieldCheck, AlertOctagon, ClipboardList, Trash2 } from 'lucide-react';
 import jsPDF from 'jspdf';
@@ -7,6 +7,7 @@ import { canDeleteInspection } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import type { Inspection, Equipment, Stats } from '../../types';
+import { filterControlCenterData, getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
 
 type HistoryEntry = {
   id: string;
@@ -15,10 +16,15 @@ type HistoryEntry = {
   inspetor: string;
   equipId: string;
   status: HistoryStatus;
+  statusCode: Inspection['status'];
   observacoes?: string;
 };
 
 type HistoryStatus = 'APROVADO' | 'OBSERVAÇÃO' | 'REPROVADO' | 'PENDENTE';
+
+function getHistoryStatusFromQuery(value: string | null): HistoryStatus | 'Todos' {
+  return value === 'regular' ? 'APROVADO' : value === 'observacao' ? 'OBSERVAÇÃO' : value === 'vencido' ? 'REPROVADO' : value === 'pendente' ? 'PENDENTE' : 'Todos';
+}
 
 const STATUS_MAP: Record<string, HistoryStatus> = {
   regular: 'APROVADO',
@@ -722,24 +728,36 @@ function generateMonthlyPDF(
 export default function Relatorios() {
   const { inspections, stats, equipments, config, user, deleteInspection, resolveInspectionConflictKeepLocal, resolveInspectionConflictUseRemote } = useAppStore();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filterOptions = useMemo(() => getControlCenterFilterOptions(equipments), [equipments]);
+  const controlCenterFilters = useMemo<ControlCenterFilters>(() => parseControlCenterFilters(searchParams, filterOptions), [searchParams, filterOptions]);
+  const scopedInspections = useMemo(() => filterControlCenterData(equipments, inspections, [], controlCenterFilters).inspections, [equipments, inspections, controlCenterFilters]);
 
   const [search, setSearch] = useState('');
-  const [dateFilter, setDateFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState<HistoryStatus | 'Todos'>('Todos');
+  const [dateFilter, setDateFilter] = useState(() => searchParams.get('date') ?? '');
+  const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') ?? '');
+  const [dateTo, setDateTo] = useState(() => searchParams.get('to') ?? '');
+  const [statusFilter, setStatusFilter] = useState<HistoryStatus | 'Todos'>(() => {
+    const status = searchParams.get('status');
+    return status === 'regular' ? 'APROVADO' : status === 'observacao' ? 'OBSERVAÇÃO' : status === 'vencido' ? 'REPROVADO' : status === 'pendente' ? 'PENDENTE' : 'Todos';
+  });
   const [visibleCount, setVisibleCount] = useState(4);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
+  const urlStatusFilter = searchParams.has('status') ? getHistoryStatusFromQuery(searchParams.get('status')) : statusFilter;
+
   const history = useMemo(() => {
-    return inspections.map(i => ({
+    return scopedInspections.map(i => ({
       id: i.id,
       data: isoToBr(i.data),
       dataISO: i.data,
       inspetor: i.inspetor,
       equipId: i.equipmentId,
       status: STATUS_MAP[i.status] ?? 'PENDENTE' as HistoryStatus,
+      statusCode: i.status,
       observacoes: i.observacoes,
     }));
-  }, [inspections]);
+  }, [scopedInspections]);
 
   const filtered = useMemo(() => {
     return history.filter(h => {
@@ -748,28 +766,36 @@ export default function Relatorios() {
         h.inspetor.toLowerCase().includes(term) ||
         h.equipId.toLowerCase().includes(term) ||
         (h.observacoes && h.observacoes.toLowerCase().includes(term));
-      const matchDate = !dateFilter || h.dataISO === dateFilter;
-      const matchStatus = statusFilter === 'Todos' || h.status === statusFilter;
+      const matchDate = (!dateFilter || h.dataISO === dateFilter) && (!dateFrom || h.dataISO >= dateFrom) && (!dateTo || h.dataISO <= dateTo);
+      const matchStatus = urlStatusFilter === 'Todos' || h.status === urlStatusFilter;
       return matchSearch && matchDate && matchStatus;
     });
-  }, [history, search, dateFilter, statusFilter]);
+  }, [history, search, dateFilter, dateFrom, dateTo, urlStatusFilter]);
 
   const visible = filtered.slice(0, visibleCount);
 
-  const totalInspecoes = inspections.length;
-  const conformesCount = equipments.filter(e => e.status === 'regular' || e.status === 'observacao').length;
-  const pendentesCriticos = equipments.filter(e => e.status === 'vencido').length;
-  const conformidadePct = equipments.length > 0
-    ? Math.round((conformesCount / equipments.length) * 100)
+  const totalInspecoes = scopedInspections.length;
+  const scopedEquipment = filterControlCenterData(equipments, inspections, [], controlCenterFilters).equipments;
+  const conformesCount = scopedEquipment.filter(e => e.status === 'regular' || e.status === 'observacao').length;
+  const pendentesCriticos = scopedEquipment.filter(e => e.status === 'vencido').length;
+  const conformidadePct = scopedEquipment.length > 0
+    ? Math.round((conformesCount / scopedEquipment.length) * 100)
     : 0;
 
   const clearFilters = () => {
     setSearch('');
     setDateFilter('');
+    setDateFrom('');
+    setDateTo('');
     setStatusFilter('Todos');
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      for (const key of ['from', 'to', 'date', 'status', 'setor', 'local', 'tipo']) next.delete(key);
+      return next;
+    });
   };
 
-  const hasActiveFilters = !!search || !!dateFilter || statusFilter !== 'Todos';
+  const hasActiveFilters = !!search || !!dateFilter || !!dateFrom || !!dateTo || urlStatusFilter !== 'Todos' || Boolean(controlCenterFilters.setor || controlCenterFilters.local || controlCenterFilters.tipo);
 
   const handleDeleteInspection = async () => {
     if (!deleteTarget) return;
@@ -889,16 +915,34 @@ export default function Relatorios() {
               className="field-input"
             />
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="report-date-from" className="field-label">De</label>
+              <input id="report-date-from" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="field-input" />
+            </div>
+            <div>
+              <label htmlFor="report-date-to" className="field-label">Até</label>
+              <input id="report-date-to" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="field-input" />
+            </div>
+          </div>
           <div>
             <label className="field-label">Status</label>
             <div className="flex gap-1.5 flex-wrap">
               {(['Todos', 'APROVADO', 'OBSERVAÇÃO', 'REPROVADO', 'PENDENTE'] as const).map(s => {
-                const isActive = statusFilter === s;
+                const isActive = urlStatusFilter === s;
                 return (
                   <button
                     key={s}
                     type="button"
-                    onClick={() => setStatusFilter(s)}
+                    onClick={() => {
+                      setStatusFilter(s);
+                      setSearchParams(prev => {
+                        const next = new URLSearchParams(prev);
+                        const status = s === 'APROVADO' ? 'regular' : s === 'OBSERVAÇÃO' ? 'observacao' : s === 'REPROVADO' ? 'vencido' : s === 'PENDENTE' ? 'pendente' : '';
+                        if (status) next.set('status', status); else next.delete('status');
+                        return next;
+                      });
+                    }}
                     className={`h-9 px-3 rounded-full text-[11px] font-black uppercase tracking-wider border transition-all ${
                       isActive
                         ? 'bg-primary text-white border-primary'
@@ -940,7 +984,9 @@ export default function Relatorios() {
                 <div className="flex items-center gap-3">
                   <div className="flex-1 min-w-0 space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-black text-gray-900">{h.equipId}</span>
+                      <button type="button" onClick={() => navigate(`/inspecoes/${encodeURIComponent(h.id)}`)} className="text-sm font-black text-gray-900 hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+                        {h.equipId}
+                      </button>
                       <span className="text-[10px] font-mono text-gray-400 bg-gray-50 px-1 rounded">{h.id}</span>
                       <span className={`pill ${HISTORY_STATUS_BADGE[h.status]}`}>{h.status}</span>
                       {isConflict && (

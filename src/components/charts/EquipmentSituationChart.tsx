@@ -5,9 +5,10 @@ interface EquipmentSituationChartProps {
   data: EquipmentSituationChartData[];
   title: string;
   description: string;
+  onSelectCategory?: (category: NonNullable<EquipmentSituationChartData['category']>) => void;
 }
 
-export default function EquipmentSituationChart({ data, title, description }: EquipmentSituationChartProps) {
+export default function EquipmentSituationChart({ data, title, description, onSelectCategory }: EquipmentSituationChartProps) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
 
   if (total === 0) {
@@ -67,8 +68,14 @@ export default function EquipmentSituationChart({ data, title, description }: Eq
           </ResponsiveContainer>
         </div>
         <div className="w-full lg:w-1/2 space-y-2">
-          {data.map((item) => (
-            <div key={item.label} className="flex items-center gap-3">
+           {data.map((item) => (
+             <button
+               key={item.label}
+               type="button"
+               disabled={!item.category || !onSelectCategory}
+               onClick={() => item.category && onSelectCategory?.(item.category)}
+               className="w-full flex items-center gap-3 text-left rounded px-1 py-0.5 enabled:hover:bg-gray-50 enabled:focus-visible:outline enabled:focus-visible:outline-2 enabled:focus-visible:outline-primary disabled:cursor-default"
+             >
               <span
                 className="w-3 h-3 rounded-full flex-shrink-0"
                 style={{ backgroundColor: item.color }}
@@ -76,7 +83,7 @@ export default function EquipmentSituationChart({ data, title, description }: Eq
               <span className="text-xs font-medium text-gray-700 truncate flex-1">{item.label}</span>
               <span className="text-xs font-bold text-gray-900 tabular-nums">{item.value}</span>
               <span className="text-xs text-gray-400">({item.percentage}%)</span>
-            </div>
+             </button>
           ))}
           <div className="pt-2 border-t border-gray-100 flex items-center gap-3">
             <span className="text-xs font-medium text-gray-500 flex-1">Total</span>

@@ -6,9 +6,11 @@ interface ActionPlansChartProps {
   overdueData: OverduePlansChartData[];
   title: string;
   description: string;
+  onSelectStatus?: (status: string) => void;
+  onSelectOverdue?: () => void;
 }
 
-export default function ActionPlansChart({ data, overdueData, title, description }: ActionPlansChartProps) {
+export default function ActionPlansChart({ data, overdueData, title, description, onSelectStatus, onSelectOverdue }: ActionPlansChartProps) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
   const overdueTotal = overdueData.reduce((sum, item) => sum + item.value, 0);
 
@@ -89,22 +91,22 @@ export default function ActionPlansChart({ data, overdueData, title, description
       </div>
       <div className="mt-3 space-y-2">
         <div className="flex flex-wrap gap-2 text-[10px] font-medium">
-          {data.map((item) => (
-            <span key={item.label} className="flex items-center gap-1">
+            {data.map((item) => (
+            <button key={item.label} type="button" onClick={() => onSelectStatus?.(item.status ?? item.label)} disabled={!onSelectStatus} className="flex items-center gap-1 enabled:hover:underline disabled:cursor-default">
               <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
               {item.label} ({item.value})
-            </span>
+            </button>
           ))}
         </div>
         {overdueTotal > 0 && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2">
+           <button type="button" onClick={onSelectOverdue} disabled={!onSelectOverdue} className="w-full text-left p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 enabled:hover:bg-red-100 disabled:cursor-default">
             <svg className="w-4 h-4 text-critical flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
             <span className="text-xs font-medium text-red-800">
               <span className="font-bold">{overdueTotal}</span> plano{overdueTotal > 1 ? 's' : ''} atrasado{overdueTotal > 1 ? 's' : ''}
             </span>
-          </div>
+           </button>
         )}
         <div className="pt-2 border-t border-gray-100 flex items-center gap-2 text-xs font-medium">
           <span className="text-gray-500 flex-1">Total</span>

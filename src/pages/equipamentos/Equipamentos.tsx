@@ -5,7 +5,9 @@ import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import { getDashboardGroupByView, getEquipmentDashboardGroups, isEquipmentDashboardView, type EquipmentDashboardView } from '../../utils/equipmentFilters';
+import { getDashboardGroupByView, getEquipmentDashboardGroups, getTodayYmd, isEquipmentDashboardView, type EquipmentDashboardView } from '../../utils/equipmentFilters';
+import { filterControlCenterData, getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
+import { getControlCenterEquipmentViewIds } from '../../utils/controlCenterDrilldown';
 
 const CATEGORIES = [
   { label: 'Tudo', filter: 'Tudo' },
@@ -43,13 +45,16 @@ const VIEW_META: Record<EquipmentDashboardView, { title: string; emptyTitle: str
 };
 
 export default function Equipamentos() {
-  const { equipments, inspections, user, deleteEquipment } = useAppStore();
+  const { equipments, inspections, actionPlans, user, deleteEquipment } = useAppStore();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeChip, setActiveChip] = useState('Tudo');
 
   const viewParam = searchParams.get('view');
   const view = isEquipmentDashboardView(viewParam) ? viewParam : null;
+  const ccView = searchParams.get('ccView');
+  const filterOptions = useMemo(() => getControlCenterFilterOptions(equipments), [equipments]);
+  const controlCenterFilters = useMemo<ControlCenterFilters>(() => parseControlCenterFilters(searchParams, filterOptions), [searchParams, filterOptions]);
   const search = searchParams.get('q') ?? '';
   const viewMeta = view ? VIEW_META[view] : null;
 
@@ -62,7 +67,12 @@ export default function Equipamentos() {
   // da lista. Sem `view`, exibe todos os equipamentos ativos (comportamento
   // original).
   const ativos = dashboardGroups.registered;
-  const baseList = view ? getDashboardGroupByView(dashboardGroups, view) : ativos;
+  const filteredData = useMemo(() => filterControlCenterData(equipments, inspections, actionPlans, controlCenterFilters), [equipments, inspections, actionPlans, controlCenterFilters]);
+  const ccIds = useMemo(
+    () => getControlCenterEquipmentViewIds(filteredData.equipments, filteredData.inspections, filteredData.actionPlans, ccView, getTodayYmd(), undefined, searchParams.get('sector')),
+    [filteredData, ccView, searchParams],
+  );
+  const baseList = ccIds ? filteredData.equipments.filter(eq => ccIds.includes(eq.id)) : view ? getDashboardGroupByView(dashboardGroups, view).filter(eq => controlCenterFilters.setor || controlCenterFilters.local || controlCenterFilters.tipo ? filteredData.equipments.some(item => item.id === eq.id) : true) : filteredData.equipments;
 
   const filtered = baseList.filter((eq) => {
     const matchesSearch =
@@ -93,7 +103,7 @@ export default function Equipamentos() {
   };
   const getStatusStyle = (status: string) => STATUS_STYLES[status] ?? STATUS_STYLES.observacao;
 
-  const hasActiveFilters = search.length > 0 || activeChip !== 'Tudo' || view !== null;
+  const hasActiveFilters = search.length > 0 || activeChip !== 'Tudo' || view !== null || ccView !== null || Boolean(controlCenterFilters.setor || controlCenterFilters.local || controlCenterFilters.tipo);
 
   // Atualiza a URL preservando os demais parâmetros (ex.: `q` ao limpar `view`).
   const patchSearchParams = (changes: Record<string, string | null>) => {
@@ -119,7 +129,7 @@ export default function Equipamentos() {
   };
 
   const clearFilters = () => {
-    patchSearchParams({ view: null, q: null });
+    patchSearchParams({ view: null, ccView: null, sector: null, setor: null, local: null, tipo: null, q: null });
     setActiveChip('Tudo');
   };
 
@@ -142,20 +152,20 @@ export default function Equipamentos() {
         <div className="flex-1 min-w-0">
           <div className="text-[10px] sm:text-xs font-bold text-gray-400 uppercase tracking-widest">Equipamentos</div>
           <h1 className="text-base sm:text-lg lg:text-xl font-black text-gray-900 uppercase tracking-wide truncate">
-            {view ? viewMeta?.title : 'Inventário de Dispositivos'}
+            {view ? viewMeta?.title : ccView ? 'Visão da Central de Controle' : 'Inventário de Dispositivos'}
           </h1>
           <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">
             {filtered.length} de {baseList.length} {baseList.length === 1 ? 'item' : 'itens'}
           </p>
         </div>
-        {view && (
+        {hasActiveFilters && (
           <button
             type="button"
             onClick={clearViewFilter}
             className="h-10 px-3 flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 whitespace-nowrap min-h-0 min-w-0"
             aria-label="Limpar filtro de visão"
           >
-            Limpar filtro
+            Limpar filtros
           </button>
         )}
         <button
