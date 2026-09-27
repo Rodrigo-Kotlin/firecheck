@@ -1,10 +1,12 @@
 import { useMemo, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { Plus, AlertTriangle, ShieldAlert, ArrowRight, ClipboardList, CheckCircle2, Package, Clock, AlertOctagon, WifiOff, ShieldCheck, Eye, FileText, RotateCcw } from 'lucide-react';
 import { isAdmin } from '../../services/permissions';
 import { getControlCenterIndicators, type ControlCenterIndicators } from '../../utils/controlCenterIndicators';
-import { getControlCenterCharts, type ControlCenterChartsResult, type PeriodOption } from '../../utils/controlCenterCharts';
+import { getControlCenterCharts, getControlCenterPeriodRange, type ControlCenterChartsResult, type PeriodOption } from '../../utils/controlCenterCharts';
+import ControlCenterFilters from '../../components/dashboard/ControlCenterFilters';
+import { filterControlCenterData, getControlCenterFilterOptions, hasControlCenterFilters, parseControlCenterFilters, withControlCenterParams, type ControlCenterFilters as FilterState } from '../../utils/controlCenterFilters';
 import type { LucideIcon } from 'lucide-react';
 import EquipmentSituationChart from '../../components/charts/EquipmentSituationChart';
 import InspectionsByPeriodChart from '../../components/charts/InspectionsByPeriodChart';
@@ -74,6 +76,7 @@ export default function Dashboard() {
     setCurrentTab,
   } = useAppStore();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [now, setNow] = useState(() => new Date());
   const [chartPeriod, setChartPeriod] = useState<PeriodOption>('6m');
@@ -88,6 +91,48 @@ export default function Dashboard() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }, [now]);
 
+  const filterOptions = useMemo(() => getControlCenterFilterOptions(equipments), [equipments]);
+  const filters = useMemo<FilterState>(() => parseControlCenterFilters(searchParams, filterOptions), [searchParams, filterOptions]);
+  const filteredData = useMemo(
+    () => filterControlCenterData(equipments, inspections, actionPlans, filters),
+    [equipments, inspections, actionPlans, filters],
+  );
+  const filteredView = hasControlCenterFilters(filters);
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    let changed = false;
+    for (const key of ['setor', 'local', 'tipo'] as const) {
+      const raw = searchParams.get(key);
+      if (raw && !filters[key]) {
+        next.delete(key);
+        changed = true;
+      } else if (raw && raw !== filters[key]) {
+        next.set(key, filters[key]);
+        changed = true;
+      }
+    }
+    if (changed) setSearchParams(next, { replace: true });
+  }, [searchParams, filters, setSearchParams]);
+
+  const updateFilter = (key: keyof FilterState, value: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set(key, value); else next.delete(key);
+      return next;
+    });
+  };
+
+  const clearControlCenterFilters = () => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.delete('setor');
+      next.delete('local');
+      next.delete('tipo');
+      return next;
+    });
+  };
+
   const handleNewInspection = () => {
     setCurrentTab('inspecionar');
     navigate('/scan');
@@ -98,15 +143,15 @@ export default function Dashboard() {
     : 'FC';
 
   const indicators = useMemo<ControlCenterIndicators>(
-    () => getControlCenterIndicators(equipments, inspections, actionPlans, { todayYmd }),
-    [equipments, inspections, actionPlans, todayYmd]
+    () => getControlCenterIndicators(filteredData.equipments, filteredData.inspections, filteredData.actionPlans, { todayYmd }),
+    [filteredData, todayYmd]
   );
 
   const priorityItems = useMemo<PriorityItem[]>(() => {
     const itemsMap = new Map<string, PriorityItem>();
 
     for (const eqId of indicators.equipment.requiresAttention.ids) {
-      const eq = equipments.find(e => e.id === eqId);
+       const eq = filteredData.equipments.find(e => e.id === eqId);
       if (!eq) continue;
 
       const reasons = new Set<string>();
@@ -126,7 +171,7 @@ export default function Dashboard() {
       let planoResponsavel: string | undefined;
       let planoCriticidade: string | undefined;
 
-      const plan = actionPlans.find(p => p.equipmentId === eqId && !p.deletedAt && p.status !== 'Concluída');
+       const plan = filteredData.actionPlans.find(p => p.equipmentId === eqId && !p.deletedAt && p.status !== 'Concluída');
       if (plan) {
         planoId = plan.id;
         planoStatus = plan.status;
@@ -174,7 +219,7 @@ export default function Dashboard() {
     });
 
     return items.slice(0, 5);
-  }, [indicators, equipments, actionPlans]);
+  }, [indicators, filteredData.equipments, filteredData.actionPlans]);
 
   const formatLastSync = (ts: number | null, nowMs: number): string => {
     if (!ts) return 'Nunca';
@@ -197,7 +242,7 @@ export default function Dashboard() {
       color: 'text-gray-700',
       accent: 'border-l-gray-300',
       sub: 'Não excluídos logicamente',
-      href: '/equipamentos?view=registered',
+       href: withControlCenterParams('/equipamentos', filters, { view: 'registered' }),
     },
     {
       label: 'Cobertura das inspeções',
@@ -208,7 +253,7 @@ export default function Dashboard() {
       color: 'text-blue-600',
       accent: 'border-l-blue-500',
       sub: 'Equipamentos elegíveis com inspeção',
-      href: '/equipamentos?view=inspected',
+       href: withControlCenterParams('/equipamentos', filters, { ccView: 'inspected' }),
     },
     {
       label: 'Equipamentos em dia',
@@ -218,7 +263,7 @@ export default function Dashboard() {
       color: 'text-success',
       accent: 'border-l-success',
       sub: 'Regular + prazo vigente',
-      href: '/equipamentos?view=up-to-date',
+       href: withControlCenterParams('/equipamentos', filters, { ccView: 'up-to-date' }),
     },
     {
       label: 'Atenção imediata',
@@ -228,7 +273,7 @@ export default function Dashboard() {
       color: 'text-critical',
       accent: 'border-l-critical',
       sub: 'Equipamentos distintos',
-      href: '/equipamentos?view=pending',
+       href: withControlCenterParams('/equipamentos', filters, { ccView: 'attention' }),
     },
   ];
 
@@ -239,7 +284,7 @@ export default function Dashboard() {
       icon: FileText,
       iconBg: 'bg-blue-50 text-blue-600',
       color: 'text-blue-600',
-      href: '/equipamentos?view=pending',
+       href: withControlCenterParams('/equipamentos', filters, { ccView: 'no-inspection' }),
     },
     {
       label: 'Em observação',
@@ -247,7 +292,7 @@ export default function Dashboard() {
       icon: AlertTriangle,
       iconBg: 'bg-gray-50 text-gray-500',
       color: 'text-gray-600',
-      href: '/equipamentos',
+       href: withControlCenterParams('/equipamentos', filters, { ccView: 'observation' }),
     },
     {
       label: 'Inspeções atrasadas',
@@ -255,7 +300,7 @@ export default function Dashboard() {
       icon: ShieldAlert,
       iconBg: 'bg-red-50 text-critical',
       color: 'text-critical',
-      href: '/equipamentos?view=pending',
+       href: withControlCenterParams('/equipamentos', filters, { ccView: 'inspection-overdue' }),
     },
     {
       label: 'Planos atrasados',
@@ -263,7 +308,7 @@ export default function Dashboard() {
       icon: ClipboardList,
       iconBg: 'bg-red-50 text-critical',
       color: 'text-critical',
-      href: '/planodeacao',
+       href: withControlCenterParams('/planodeacao', filters, { overdue: '1' }),
     },
     {
       label: 'Próximos vencimentos',
@@ -271,7 +316,7 @@ export default function Dashboard() {
       icon: Clock,
       iconBg: 'bg-amber-50 text-pending',
       color: 'text-pending',
-      href: '/equipamentos',
+       href: withControlCenterParams('/equipamentos', filters, { ccView: 'near-deadline' }),
     },
     {
       label: 'NC sem plano',
@@ -279,16 +324,19 @@ export default function Dashboard() {
       icon: AlertOctagon,
       iconBg: 'bg-orange-50 text-orange-600',
       color: 'text-orange-600',
-      href: '/equipamentos?view=pending',
+       href: withControlCenterParams('/equipamentos', filters, { ccView: 'no-conformity-plan' }),
     },
   ];
 
   const hasConflicts = conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0 || conflictCounts.inspections > 0;
 
   const charts = useMemo<ControlCenterChartsResult>(
-    () => getControlCenterCharts(equipments, inspections, actionPlans, { todayYmd, period: chartPeriod }),
-    [equipments, inspections, actionPlans, todayYmd, chartPeriod]
+    () => getControlCenterCharts(filteredData.equipments, filteredData.inspections, filteredData.actionPlans, { todayYmd, period: chartPeriod }),
+    [filteredData, todayYmd, chartPeriod]
   );
+
+  const navigateEquipmentView = (ccView: string, extra: Record<string, string | null | undefined> = {}) =>
+    navigate(withControlCenterParams('/equipamentos', filters, { ccView, ...extra }));
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -357,6 +405,14 @@ export default function Dashboard() {
           <span>Offline — exibindo dados deste dispositivo. Algumas informações podem estar desatualizadas.</span>
         </div>
       )}
+
+      <ControlCenterFilters
+        options={filterOptions}
+        value={filters}
+        active={filteredView}
+        onChange={updateFilter}
+        onClear={clearControlCenterFilters}
+      />
 
       {/* Main Indicators */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -510,8 +566,8 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 sm:flex-shrink-0">
-                    <Link
-                      to={`/equipamentos/${item.equipmentId}`}
+                     <Link
+                       to={withControlCenterParams(`/equipamentos/${item.equipmentId}`, filters)}
                       className="btn-ghost btn-sm btn-auto"
                     >
                       <Eye className="w-3.5 h-3.5" />
@@ -519,7 +575,7 @@ export default function Dashboard() {
                     </Link>
                     {item.planoId && (
                       <Link
-                        to="/planodeacao"
+                         to={withControlCenterParams('/planodeacao', filters, { planId: item.planoId })}
                         className="btn-ghost btn-sm btn-auto"
                       >
                         <ClipboardList className="w-3.5 h-3.5" />
@@ -555,23 +611,35 @@ export default function Dashboard() {
               data={charts.equipmentSituation}
               title="Situação dos Equipamentos"
               description="Distribuição operacional baseada na última inspeção e prazos vigentes"
+              onSelectCategory={category => navigateEquipmentView(`situation:${category}`)}
             />
             <InspectionsByPeriodChart
               data={charts.inspectionsByPeriod}
               title="Inspeções por Período"
               description="Volume de inspeções realizadas agrupadas por resultado"
               period={chartPeriod}
+              onSelectPeriod={() => {
+                const range = getControlCenterPeriodRange(todayYmd, chartPeriod);
+                navigate(withControlCenterParams('/relatorios', filters, { from: range.startYmd, to: range.endYmd }));
+              }}
+              onSelectStatus={status => {
+                const range = getControlCenterPeriodRange(todayYmd, chartPeriod);
+                navigate(withControlCenterParams('/relatorios', filters, { from: range.startYmd, to: range.endYmd, status }));
+              }}
             />
             <ActionPlansChart
               data={charts.actionPlans}
               overdueData={charts.overduePlans}
               title="Planos de Ação"
               description="Distribuição por status e planos com prazo ultrapassado"
+              onSelectStatus={status => navigate(withControlCenterParams('/planodeacao', filters, { status }))}
+              onSelectOverdue={() => navigate(withControlCenterParams('/planodeacao', filters, { overdue: '1' }))}
             />
             <SectorOccurrencesChart
               data={charts.sectorOccurrences}
               title="Não Conformidades por Setor"
               description="Equipamentos com última inspeção pendente ou vencida, agrupados por setor"
+              onSelectSector={sector => navigateEquipmentView('sector', { sector })}
             />
           </div>
         </section>
