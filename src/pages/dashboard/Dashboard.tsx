@@ -4,7 +4,13 @@ import { useAppStore } from '../../store';
 import { Plus, AlertTriangle, ShieldAlert, ArrowRight, ClipboardList, CheckCircle2, Package, Clock, AlertOctagon, WifiOff, ShieldCheck, Eye, FileText, RotateCcw } from 'lucide-react';
 import { isAdmin } from '../../services/permissions';
 import { getControlCenterIndicators, type ControlCenterIndicators } from '../../utils/controlCenterIndicators';
+import { getControlCenterCharts, type ControlCenterChartsResult, type PeriodOption } from '../../utils/controlCenterCharts';
 import type { LucideIcon } from 'lucide-react';
+import EquipmentSituationChart from '../../components/charts/EquipmentSituationChart';
+import InspectionsByPeriodChart from '../../components/charts/InspectionsByPeriodChart';
+import ActionPlansChart from '../../components/charts/ActionPlansChart';
+import SectorOccurrencesChart from '../../components/charts/SectorOccurrencesChart';
+import PeriodSelector from '../../components/charts/PeriodSelector';
 
 type PriorityItem = {
   id: string;
@@ -70,6 +76,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   const [now, setNow] = useState(() => new Date());
+  const [chartPeriod, setChartPeriod] = useState<PeriodOption>('6m');
 
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 60000);
@@ -277,6 +284,11 @@ export default function Dashboard() {
   ];
 
   const hasConflicts = conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0 || conflictCounts.inspections > 0;
+
+  const charts = useMemo<ControlCenterChartsResult>(
+    () => getControlCenterCharts(equipments, inspections, actionPlans, { todayYmd, period: chartPeriod }),
+    [equipments, inspections, actionPlans, todayYmd, chartPeriod]
+  );
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -531,16 +543,38 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Charts placeholder - D04 */}
-        <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center bg-gray-50/50">
-          <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
-            <FileText className="w-6 h-6 text-gray-400" />
+        {/* Gráficos da Central de Controle */}
+        <section className="space-y-4" aria-labelledby="charts-title">
+          <div className="flex items-center justify-between">
+            <h2 id="charts-title" className="label-uppercase">Gráficos Gerenciais</h2>
+            <PeriodSelector value={chartPeriod} onChange={setChartPeriod} />
           </div>
-          <p className="text-sm font-bold text-gray-700">Gráficos da Central de Controle</p>
-          <p className="text-xs text-gray-400 mt-1 max-w-md mx-auto">
-            Distribuição de situação, inspeções por período, planos de ação e ocorrências por setor serão implementados no D04.
-          </p>
-        </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <EquipmentSituationChart
+              data={charts.equipmentSituation}
+              title="Situação dos Equipamentos"
+              description="Distribuição operacional baseada na última inspeção e prazos vigentes"
+            />
+            <InspectionsByPeriodChart
+              data={charts.inspectionsByPeriod}
+              title="Inspeções por Período"
+              description="Volume de inspeções realizadas agrupadas por resultado"
+              period={chartPeriod}
+            />
+            <ActionPlansChart
+              data={charts.actionPlans}
+              overdueData={charts.overduePlans}
+              title="Planos de Ação"
+              description="Distribuição por status e planos com prazo ultrapassado"
+            />
+            <SectorOccurrencesChart
+              data={charts.sectorOccurrences}
+              title="Não Conformidades por Setor"
+              description="Equipamentos com última inspeção pendente ou vencida, agrupados por setor"
+            />
+          </div>
+        </section>
       </section>
     </div>
   );
