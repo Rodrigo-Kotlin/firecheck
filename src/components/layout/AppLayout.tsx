@@ -10,6 +10,7 @@ import { OfflineBanner } from './OfflineBanner';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import { BottomNav } from './BottomNav';
 import { Sidebar } from './Sidebar';
+import { APP_NAME } from '../../config/brand';
 
 export default function AppLayout() {
   useAutoSync();
@@ -92,10 +93,10 @@ export default function AppLayout() {
     : location.pathname === '/equipamentos' || location.pathname.startsWith('/equipamentos/') ? 'Equipamentos'
     : location.pathname === '/inspecionar' ? 'Inspecionar'
     : location.pathname === '/scan' ? 'Escanear QR'
-    : 'FireCheck';
+    : APP_NAME;
   const initials = user?.nome
     ? user.nome.split(' ').slice(0, 2).map(name => name[0]).join('').toUpperCase()
-    : 'FC';
+    : 'EF';
 
   if (!authReady) {
     return (
@@ -123,7 +124,7 @@ export default function AppLayout() {
               <Menu className="w-5 h-5" />
             </button>
             <div className="min-w-0">
-              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">FireCheck</div>
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{APP_NAME}</div>
               <h1 className="text-sm sm:text-base font-black text-gray-900 uppercase tracking-wide truncate">{currentTitle}</h1>
             </div>
           </div>

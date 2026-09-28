@@ -1,4 +1,8 @@
-# FireCheck · PWA de Inspeção de Equipamentos de Incêndio
+# EfetivaFire · PWA de Inspeção de Equipamentos de Incêndio
+
+> EfetivaFire é o novo nome do produto anteriormente denominado FireCheck.
+> Alguns identificadores internos `firecheck-*` permanecem por compatibilidade
+> com dados offline e sessões existentes.
 
 [![Build & Lint](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/ci.yml/badge.svg)](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/ci.yml)
 [![Deploy Pages](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/deploy.yml/badge.svg)](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/deploy.yml)

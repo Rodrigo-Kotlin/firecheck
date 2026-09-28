@@ -1,4 +1,4 @@
-# FireCheck — Memória Técnica do Projeto
+# EfetivaFire — Memória Técnica do Projeto
 
 > Documento de referência para IAs e desenvolvedores.
 > Leia antes de sugerir mudanças ou iniciar novas sessões.
@@ -8,7 +8,7 @@
 
 ## 1. Visão Geral
 
-**FireCheck** é uma PWA (Progressive Web App) **offline-first** para gestão, cadastro, inspeção, QR Code, histórico, planos de ação e relatórios de equipamentos de combate a incêndio (extintores, hidrantes, mangueiras, alarmes, iluminação de emergência, etc.).
+**EfetivaFire** é uma PWA (Progressive Web App) **offline-first** para gestão, cadastro, inspeção, QR Code, histórico, planos de ação e relatórios de equipamentos de combate a incêndio (extintores, hidrantes, mangueiras, alarmes, iluminação de emergência, etc.). É o novo nome do produto anteriormente denominado FireCheck. Alguns identificadores internos `firecheck-*` permanecem por compatibilidade com dados offline e sessões existentes.
 
 - **Público-alvo**: técnicos de manutenção, brigadistas e engenheiros de segurança.
 - **Modelo de uso**: local-first. Toda operação (cadastro, inspeção, plano de ação) acontece no navegador e persiste no IndexedDB (Dexie). O Supabase é usado apenas para sincronizar entre dispositivos.

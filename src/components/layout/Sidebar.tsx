@@ -8,6 +8,7 @@ import { useAppStore } from '../../store';
 import { isAdmin } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 import { SyncNowButton } from './SyncNowButton';
+import { APP_NAME } from '../../config/brand';
 
 type SidebarProps = {
   open: boolean;
@@ -22,7 +23,7 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
 
   const initials = user?.nome
     ? user.nome.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase()
-    : 'FC';
+    : 'EF';
 
   const handleNavigate = (path: string) => {
     onClose();
@@ -91,7 +92,7 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
               <LayoutDashboard className="w-5 h-5 text-white" />
             </div>
             <div>
-              <div className="text-white font-black text-lg leading-none">FireCheck</div>
+              <div className="text-white font-black text-lg leading-none">{APP_NAME}</div>
               <div className="text-red-100 text-[10px] font-bold uppercase tracking-wider mt-0.5">Sistema de Inspeção</div>
             </div>
           </div>

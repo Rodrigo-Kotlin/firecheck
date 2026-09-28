@@ -11,6 +11,7 @@ import {
 } from '../../services/authService';
 import { isSupabaseConfigured } from '../../lib/supabase';
 import PasswordStrengthMeter from '../../components/PasswordStrengthMeter';
+import { APP_NAME } from '../../config/brand';
 
 const RECOVERY_EMAIL_KEY = 'firecheck-recovery-email';
 
@@ -172,7 +173,7 @@ export default function RedefinirSenha() {
           <Flame className="w-10 h-10 sm:w-12 sm:h-12 text-white" />
         </div>
         <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-gray-900 mb-1">
-          Fire<span className="text-primary">Check</span>
+           {APP_NAME}
         </h1>
         <p className="label-uppercase mb-6 sm:mb-8 text-center">
           Sistema de Inspeção de Incêndio

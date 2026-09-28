@@ -8,6 +8,7 @@ import { showToast } from '../../hooks/useToasts';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import type { Inspection, Equipment, Stats } from '../../types';
 import { filterControlCenterData, getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
+import { APP_NAME } from '../../config/brand';
 
 type HistoryEntry = {
   id: string;
@@ -106,7 +107,7 @@ function drawPageHeader(ctx: DrawCtx) {
   ctx.doc.setTextColor(...PDF_COLORS.text);
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setFontSize(9);
-  ctx.doc.text('FireCheck', PDF_MARGIN, 9);
+  ctx.doc.text(APP_NAME, PDF_MARGIN, 9);
   ctx.doc.setFont('helvetica', 'normal');
   ctx.doc.setTextColor(...PDF_COLORS.textMuted);
   ctx.doc.setFontSize(7);
@@ -128,7 +129,7 @@ function drawFooter(ctx: DrawCtx) {
   ctx.doc.setFontSize(7);
   ctx.doc.setTextColor(...PDF_COLORS.textSubtle);
   ctx.doc.text(
-    `FireCheck — Documento técnico — Gerado em ${new Date().toLocaleDateString('pt-BR')}`,
+     `${APP_NAME} — Documento técnico — Gerado em ${new Date().toLocaleDateString('pt-BR')}`,
     PDF_MARGIN,
     PDF_FOOTER_Y,
   );
@@ -147,7 +148,7 @@ function drawCover(ctx: DrawCtx, opts: {
   doc.setTextColor(...PDF_COLORS.white);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(26);
-  doc.text('FireCheck', PDF_PAGE.w / 2, 20, { align: 'center' });
+  doc.text(APP_NAME, PDF_PAGE.w / 2, 20, { align: 'center' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.text('SISTEMA DE INSPEÇÃO DE EQUIPAMENTOS DE COMBATE A INCÊNDIO', PDF_PAGE.w / 2, 30, { align: 'center' });
@@ -541,7 +542,7 @@ function generateIndividualPDF(entry: HistoryEntry, company: string, unit: strin
   ctx.y = sigY + 16;
 
   drawFooter(ctx);
-  doc.save(`relatorio_${entry.equipId}_${entry.id}.pdf`);
+  doc.save(`efetivafire-relatorio_${entry.equipId}_${entry.id}.pdf`);
 }
 
 function generateMonthlyPDF(
@@ -570,7 +571,7 @@ function generateMonthlyPDF(
     ['Período de Referência', mes.charAt(0).toUpperCase() + mes.slice(1)],
     ['Data de Emissão', now.toLocaleDateString('pt-BR')],
     ['Total de Inspeções no Período', String(inspections.length)],
-    ['Emitido por', 'FireCheck — Sistema de Inspeção'],
+    ['Emitido por', `${APP_NAME} — Sistema de Inspeção`],
   ], 2);
 
   drawSectionHeader(ctx, 2, 'Resumo Quantitativo');
@@ -722,7 +723,7 @@ function generateMonthlyPDF(
   });
 
   drawFooter(ctx);
-  doc.save(`relatorio_mensal_${now.getMonth() + 1}_${now.getFullYear()}.pdf`);
+  doc.save(`efetivafire-relatorio-mensal_${now.getMonth() + 1}_${now.getFullYear()}.pdf`);
 }
 
 export default function Relatorios() {

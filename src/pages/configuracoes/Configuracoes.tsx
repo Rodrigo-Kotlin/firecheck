@@ -31,6 +31,7 @@ import ToggleSwitch from '../../components/ToggleSwitch';
 import { showToast } from '../../hooks/useToasts';
 import { usePwaInstall, type InstallState } from '../../hooks/usePwaInstall';
 import ConfirmDialog from '../../components/ConfirmDialog';
+import { APP_NAME } from '../../config/brand';
 
 // ---------------------------------------------------------------------------
 // Section shell — consistent header + body used by all 4 config sections.
@@ -234,7 +235,7 @@ function PreviewBlock({ empresa, unidade, saved }: PreviewBlockProps) {
       <div className="bg-gray-50 rounded border border-gray-100 p-3 space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-black text-primary uppercase tracking-widest">
-            FireCheck
+             {APP_NAME}
           </span>
           <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
             Relatório
@@ -281,7 +282,7 @@ function InstallCard({ state, isIos, installing, onInstall }: InstallCardProps) 
         <div className="min-w-0 flex-1">
           <div className="text-sm font-bold text-gray-900">App instalado</div>
           <div className="text-[11px] text-gray-600 font-medium leading-snug">
-            Você está usando o FireCheck direto da tela inicial do seu dispositivo.
+             Você está usando o {APP_NAME} direto da tela inicial do seu dispositivo.
           </div>
         </div>
       </div>
@@ -381,7 +382,7 @@ export default function Configuracoes() {
 
   const initials = user?.nome
     ? user.nome.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase()
-    : 'FC';
+    : 'EF';
 
   const hasChanges = empresa !== config.empresa || unidade !== config.unidade;
   const canSave = hasChanges && empresa.trim().length > 0 && unidade.trim().length > 0;
@@ -435,7 +436,7 @@ export default function Configuracoes() {
         showToast({
           kind: 'success',
           title: 'App instalado',
-          description: 'O FireCheck foi adicionado à sua tela inicial.',
+           description: `O ${APP_NAME} foi adicionado à sua tela inicial.`,
         });
       } else if (outcome === 'dismissed') {
         showToast({

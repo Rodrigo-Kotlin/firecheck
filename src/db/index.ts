@@ -145,6 +145,7 @@ export class FireCheckDatabase extends Dexie {
   acoes_pendentes!: Table<PendingAction, number>;
 
   constructor() {
+    // Legacy database name preserved to keep existing offline data across the EfetivaFire rebrand.
     super('FireCheckDatabase');
 
     // v1 — original schema

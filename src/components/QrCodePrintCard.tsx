@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { Printer, X, ShieldCheck, Download, Eye } from 'lucide-react';
 import type { Equipment } from '../types';
+import { APP_NAME } from '../config/brand';
 
 const QR_PER_PAGE = 6;
 
@@ -61,7 +62,7 @@ function QrCodeLabel({ equipment, qrSize = 180 }: { equipment: Equipment; qrSize
     <div className="qr-label-print">
       <div className="ql-top-bar" />
       <div className="ql-brand">
-        <span className="ql-brand-name">FireCheck</span>
+        <span className="ql-brand-name">{APP_NAME}</span>
         <span className="ql-brand-sub">Identificação de Equipamento</span>
       </div>
       <div className="ql-body">

@@ -11,6 +11,7 @@ import { canViewInspection, canEditInspection, canDeleteInspection } from '../se
 import { getLatestInspectionForEquipment } from '../utils/equipmentFilters';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { canAttemptNetwork, ensureNetworkListeners } from '../services/networkState';
+import { APP_COMPANY } from '../config/brand';
 import {
   loginUser,
   registerUser,
@@ -310,8 +311,8 @@ export const useAppStore = create<AppState>()(
         stats: { total: 0, emDia: 0, pendentes: 0, vencidos: 0, conformidade: 0 },
         actionPlans: [],
         config: {
-          empresa: 'FireCheck Corp',
-          unidade: 'Sede São Paulo',
+           empresa: APP_COMPANY,
+           unidade: '',
           offlineMode: false,
           notificationsEnabled: true,
         },
@@ -1379,8 +1380,8 @@ export const useAppStore = create<AppState>()(
           void _drop;
           return {
             config: rest.config ?? {
-              empresa: 'FireCheck Corp',
-              unidade: 'Sede São Paulo',
+               empresa: APP_COMPANY,
+               unidade: '',
               offlineMode: false,
               notificationsEnabled: true,
             },
@@ -1388,8 +1389,8 @@ export const useAppStore = create<AppState>()(
         }
         return {
           config: base.config ?? {
-            empresa: 'FireCheck Corp',
-            unidade: 'Sede São Paulo',
+             empresa: APP_COMPANY,
+             unidade: '',
             offlineMode: false,
             notificationsEnabled: true,
           },

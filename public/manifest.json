@@ -1,7 +1,7 @@
 {
-  "short_name": "FireCheck",
-  "name": "FireCheck - Inspeção de Equipamentos",
-  "description": "Sistema móvel para inspeção de equipamentos de combate a incêndio.",
+  "short_name": "EfetivaFire",
+  "name": "EfetivaFire — Inspeção e Gestão de Equipamentos",
+  "description": "Gestão e inspeção de equipamentos de combate a incêndio.",
   "lang": "pt-BR",
   "id": "./",
   "background_color": "#DC2626",
@@ -11,7 +11,7 @@
       "sizes": "512x512",
       "type": "image/png",
       "form_factor": "narrow",
-      "label": "Dashboard FireCheck"
+      "label": "Dashboard EfetivaFire"
     }
   ],
   "handle_links": "preferred",

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { registerSW } from 'virtual:pwa-register';
 import { showToast } from './useToasts';
+import { APP_NAME } from '../config/brand';
 
 export function usePwaUpdate(): void {
   useEffect(() => {
@@ -33,7 +34,7 @@ export function usePwaUpdate(): void {
       showToast({
         kind: 'success',
         title: 'App instalado com sucesso',
-        description: 'Abra o FireCheck direto da sua tela inicial.',
+         description: `Abra o ${APP_NAME} direto da sua tela inicial.`,
         duration: 6000,
       });
     };
