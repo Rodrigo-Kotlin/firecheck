@@ -109,6 +109,15 @@ describe('Control Center Indicators Engine', () => {
       expect(result.equipment.requiresAttention.count).toBe(0);
       expect(result.equipment.noInspection.count).toBe(0);
     });
+
+    it('mantém prazo futuro como vigente quando a inspeção exige atenção', () => {
+      const eq = makeEquipment({ id: 'EQ-001', status: 'pendente', dataProximaInspecao: '2026-12-31' });
+      const insp = makeInspection({ id: 'INSP-001', equipmentId: 'EQ-001', status: 'pendente' });
+      const result = runIndicators([eq], [insp], []);
+      expect(result.deadlineClassification.emDia.ids).toContain('EQ-001');
+      expect(result.deadlineClassification.semPrazo.ids).not.toContain('EQ-001');
+      expect(result.equipment.requiresAttention.ids).toContain('EQ-001');
+    });
   });
 
   describe('Inspeção regular com prazo ausente', () => {
@@ -119,6 +128,31 @@ describe('Control Center Indicators Engine', () => {
       expect(result.equipment.upToDate.count).toBe(0);
       expect(result.deadlineClassification.semPrazo.count).toBe(1);
       expect(result.deadlineClassification.semPrazo.ids).toContain('EQ-001');
+    });
+
+    it('não confunde data inválida com prazo vigente', () => {
+      const eq = makeEquipment({ id: 'EQ-001', dataProximaInspecao: 'invalid-date' });
+      const insp = makeInspection({ id: 'INSP-001', equipmentId: 'EQ-001', status: 'observacao' });
+      const result = runIndicators([eq], [insp], []);
+      expect(result.deadlineClassification.semPrazo.ids).toContain('EQ-001');
+      expect(result.deadlineClassification.emDia.ids).not.toContain('EQ-001');
+    });
+  });
+
+  describe('Janela de próximos vencimentos', () => {
+    it('usa a janela padrão de 30 dias para prazo válido', () => {
+      const eq = makeEquipment({ id: 'EQ-001', dataProximaInspecao: '2026-07-19' });
+      const insp = makeInspection({ id: 'INSP-001', equipmentId: 'EQ-001', status: 'regular' });
+      const result = runIndicators([eq], [insp], []);
+      expect(result.equipment.inspectionsNearDeadline.ids).toContain('EQ-001');
+    });
+
+    it('não inclui equipamento sem inspeção no indicador de inspeções próximas', () => {
+      const eq = makeEquipment({ id: 'EQ-001', dataProximaInspecao: '2026-07-19' });
+      const result = runIndicators([eq], [], []);
+      expect(result.equipment.noInspection.ids).toContain('EQ-001');
+      expect(result.equipment.inspectionsNearDeadline.ids).not.toContain('EQ-001');
+      expect(result.deadlineClassification.proximoVencimento.ids).toContain('EQ-001');
     });
   });
 

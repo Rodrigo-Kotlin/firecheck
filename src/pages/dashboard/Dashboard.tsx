@@ -21,7 +21,7 @@ type PriorityItem = {
   local: string;
   setor: string;
   reasons: string[];
-  deadlineStatus: 'vencido' | 'proximo_vencimento' | 'sem_prazo';
+  deadlineStatus: 'vencido' | 'proximo_vencimento' | 'em_dia' | 'sem_prazo';
   dataProximaInspecao?: string;
   planoId?: string;
   planoStatus?: string;
@@ -55,6 +55,8 @@ function formatDeadlineStatus(status: string): { label: string; className: strin
       return { label: 'Vencido', className: 'bg-red-50 text-critical border-red-200' };
     case 'proximo_vencimento':
       return { label: 'Próximo', className: 'bg-amber-50 text-pending border-amber-200' };
+    case 'em_dia':
+      return { label: 'Prazo vigente', className: 'bg-green-50 text-success border-green-200' };
     case 'sem_prazo':
       return { label: 'Sem prazo', className: 'bg-gray-50 text-gray-500 border-gray-200' };
     default:
@@ -150,6 +152,7 @@ export default function Dashboard() {
       let deadlineStatus: PriorityItem['deadlineStatus'] = 'sem_prazo';
       if (indicators.equipment.inspectionsOverdue.ids.includes(eqId)) deadlineStatus = 'vencido';
       else if (indicators.equipment.inspectionsNearDeadline.ids.includes(eqId)) deadlineStatus = 'proximo_vencimento';
+      else if (indicators.deadlineClassification.emDia.ids.includes(eqId)) deadlineStatus = 'em_dia';
 
       let planoId: string | undefined;
       let planoStatus: string | undefined;
