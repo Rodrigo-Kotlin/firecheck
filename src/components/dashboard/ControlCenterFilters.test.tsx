@@ -51,4 +51,22 @@ describe('ControlCenterFilters', () => {
     expect(clear.tabIndex).toBe(0);
     expect(screen.getByLabelText('Localização')).toBeTruthy();
   });
+
+  it('opens the mobile sheet and closes it with Escape', () => {
+    render(
+      <ControlCenterFilters
+        options={options}
+        value={{ setor: '', local: '', tipo: '' }}
+        active={false}
+        onChange={vi.fn()}
+        onClear={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir filtros' }));
+    expect(screen.getByRole('dialog', { name: 'Filtros' })).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Filtros' })).toBeNull();
+  });
 });

@@ -310,10 +310,10 @@ export default function Dashboard() {
     navigate(withControlCenterParams('/equipamentos', filters, { ccView, ...extra }));
 
   return (
-    <div className="space-y-3 sm:space-y-4">
+    <div className="space-y-2.5 sm:space-y-3.5">
       {/* Data source notice when offline */}
       {networkUnavailable && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800 flex items-center gap-2">
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs sm:text-sm text-amber-800 flex items-center gap-2">
           <WifiOff className="w-4 h-4 flex-shrink-0" />
           <span>Offline — exibindo dados deste dispositivo. Algumas informações podem estar desatualizadas.</span>
         </div>
@@ -328,7 +328,7 @@ export default function Dashboard() {
       />
 
       {/* Main Indicators */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
         {mainIndicators.map((indicator, idx) => {
           const Icon = indicator.icon;
           const isCoverage = idx === 1;
@@ -360,7 +360,7 @@ export default function Dashboard() {
             <Link
               key={indicator.label}
               to={indicator.href}
-              className="card-subtle bg-white p-2.5 sm:p-3 flex flex-col gap-1.5 hover:border-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              className="card-subtle bg-white p-2 sm:p-2.5 flex flex-col gap-1 hover:border-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             >
               <div className="flex items-center gap-2">
                 <span className={`kpi-card__icon ${indicator.iconBg}`}>
@@ -404,10 +404,10 @@ export default function Dashboard() {
               return (
                 <div
                   key={item.id}
-                  className="card-subtle bg-white border-l-[3px] border-l-gray-200 p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                   className="card-subtle bg-white border-l-[3px] border-l-gray-200 p-2.5 sm:p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3"
                 >
-                  <div className="flex items-start gap-3 min-w-0 flex-1">
-                    <div className={`p-2 rounded-lg flex-shrink-0 ${reasonInfo.className}`}>
+                   <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                     <div className={`p-1.5 rounded-lg flex-shrink-0 ${reasonInfo.className}`}>
                       <ReasonIcon className="w-4 h-4" />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -422,10 +422,10 @@ export default function Dashboard() {
                           {deadlineInfo.label}
                         </span>
                       </div>
-                      <p className="text-xs text-gray-500 font-medium mt-0.5 truncate">
+                       <p className="text-xs text-gray-500 font-medium mt-0.5 truncate">
                         {item.local} · {item.setor}
                       </p>
-                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                       <div className="flex flex-wrap gap-1 mt-1">
                         {item.reasons.slice(0, 3).map((reason) => {
                           const r = formatReason(reason);
                           const RIcon = r.icon;
@@ -443,7 +443,7 @@ export default function Dashboard() {
                         )}
                       </div>
                       {(item.dataProximaInspecao || item.planoPrazo) && (
-                        <div className="flex flex-wrap gap-2 text-[10px] text-gray-500 mt-1.5">
+                         <div className="flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-gray-500 mt-1">
                           {item.dataProximaInspecao && (
                             <span className="flex items-center gap-1">
                               <Clock className="w-3 h-3" />
@@ -471,10 +471,11 @@ export default function Dashboard() {
                       )}
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 sm:flex-shrink-0">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5 sm:flex-shrink-0">
                      <Link
                        to={withControlCenterParams(`/equipamentos/${item.equipmentId}`, filters)}
-                      className="btn-ghost btn-sm btn-auto"
+                       className="btn-ghost btn-sm btn-auto priority-action-secondary"
+                       aria-label={`Ver equipamento ${item.equipmentId}`}
                     >
                       <Eye className="w-3.5 h-3.5" />
                       <span className="hidden sm:inline">Ver equipamento</span>
@@ -482,7 +483,8 @@ export default function Dashboard() {
                     {item.planoId && (
                       <Link
                          to={withControlCenterParams('/planodeacao', filters, { planId: item.planoId })}
-                        className="btn-ghost btn-sm btn-auto"
+                         className="btn-ghost btn-sm btn-auto priority-action-secondary"
+                         aria-label={`Ver plano de ação ${item.equipmentId}`}
                       >
                         <ClipboardList className="w-3.5 h-3.5" />
                         <span className="hidden sm:inline">Ver plano</span>
@@ -493,7 +495,8 @@ export default function Dashboard() {
                         setCurrentTab('inspecionar');
                         navigate(`/inspecionar?id=${item.equipmentId}`);
                       }}
-                      className="btn-primary btn-sm btn-auto"
+                       className="btn-primary btn-sm btn-auto priority-action-primary"
+                       aria-label={`Inspecionar ${item.equipmentId}`}
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span className="hidden sm:inline">Inspecionar</span>
@@ -506,13 +509,13 @@ export default function Dashboard() {
         )}
 
         {/* Gráficos da Central de Controle */}
-        <section className="space-y-4" aria-labelledby="charts-title">
-          <div className="flex items-center justify-between">
+        <section className="space-y-3" aria-labelledby="charts-title">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 id="charts-title" className="label-uppercase">Gráficos Gerenciais</h2>
             <PeriodSelector value={chartPeriod} onChange={setChartPeriod} />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
             <EquipmentSituationChart
               data={charts.equipmentSituation}
               title="Situação dos Equipamentos"

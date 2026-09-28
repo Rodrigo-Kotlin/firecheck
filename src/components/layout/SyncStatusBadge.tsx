@@ -59,7 +59,7 @@ export function SyncStatusBadge({ isOnline, syncing, pending, networkUnavailable
       ) : (
         <span className={`status-dot ${dotClass[variant]}`} />
       )}
-      <span>{label}</span>
+       <span className="status-pill__label">{label}</span>
     </button>
   );
 }

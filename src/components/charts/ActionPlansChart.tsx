@@ -16,7 +16,7 @@ export default function ActionPlansChart({ data, overdueData, title, description
 
   if (total === 0) {
     return (
-      <div className="card-subtle bg-white p-6 flex flex-col items-center justify-center min-h-[280px] text-center">
+       <div className="card-subtle bg-white p-4 sm:p-5 flex flex-col items-center justify-center min-h-[190px] sm:min-h-[220px] text-center">
         <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mb-3">
           <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -33,12 +33,12 @@ export default function ActionPlansChart({ data, overdueData, title, description
   const tooltipFormatter = (value: any) => value ?? 0;
 
   return (
-    <div className="card-subtle bg-white p-4 sm:p-6">
-      <div className="mb-4">
+    <div className="card-subtle bg-white p-3 sm:p-4 lg:p-5">
+      <div className="mb-2.5">
         <h3 className="text-sm font-bold text-gray-900">{title}</h3>
         <p className="text-xs text-gray-500 mt-0.5">{description}</p>
       </div>
-      <div className="h-[280px]">
+      <div className="h-[230px] sm:h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} layout="vertical">
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -72,7 +72,7 @@ export default function ActionPlansChart({ data, overdueData, title, description
               verticalAlign="bottom"
               iconType="circle"
               iconSize={8}
-              wrapperStyle={{ paddingTop: 8, paddingBottom: 4 }}
+               wrapperStyle={{ paddingTop: 4, paddingBottom: 0 }}
             />
             <Bar
               dataKey="value"
@@ -89,7 +89,7 @@ export default function ActionPlansChart({ data, overdueData, title, description
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <div className="mt-3 space-y-2">
+       <div className="mt-2 space-y-1.5">
         <div className="flex flex-wrap gap-2 text-[10px] font-medium">
             {data.map((item) => (
             <button key={item.label} type="button" onClick={() => onSelectStatus?.(item.status ?? item.label)} disabled={!onSelectStatus} className="flex items-center gap-1 enabled:hover:underline disabled:cursor-default">

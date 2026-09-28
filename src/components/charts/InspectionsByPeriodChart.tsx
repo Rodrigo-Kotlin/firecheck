@@ -24,7 +24,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
 
   if (total === 0) {
     return (
-      <div className="card-subtle bg-white p-6 flex flex-col items-center justify-center min-h-[280px] text-center">
+       <div className="card-subtle bg-white p-4 sm:p-5 flex flex-col items-center justify-center min-h-[190px] sm:min-h-[220px] text-center">
         <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mb-3">
           <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -43,12 +43,12 @@ export default function InspectionsByPeriodChart({ data, title, description, per
   const tooltipFormatter = (value: any) => value ?? 0;
 
   return (
-    <div className="card-subtle bg-white p-4 sm:p-6">
-      <div className="mb-4">
+    <div className="card-subtle bg-white p-3 sm:p-4 lg:p-5">
+      <div className="mb-2.5">
         <h3 className="text-sm font-bold text-gray-900">{title}</h3>
         <p className="text-xs text-gray-500 mt-0.5">{description}</p>
       </div>
-      <div className="h-[280px]">
+      <div className="h-[230px] sm:h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} layout="vertical">
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -82,7 +82,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               verticalAlign="bottom"
               iconType="circle"
               iconSize={8}
-              wrapperStyle={{ paddingTop: 8, paddingBottom: 4 }}
+               wrapperStyle={{ paddingTop: 4, paddingBottom: 0 }}
             />
             <Bar
               dataKey="regular"
@@ -123,7 +123,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-medium">
+      <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[10px] font-medium">
         {([
           ['regular', 'Regular', '#16a34a'],
           ['observacao', 'Observação', '#ca8a04'],
@@ -136,7 +136,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
         ))}
       </div>
       {onSelectPeriod && (
-        <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
+        <div className="mt-1.5 flex flex-wrap gap-1 text-[10px]">
           {data.filter(item => item.total > 0).map(item => (
             <button key={item.periodKey ?? item.period} type="button" onClick={() => item.periodKey && onSelectPeriod(item.periodKey)} className="text-gray-500 hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded px-1">
               {item.period}

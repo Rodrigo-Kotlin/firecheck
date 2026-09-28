@@ -13,7 +13,7 @@ export default function EquipmentSituationChart({ data, title, description, onSe
 
   if (total === 0) {
     return (
-      <div className="card-subtle bg-white p-6 flex flex-col items-center justify-center min-h-[280px] text-center">
+       <div className="card-subtle bg-white p-4 sm:p-5 flex flex-col items-center justify-center min-h-[190px] sm:min-h-[220px] text-center">
         <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mb-3">
           <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -27,25 +27,25 @@ export default function EquipmentSituationChart({ data, title, description, onSe
   }
 
   return (
-    <div className="card-subtle bg-white p-4 sm:p-6">
-      <div className="mb-4">
+    <div className="card-subtle bg-white p-3 sm:p-4 lg:p-5">
+      <div className="mb-2.5">
         <h3 className="text-sm font-bold text-gray-900">{title}</h3>
         <p className="text-xs text-gray-500 mt-0.5">{description}</p>
       </div>
-      <div className="flex flex-col lg:flex-row items-center gap-4">
+      <div className="flex flex-col lg:flex-row items-center gap-2.5 sm:gap-4">
         <div className="w-full lg:w-1/2">
-          <ResponsiveContainer width="100%" height={240}>
+          <ResponsiveContainer width="100%" height={220}>
             <PieChart>
               <Pie
                 data={data}
                 cx="50%"
                 cy="50%"
-                innerRadius={60}
-                outerRadius={80}
+                innerRadius={58}
+                outerRadius={82}
                 paddingAngle={2}
                 dataKey="value"
                 nameKey="label"
-                label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
+                label={false}
                 labelLine={false}
                 isAnimationActive={false}
               >
@@ -67,20 +67,20 @@ export default function EquipmentSituationChart({ data, title, description, onSe
             </PieChart>
           </ResponsiveContainer>
         </div>
-        <div className="w-full lg:w-1/2 space-y-2">
+         <div className="w-full lg:w-1/2 space-y-1">
            {data.map((item) => (
              <button
                key={item.label}
                type="button"
                disabled={!item.category || !onSelectCategory}
                onClick={() => item.category && onSelectCategory?.(item.category)}
-               className="w-full flex items-center gap-3 text-left rounded px-1 py-0.5 enabled:hover:bg-gray-50 enabled:focus-visible:outline enabled:focus-visible:outline-2 enabled:focus-visible:outline-primary disabled:cursor-default"
+                className="w-full flex items-start gap-2 text-left rounded px-1 py-1 enabled:hover:bg-gray-50 enabled:focus-visible:outline enabled:focus-visible:outline-2 enabled:focus-visible:outline-primary disabled:cursor-default"
              >
               <span
                 className="w-3 h-3 rounded-full flex-shrink-0"
                 style={{ backgroundColor: item.color }}
               />
-              <span className="text-xs font-medium text-gray-700 truncate flex-1">{item.label}</span>
+               <span className="text-xs font-medium text-gray-700 leading-tight flex-1 break-words">{item.label}</span>
               <span className="text-xs font-bold text-gray-900 tabular-nums">{item.value}</span>
               <span className="text-xs text-gray-400">({item.percentage}%)</span>
              </button>

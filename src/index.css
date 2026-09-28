@@ -374,13 +374,13 @@ input[type="checkbox"], input[type="radio"] {
   margin-right: auto;
   padding: 1rem;
   /* space for bottom nav (4rem) on mobile + iOS safe-area-inset */
-  padding-bottom: calc(6rem + env(safe-area-inset-bottom, 0px));
+   padding-bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
 }
 @media (min-width: 640px) {
   .app-main {
     padding: 1.5rem;
     max-width: 640px;
-    padding-bottom: 7rem;
+   padding-bottom: 6rem;
   }
 }
 @media (min-width: 768px) {
@@ -485,7 +485,7 @@ input[type="checkbox"], input[type="radio"] {
   bottom: 0;
   left: 0;
   right: 0;
-  height: 4.5rem;
+  height: 4rem;
   background: white;
   border-top: 1px solid var(--color-border-soft);
   display: flex;
@@ -493,7 +493,7 @@ input[type="checkbox"], input[type="radio"] {
   align-items: center;
   z-index: 30;
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.04);
-  padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
   padding-left: env(safe-area-inset-left, 0);
   padding-right: env(safe-area-inset-right, 0);
 }
@@ -1006,6 +1006,36 @@ input[type="checkbox"], input[type="radio"] {
 .status-pill--syncing  { background: #EFF6FF; color: #1D4ED8; border-color: #BFDBFE; }
 .status-pill--offline  { background: #FEF2F2; color: #991B1B; border-color: #FECACA; }
 .status-pill--offline:hover  { background: #FEE2E2; }
+
+@media (max-width: 479px) {
+  .status-pill {
+    width: 2rem;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+  }
+  .status-pill__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+}
+
+@media (max-width: 639px) {
+  .priority-action-secondary {
+    width: 2.5rem;
+    padding: 0;
+  }
+  .priority-action-primary {
+    padding: 0 0.625rem;
+  }
+}
 
 /* Status dot (pulsing / static) */
 .status-dot {

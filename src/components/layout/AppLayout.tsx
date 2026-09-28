@@ -113,7 +113,7 @@ export default function AppLayout() {
       <div className="app-content flex flex-col min-h-screen">
         {!isOnline && <OfflineBanner pending={pending} variant="mobile" />}
 
-        <header className="bg-white border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center justify-between gap-3 sticky top-0 z-20">
+        <header className="bg-white border-b border-gray-100 px-3 sm:px-6 py-2 sm:py-2.5 flex items-center justify-between gap-2 sticky top-0 z-20">
           <div className="flex items-center gap-2 min-w-0">
             <button
               onClick={() => setSideMenuOpen(true)}
@@ -127,24 +127,24 @@ export default function AppLayout() {
               <h1 className="text-sm sm:text-base font-black text-gray-900 uppercase tracking-wide truncate">{currentTitle}</h1>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
-            <div className="flex order-3 basis-full sm:order-none sm:basis-auto items-center gap-2 min-w-0 border-l border-gray-200 pl-3">
-              <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center text-[10px] font-black flex-shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 border-l border-gray-200 pl-2 sm:pl-3 max-w-[7rem] sm:max-w-none">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center text-[10px] font-black flex-shrink-0">
                 {initials}
               </div>
               <div className="min-w-0 leading-tight">
                 <div className="text-[11px] font-bold text-gray-900 truncate">Olá, {user?.nome?.split(' ')[0] || 'Inspetor'}</div>
-                <div className="text-[10px] text-gray-500 truncate">Perfil: {user?.cargo || 'Inspetor'}</div>
+                <div className="hidden sm:block text-[10px] text-gray-500 truncate">Perfil: {user?.cargo || 'Inspetor'}</div>
               </div>
             </div>
             {location.pathname === '/' && (
               <button
                 onClick={() => { setCurrentTab('inspecionar'); navigate('/scan'); }}
-                className="btn-primary btn-sm btn-auto sm:hidden"
+                className="btn-primary btn-sm btn-auto sm:hidden px-2"
                 aria-label="Nova inspeção"
               >
                 <Plus className="w-4 h-4" />
-                Nova inspeção
+                <span className="sr-only">Nova inspeção</span>
               </button>
             )}
             {install.state === 'available' && (
