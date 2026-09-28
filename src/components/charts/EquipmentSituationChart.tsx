@@ -33,7 +33,7 @@ export default function EquipmentSituationChart({ data, title, description, onSe
         <p className="text-xs text-gray-500 mt-0.5">{description}</p>
       </div>
       <div className="flex flex-col lg:flex-row items-center gap-2.5 sm:gap-4">
-        <div className="w-full lg:w-1/2">
+        <div className="relative w-full lg:w-1/2">
           <ResponsiveContainer width="100%" height={220}>
             <PieChart>
               <Pie
@@ -66,6 +66,10 @@ export default function EquipmentSituationChart({ data, title, description, onSe
               />
             </PieChart>
           </ResponsiveContainer>
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Total</span>
+            <span className="text-2xl font-black text-gray-900 tabular-nums">{total}</span>
+          </div>
         </div>
          <div className="w-full lg:w-1/2 space-y-1">
            {data.map((item) => (
@@ -82,13 +86,13 @@ export default function EquipmentSituationChart({ data, title, description, onSe
               />
                <span className="text-xs font-medium text-gray-700 leading-tight flex-1 break-words">{item.label}</span>
               <span className="text-xs font-bold text-gray-900 tabular-nums">{item.value}</span>
-              <span className="text-xs text-gray-400">({item.percentage}%)</span>
+              <span className="text-xs text-gray-400">{item.percentage}%</span>
              </button>
           ))}
           <div className="pt-2 border-t border-gray-100 flex items-center gap-3">
             <span className="text-xs font-medium text-gray-500 flex-1">Total</span>
             <span className="text-xs font-bold text-gray-900 tabular-nums">{total}</span>
-            <span className="text-xs text-gray-400">(100%)</span>
+            <span className="text-xs text-gray-400">100%</span>
           </div>
         </div>
       </div>

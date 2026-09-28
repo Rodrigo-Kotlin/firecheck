@@ -2,7 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Shield, QrCode, FileBarChart, X,
   ClipboardList, Settings, LogOut,
-  RefreshCw, Cloud, CloudOff, Users, AlertOctagon,
+  CloudOff, Users, AlertOctagon,
 } from 'lucide-react';
 import { useAppStore } from '../../store';
 import { isAdmin } from '../../services/permissions';
@@ -142,19 +142,6 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
         <div className="px-3 pb-3 flex-shrink-0 space-y-2">
           {syncEnabled ? (
             <div className="bg-gray-50 rounded-lg p-2.5 space-y-2">
-              <div className={`flex items-center gap-2 text-xs font-bold uppercase tracking-wider ${
-                isOnline ? 'text-success' : 'text-pending'
-              }`}>
-                {isOnline ? <Cloud className="w-4 h-4" /> : <CloudOff className="w-4 h-4" />}
-                <span>Supabase</span>
-                {syncing ? (
-                  <RefreshCw className="w-3 h-3 ml-auto animate-spin" />
-                ) : (
-                  <span className="ml-auto text-[10px] opacity-70">
-                    {pending > 0 ? `${pending} pendente${pending === 1 ? '' : 's'}` : 'Em dia'}
-                  </span>
-                )}
-              </div>
               {(conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0 || conflictCounts.inspections > 0) && (
                 <div className="flex items-center gap-1.5 text-[10px] font-bold text-critical bg-red-50 rounded-md px-2 py-1.5">
                   <AlertOctagon className="w-3 h-3 flex-shrink-0" />

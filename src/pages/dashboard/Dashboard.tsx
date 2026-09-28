@@ -6,6 +6,7 @@ import { getControlCenterIndicators, type ControlCenterIndicators } from '../../
 import { getControlCenterCharts, getControlCenterPeriodRange, type ControlCenterChartsResult, type PeriodOption } from '../../utils/controlCenterCharts';
 import ControlCenterFilters from '../../components/dashboard/ControlCenterFilters';
 import { filterControlCenterData, getControlCenterFilterOptions, hasControlCenterFilters, parseControlCenterFilters, withControlCenterParams, type ControlCenterFilters as FilterState } from '../../utils/controlCenterFilters';
+import { formatCivilDate } from '../../utils/dateFormatting';
 import type { LucideIcon } from 'lucide-react';
 import EquipmentSituationChart from '../../components/charts/EquipmentSituationChart';
 import InspectionsByPeriodChart from '../../components/charts/InspectionsByPeriodChart';
@@ -240,7 +241,7 @@ export default function Dashboard() {
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'up-to-date' }),
     },
     {
-      label: 'Atenção imediata',
+      label: 'Requer atenção',
       value: indicators.equipment.requiresAttention.count,
       icon: AlertOctagon,
       iconBg: 'bg-red-50 text-critical',
@@ -447,13 +448,13 @@ export default function Dashboard() {
                           {item.dataProximaInspecao && (
                             <span className="flex items-center gap-1">
                               <Clock className="w-3 h-3" />
-                              Próx. inspeção: {item.dataProximaInspecao}
+                              Próx. inspeção: {formatCivilDate(item.dataProximaInspecao)}
                             </span>
                           )}
                           {item.planoPrazo && (
                             <span className="flex items-center gap-1">
                               <ClipboardList className="w-3 h-3" />
-                              Prazo plano: {item.planoPrazo}
+                              Prazo plano: {formatCivilDate(item.planoPrazo)}
                             </span>
                           )}
                           {item.planoResponsavel && (

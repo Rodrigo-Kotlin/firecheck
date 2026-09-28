@@ -6,7 +6,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
 } from 'recharts';
 import type { InspectionsByPeriodChartData } from '../../utils/controlCenterCharts';
 
@@ -32,7 +31,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
         </div>
         <p className="text-sm font-bold text-gray-700">{title}</p>
         <p className="text-xs text-gray-400 mt-1 max-w-xs">{description}</p>
-        <p className="text-xs text-gray-500 mt-2">Nenhuma inspeção registrada no período.</p>
+        <p className="text-xs text-gray-500 mt-2">Nenhuma inspeção no período.</p>
       </div>
     );
   }
@@ -48,20 +47,22 @@ export default function InspectionsByPeriodChart({ data, title, description, per
         <h3 className="text-sm font-bold text-gray-900">{title}</h3>
         <p className="text-xs text-gray-500 mt-0.5">{description}</p>
       </div>
-      <div className="h-[230px] sm:h-[260px]">
+      <div className="h-[220px] sm:h-[250px]">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} layout="vertical">
+          <BarChart data={data} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
             <XAxis
-              type="number"
+              dataKey="period"
+              interval={isDaily ? 'preserveStartEnd' : 0}
               tick={{ fontSize: 10, fill: '#6b7280' }}
               axisLine={false}
               tickLine={false}
             />
             <YAxis
-              type="category"
-              dataKey="period"
-              width={isDaily ? 60 : 50}
+              type="number"
+              allowDecimals={false}
+              domain={[0, 'dataMax']}
+              width={isDaily ? 34 : 30}
               tick={{ fontSize: 10, fill: '#6b7280' }}
               axisLine={false}
               tickLine={false}
@@ -75,14 +76,6 @@ export default function InspectionsByPeriodChart({ data, title, description, per
                 boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
               }}
               labelFormatter={(label) => label}
-            />
-            <Legend
-              layout="horizontal"
-              align="center"
-              verticalAlign="bottom"
-              iconType="circle"
-              iconSize={8}
-               wrapperStyle={{ paddingTop: 4, paddingBottom: 0 }}
             />
             <Bar
               dataKey="regular"
