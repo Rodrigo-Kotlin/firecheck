@@ -3,6 +3,7 @@ import { useAppStore } from '../store';
 import { isSyncInProgress } from '../services/sync';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { canAttemptNetwork, clearCooldown } from '../services/networkState';
+import { canStartOperationalSync, shouldRequestSyncAfterPauseDisabled } from '../services/syncPolicy';
 
 const AUTO_SYNC_INTERVAL_MS = 30_000;
 const AUTO_SYNC_THROTTLE_MS = 8_000;
@@ -22,22 +23,35 @@ function getOnlineSnapshot(): boolean {
 
 export function useAutoSync() {
   const lastSyncRef = useRef(0);
+  const wasPausedRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const user = useAppStore((s) => s.user);
+  const syncPaused = useAppStore((s) => s.config.offlineMode);
   const isOnline = useSyncExternalStore(subscribeToOnline, getOnlineSnapshot);
 
   useEffect(() => {
+    const resumed = shouldRequestSyncAfterPauseDisabled({
+      wasPaused: wasPausedRef.current,
+      isPaused: syncPaused,
+      isOnline,
+      authenticated: !!user,
+    });
+    wasPausedRef.current = syncPaused;
+
     if (!user) {
       if (import.meta.env.DEV) console.log('[auto-sync] skipped: no user');
       return;
     }
 
     const canAutoSync = (): boolean => {
-      if (!isSupabaseConfigured) return false;
-      if (!navigator.onLine) return false;
-      if (isSyncInProgress()) return false;
-      if (!canAttemptNetwork()) return false;
-      return true;
+      return canStartOperationalSync({
+        isOnline: navigator.onLine,
+        authenticated: !!user,
+        syncEnabled: isSupabaseConfigured,
+        syncPaused,
+        networkAvailable: canAttemptNetwork(),
+        syncInProgress: isSyncInProgress(),
+      });
     };
 
     const shouldThrottle = (): boolean => {
@@ -50,7 +64,8 @@ export function useAutoSync() {
 
       if (!canAutoSync()) {
         if (import.meta.env.DEV) {
-          if (isSyncInProgress()) console.log('[auto-sync] skipped: sync in progress');
+          if (syncPaused) console.log('[auto-sync] skipped: synchronization paused');
+          else if (isSyncInProgress()) console.log('[auto-sync] skipped: sync in progress');
           else if (!navigator.onLine) console.log('[auto-sync] skipped: offline');
           else if (!canAttemptNetwork()) console.log('[auto-sync] skipped: network cooldown');
           else if (!isSupabaseConfigured) console.log('[auto-sync] skipped: supabase not configured');
@@ -92,7 +107,7 @@ export function useAutoSync() {
 
     intervalRef.current = setInterval(() => triggerAutoSync('interval'), AUTO_SYNC_INTERVAL_MS);
 
-    triggerAutoSync('mount');
+    triggerAutoSync(resumed ? 'sync-resumed' : 'mount');
 
     return () => {
       if (import.meta.env.DEV) console.log('[auto-sync] unmounted');
@@ -104,5 +119,5 @@ export function useAutoSync() {
         intervalRef.current = null;
       }
     };
-  }, [user, isOnline]);
+  }, [user, isOnline, syncPaused]);
 }

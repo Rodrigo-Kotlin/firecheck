@@ -1006,6 +1006,8 @@ input[type="checkbox"], input[type="radio"] {
 .status-pill--syncing  { background: #EFF6FF; color: #1D4ED8; border-color: #BFDBFE; }
 .status-pill--offline  { background: #FEF2F2; color: #991B1B; border-color: #FECACA; }
 .status-pill--offline:hover  { background: #FEE2E2; }
+.status-pill--paused   { background: #FFFBEB; color: #92400E; border-color: #FDE68A; }
+.status-pill--paused:hover   { background: #FEF3C7; }
 
 @media (max-width: 479px) {
   .status-pill {
@@ -1208,6 +1210,15 @@ input[type="checkbox"], input[type="radio"] {
   background: #F3F4F6;
   color: #6B7280;
   border-color: #E5E7EB;
+}
+.sync-now--paused {
+  background: #FFFBEB;
+  color: #92400E;
+  border-color: #FDE68A;
+}
+.sync-now--paused:disabled {
+  cursor: not-allowed;
+  opacity: 0.8;
 }
 .sync-now__sub {
   display: block;

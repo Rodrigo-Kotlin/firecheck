@@ -14,7 +14,7 @@ import { APP_NAME } from '../../config/brand';
 
 export default function AppLayout() {
   useAutoSync();
-  const { user, authReady, setCurrentTab, pending, syncing, syncEnabled, networkUnavailable, conflictCounts, triggerSync } = useAppStore();
+  const { user, config, authReady, setCurrentTab, pending, syncing, syncEnabled, networkUnavailable, conflictCounts, triggerSync } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -75,6 +75,10 @@ export default function AppLayout() {
     }
     if (!isOnline) {
       showToast({ kind: 'warning', title: 'Sem conexão', description: 'A sincronização será retomada quando você voltar a ficar online.', duration: 4000 });
+      return;
+    }
+    if (config.offlineMode) {
+      showToast({ kind: 'info', title: 'Sincronização pausada', description: 'Desative a pausa nas configurações para sincronizar.', duration: 4000 });
       return;
     }
     if (syncing) return;
@@ -165,7 +169,7 @@ export default function AppLayout() {
             )}
             {syncEnabled && (
               <div>
-                <SyncStatusBadge isOnline={isOnline} syncing={syncing} pending={pending} networkUnavailable={networkUnavailable} onClick={handleTriggerSync} />
+                <SyncStatusBadge isOnline={isOnline} syncing={syncing} pending={pending} syncPaused={config.offlineMode} networkUnavailable={networkUnavailable} onClick={handleTriggerSync} />
               </div>
             )}
             {(conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0 || conflictCounts.inspections > 0) && (

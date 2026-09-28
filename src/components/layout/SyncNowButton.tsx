@@ -1,9 +1,10 @@
-import { RefreshCw, WifiOff, Cloud } from 'lucide-react';
+import { RefreshCw, WifiOff, Cloud, CloudOff } from 'lucide-react';
 
 type SyncNowButtonProps = {
   isOnline: boolean;
   syncing: boolean;
   pending: number;
+  syncPaused: boolean;
   onClick: () => void;
 };
 
@@ -11,6 +12,7 @@ const variantClass = {
   syncing: 'sync-now--syncing',
   offline: 'sync-now--offline',
   pending: 'sync-now--pending',
+  paused: 'sync-now--paused',
   idle: '',
 };
 
@@ -18,10 +20,11 @@ const SyncIcon = {
   syncing: RefreshCw,
   offline: WifiOff,
   pending: RefreshCw,
+  paused: CloudOff,
   idle: Cloud,
 };
 
-export function SyncNowButton({ isOnline, syncing, pending, onClick }: SyncNowButtonProps) {
+export function SyncNowButton({ isOnline, syncing, pending, syncPaused, onClick }: SyncNowButtonProps) {
   let label: string;
   let variant: keyof typeof variantClass;
 
@@ -31,6 +34,9 @@ export function SyncNowButton({ isOnline, syncing, pending, onClick }: SyncNowBu
   } else if (!isOnline) {
     label = 'Sem conexão';
     variant = 'offline';
+  } else if (syncPaused) {
+    label = 'Sincronização pausada';
+    variant = 'paused';
   } else if (pending > 0) {
     label = 'Sincronizar agora';
     variant = 'pending';
@@ -45,9 +51,9 @@ export function SyncNowButton({ isOnline, syncing, pending, onClick }: SyncNowBu
     <button
       type="button"
       onClick={onClick}
-      disabled={!isOnline || syncing}
+      disabled={!isOnline || syncing || syncPaused}
       className={`sync-now ${variantClass[variant]}`}
-      title={!isOnline ? 'Aguardando conexão para sincronizar' : 'Enviar alterações para a nuvem'}
+      title={syncPaused ? 'Pausar sincronização está ativado' : !isOnline ? 'Aguardando conexão para sincronizar' : 'Enviar alterações para a nuvem'}
     >
       <Icon className={`sync-now__icon ${syncing ? 'animate-spin' : ''}`} />
       <span className="flex-1 text-left">{label}</span>

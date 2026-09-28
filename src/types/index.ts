@@ -35,8 +35,8 @@ export interface ActionPlan {
 export interface AppConfig {
   empresa: string;
   unidade: string;
+  /** Legacy persisted key; in the UI this means pause operational sync. */
   offlineMode: boolean;
-  notificationsEnabled: boolean;
 }
 
 export interface Equipment {

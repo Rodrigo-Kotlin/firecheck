@@ -17,7 +17,7 @@ type SidebarProps = {
 };
 
 export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
-  const { user, syncEnabled, syncing, pending, conflictCounts, triggerSync, logout } = useAppStore();
+  const { user, config, syncEnabled, syncing, pending, conflictCounts, triggerSync, logout } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -50,6 +50,15 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
         kind: 'warning',
         title: 'Sem conexão',
         description: 'A sincronização será retomada quando você voltar a ficar online.',
+        duration: 4000,
+      });
+      return;
+    }
+    if (config.offlineMode) {
+      showToast({
+        kind: 'info',
+        title: 'Sincronização pausada',
+        description: 'Desative a pausa nas configurações para sincronizar.',
         duration: 4000,
       });
       return;
@@ -155,6 +164,7 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
                 isOnline={isOnline}
                 syncing={syncing}
                 pending={pending}
+                syncPaused={config.offlineMode}
                 onClick={handleTriggerSync}
               />
             </div>

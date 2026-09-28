@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   LogOut,
   Building2,
-  Bell,
   Shield,
   RefreshCw,
   Save,
@@ -161,11 +160,12 @@ function formatRelative(timestamp: number | null): string {
 
 function getSyncBadge(args: {
   syncEnabled: boolean;
+  syncPaused: boolean;
   syncing: boolean;
   pending: number;
   lastSyncAt: number | null;
 }): SyncBadge {
-  const { syncEnabled, syncing, pending, lastSyncAt } = args;
+  const { syncEnabled, syncPaused, syncing, pending, lastSyncAt } = args;
   if (!syncEnabled) {
     return {
       label: 'Sincronização desabilitada',
@@ -180,6 +180,14 @@ function getSyncBadge(args: {
       detail: 'Enviando alterações para a nuvem.',
       dotClass: 'bg-blue-500 animate-pulse',
       Icon: RefreshCw,
+    };
+  }
+  if (syncPaused) {
+    return {
+      label: 'Sincronização pausada',
+      detail: 'As alterações pendentes serão enviadas quando a pausa for desativada.',
+      dotClass: 'bg-amber-500',
+      Icon: CloudOff,
     };
   }
   if (pending > 0) {
@@ -404,6 +412,15 @@ export default function Configuracoes() {
 
   const handleSync = async () => {
     if (!syncEnabled || syncing) return;
+    if (config.offlineMode) {
+      showToast({
+        kind: 'info',
+        title: 'Sincronização pausada',
+        description: 'Desative a pausa nas configurações para sincronizar.',
+        duration: 4000,
+      });
+      return;
+    }
     try {
       await triggerSync();
       showToast({
@@ -456,7 +473,7 @@ export default function Configuracoes() {
     }
   };
 
-  const syncBadge = getSyncBadge({ syncEnabled, syncing, pending, lastSyncAt });
+  const syncBadge = getSyncBadge({ syncEnabled, syncPaused: config.offlineMode, syncing, pending, lastSyncAt });
   const SyncBadgeIcon = syncBadge.Icon;
 
   return (
@@ -596,7 +613,7 @@ export default function Configuracoes() {
 
           {/* 02 — Preferências do aplicativo */}
           <Section
-            icon={Bell}
+            icon={CloudOff}
             index={2}
             title="Preferências do Aplicativo"
             description="Comportamento do app no dispositivo."
@@ -604,44 +621,27 @@ export default function Configuracoes() {
             <div className="divide-y divide-gray-100">
               <ToggleRow
                 icon={config.offlineMode ? CloudOff : Cloud}
-                title="Modo Offline"
+                title="Pausar sincronização"
                 description={
                   config.offlineMode
-                    ? 'Alterações ficam apenas no dispositivo até sincronizar.'
-                    : 'Sincronização ativa com a nuvem.'
+                    ? 'Mantenha os dados somente neste dispositivo até reativar a sincronização.'
+                    : 'Interrompe temporariamente a sincronização; as alterações continuam salvas neste dispositivo.'
                 }
                 status={config.offlineMode}
                 onToggle={() => {
                   updateConfig({ offlineMode: !config.offlineMode });
                   showToast({
                     kind: 'info',
-                    title: config.offlineMode ? 'Modo online' : 'Modo offline',
+                    title: config.offlineMode ? 'Sincronização reativada' : 'Sincronização pausada',
                     description: config.offlineMode
-                      ? 'Sincronização reativada.'
-                      : 'Dados serão salvos localmente.',
+                      ? 'Uma sincronização será solicitada quando houver conexão.'
+                      : 'As alterações pendentes serão sincronizadas quando a pausa for desativada.',
                   });
                 }}
               />
-              <ToggleRow
-                icon={Bell}
-                title="Notificações"
-                description={
-                  config.notificationsEnabled
-                    ? 'Lembretes de inspeção ativos.'
-                    : 'Notificações desativadas.'
-                }
-                status={config.notificationsEnabled}
-                onToggle={() => {
-                  updateConfig({ notificationsEnabled: !config.notificationsEnabled });
-                  showToast({
-                    kind: 'info',
-                    title: config.notificationsEnabled ? 'Notificações desativadas' : 'Notificações ativadas',
-                    description: config.notificationsEnabled
-                      ? 'Você não receberá lembretes.'
-                      : 'Lembretes de inspeção ativos.',
-                  });
-                }}
-              />
+              <p className="px-2 text-[11px] text-gray-400 font-medium leading-snug">
+                O EfetivaFire continua funcionando offline e grava as alterações localmente.
+              </p>
             </div>
           </Section>
 
@@ -653,7 +653,7 @@ export default function Configuracoes() {
             description="Status e ações de envio para a nuvem."
           >
             {/* Status row */}
-            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-100" role="status" aria-live="polite">
               <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${syncBadge.dotClass}`} />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-bold text-gray-800">{syncBadge.label}</div>
@@ -688,7 +688,7 @@ export default function Configuracoes() {
             <button
               type="button"
               onClick={handleSync}
-              disabled={!syncEnabled || syncing}
+              disabled={!syncEnabled || syncing || config.offlineMode}
               className="btn-ghost"
             >
               {syncing ? (

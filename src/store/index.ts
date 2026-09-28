@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus } from '../types';
 import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan, type LocalInspectionPhoto } from '../db';
-import { syncAll, pendingSyncCount, conflictCount } from '../services/sync';
+import { syncAll, pendingSyncCount, conflictCount, isSyncInProgress } from '../services/sync';
 import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById } from '../services/equipmentService';
 import { carregarInspecoes, fetchInspectionById, updateInspectionRemote, recalculateEquipmentFromLatestInspectionRemote } from '../services/inspectionService';
 import { carregarPlanosDeAcao, fetchActionPlanById, updateActionPlanRemote } from '../services/actionPlanService';
@@ -12,7 +12,8 @@ import { getLatestInspectionForEquipment } from '../utils/equipmentFilters';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { canAttemptNetwork, ensureNetworkListeners } from '../services/networkState';
 import { APP_COMPANY } from '../config/brand';
-import { partializeAppState } from './persistence';
+import { normalizePersistedConfig, partializeAppState } from './persistence';
+import { canStartOperationalSync } from '../services/syncPolicy';
 import {
   loginUser,
   resolveSession,
@@ -240,7 +241,20 @@ export const useAppStore = create<AppState>()(
       };
 
       const runSync = async (): Promise<void> => {
-        if (!isSupabaseConfigured) return;
+        const syncAllowed = canStartOperationalSync({
+          isOnline: typeof navigator === 'undefined' || navigator.onLine,
+          authenticated: !!get().user,
+          syncEnabled: isSupabaseConfigured,
+          syncPaused: get().config.offlineMode,
+          networkAvailable: canAttemptNetwork(),
+          syncInProgress: get().syncing || isSyncInProgress(),
+        });
+        if (!syncAllowed) {
+          if (get().config.offlineMode || !isSupabaseConfigured || !canAttemptNetwork()) {
+            await get().refreshPendingCount();
+          }
+          return;
+        }
         if (!canAttemptNetwork()) {
           await get().refreshPendingCount();
           return;
@@ -312,8 +326,7 @@ export const useAppStore = create<AppState>()(
         config: {
            empresa: APP_COMPANY,
            unidade: '',
-          offlineMode: false,
-          notificationsEnabled: true,
+           offlineMode: false,
         },
         currentTab: 'dashboard',
         users: [],
@@ -1355,36 +1368,24 @@ export const useAppStore = create<AppState>()(
     },
     {
       name: 'firecheck-storage',
-      version: 3,
+       version: 4,
       // Persist only the small/user-scoped data. Equipments, inspections &
       // action plans now live in Dexie and are loaded via `hydrate()`.
       // `user` is no longer persisted — it is re-derived on each launch from
       // the Supabase session + the `profiles` table (see `resolveSession`).
       partialize: partializeAppState,
       migrate: (persistedState, version) => {
-        const base = (persistedState && typeof persistedState === 'object'
-          ? persistedState
-          : {}) as { config?: AppConfig; user?: unknown };
-        if (version < 2) {
-          const { user: _drop, ...rest } = base;
-          void _drop;
+          const base = (persistedState && typeof persistedState === 'object'
+            ? persistedState
+            : {}) as { config?: unknown; user?: unknown };
+          void version;
           return {
-            config: rest.config ?? {
-               empresa: APP_COMPANY,
-               unidade: '',
+            config: normalizePersistedConfig(base.config, {
+              empresa: APP_COMPANY,
+              unidade: '',
               offlineMode: false,
-              notificationsEnabled: true,
-            },
+            }),
           };
-        }
-        return {
-          config: base.config ?? {
-             empresa: APP_COMPANY,
-             unidade: '',
-            offlineMode: false,
-            notificationsEnabled: true,
-          },
-        };
       },
     }
   )

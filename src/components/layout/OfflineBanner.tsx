@@ -15,10 +15,10 @@ export function OfflineBanner({ pending, variant }: OfflineBannerProps) {
     <div className={containerClass[variant]} role="status" aria-live="polite">
       <WifiOff className="offline-banner__icon" />
       <div className="offline-banner__body">
-        <div className="offline-banner__title">Modo Offline</div>
+        <div className="offline-banner__title">Sem conexão</div>
         {variant === 'desktop' && (
           <div className="offline-banner__sub">
-            Suas alterações estão sendo salvas localmente. Sincronizamos automaticamente ao reconectar.
+            Sem conexão com o servidor. Suas alterações continuam sendo salvas localmente e serão sincronizadas ao reconectar.
           </div>
         )}
       </div>
