@@ -15,13 +15,6 @@ import { canAttemptNetwork } from './networkState';
 //   do projeto: `signInWithOtp` → `verifyOtp` → `updateUser({ password })`.
 // ---------------------------------------------------------------------------
 
-export interface RegisterInput {
-  email: string;
-  password: string;
-  nome: string;
-  cargo: string;
-}
-
 export interface LoginInput {
   email: string;
   password: string;
@@ -54,14 +47,6 @@ export function checkPasswordPolicy(password: string): PasswordCheck {
     return { ok: false, reason: 'A senha deve conter ao menos um número.' };
   }
   return { ok: true };
-}
-
-export function isValidNome(nome: string): boolean {
-  return nome.trim().length >= 3;
-}
-
-export function isValidCargo(cargo: string): boolean {
-  return cargo.trim().length >= 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,10 +89,7 @@ export function getPasswordStrength(password: string): {
 
 export type AuthErrorCode =
   | 'EMAIL_INVALID'
-  | 'EMAIL_TAKEN'
   | 'PASSWORD_WEAK'
-  | 'NOME_INVALID'
-  | 'CARGO_INVALID'
   | 'CREDENTIALS_INVALID'
   | 'NETWORK'
   | 'NOT_CONFIGURED'
@@ -119,6 +101,9 @@ export type AuthErrorCode =
 export interface AuthError extends Error {
   code: AuthErrorCode;
 }
+
+export const PASSWORD_RECOVERY_NEUTRAL_MESSAGE =
+  'Se existir uma conta para este e-mail, enviaremos as instruções.';
 
 export function authError(code: AuthErrorCode, message: string): AuthError {
   const err = new Error(message) as AuthError;
@@ -137,18 +122,10 @@ export function isAuthError(err: unknown): err is AuthError {
 
 function mapSupabaseError(err: SupabaseAuthError | { message: string }): AuthError {
   const msg = (err.message || '').toLowerCase();
-  if (msg.includes('user already registered') || msg.includes('already been registered')) {
-    return authError('EMAIL_TAKEN', 'Já existe uma conta com este e-mail.');
-  }
   if (msg.includes('invalid login credentials') || msg.includes('invalid credentials')) {
     return authError('CREDENTIALS_INVALID', 'E-mail ou senha incorretos.');
   }
-  if (msg.includes('email not confirmed')) {
-    return authError(
-      'CREDENTIALS_INVALID',
-      'Confirme seu e-mail antes de entrar (verifique a caixa de entrada).',
-    );
-  }
+  if (msg.includes('email not confirmed')) return authError('CREDENTIALS_INVALID', 'E-mail ou senha incorretos.');
   if (msg.includes('otp') && (msg.includes('expired') || msg.includes('invalid'))) {
     return msg.includes('expired')
       ? authError('OTP_EXPIRED', 'Código expirado. Solicite um novo.')
@@ -232,56 +209,6 @@ async function fetchOwnProfile(): Promise<UserProfile | null> {
 // Public API — Auth
 // ---------------------------------------------------------------------------
 
-export async function registerUser(input: RegisterInput): Promise<Inspector> {
-  if (!supabase) {
-    throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
-  }
-  const email = normalizeEmail(input.email);
-  if (!isValidEmail(email)) {
-    throw authError('EMAIL_INVALID', 'Informe um e-mail válido.');
-  }
-  if (!isValidNome(input.nome)) {
-    throw authError('NOME_INVALID', 'Informe seu nome completo.');
-  }
-  if (!isValidCargo(input.cargo)) {
-    throw authError('CARGO_INVALID', 'Informe seu cargo.');
-  }
-  const policy = checkPasswordPolicy(input.password);
-  if (policy.ok === false) {
-    throw authError('PASSWORD_WEAK', policy.reason);
-  }
-
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password: input.password,
-    options: {
-      data: { nome: input.nome.trim(), cargo: input.cargo.trim() },
-    },
-  });
-  if (error) throw mapSupabaseError(error);
-  if (!data.user) {
-    throw authError('UNKNOWN', 'Cadastro não retornou um usuário.');
-  }
-
-  // Trigger `handle_new_user` cria a linha em `public.profiles`. Pode haver
-  // um pequeno delay até o SELECT enxergar a linha; fazemos 1 retry rápido.
-  let profile = await fetchOwnProfile();
-  for (let attempt = 0; !profile && attempt < 3; attempt++) {
-    await new Promise((r) => setTimeout(r, 250));
-    profile = await fetchOwnProfile();
-  }
-  if (!profile) {
-    // Fallback mínimo: monta Inspector a partir dos metadados do user.
-    return {
-      id: data.user.id,
-      nome: input.nome.trim(),
-      cargo: input.cargo.trim(),
-      role: 'inspector',
-    };
-  }
-  return toInspector(profile);
-}
-
 export async function loginUser(input: LoginInput): Promise<Inspector> {
   if (!supabase) {
     throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
@@ -341,7 +268,11 @@ export async function requestPasswordRecovery(email: string): Promise<void> {
     email: normalized,
     options: { shouldCreateUser: false },
   });
-  if (error) throw mapSupabaseError(error);
+  if (error) {
+    const mapped = mapSupabaseError(error);
+    if (mapped.code === 'RATE_LIMITED' || mapped.code === 'NETWORK') throw mapped;
+    throw authError('UNKNOWN', PASSWORD_RECOVERY_NEUTRAL_MESSAGE);
+  }
 }
 
 /** Etapa 2: verifica o código e devolve o e-mail em caso de sucesso. */

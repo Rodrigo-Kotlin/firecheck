@@ -161,15 +161,6 @@ export default function Login() {
             </button>
           </form>
 
-          <p className="text-center text-[11px] text-gray-400 mt-5">
-            Ainda não tem conta?{' '}
-            <Link
-              to="/cadastro"
-              className="text-primary font-black uppercase tracking-wider hover:underline"
-            >
-              Criar conta
-            </Link>
-          </p>
         </div>
 
         <p className="text-center text-[11px] text-gray-400 mt-6">

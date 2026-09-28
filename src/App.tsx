@@ -1,6 +1,5 @@
 import { useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import Cadastro from './pages/login/Cadastro';
 import RecuperarSenha from './pages/login/RecuperarSenha';
 import RedefinirSenha from './pages/login/RedefinirSenha';
 import AppLayout from './components/layout/AppLayout';
@@ -8,6 +7,7 @@ import Toaster from './components/Toaster';
 import { usePwaUpdate } from './hooks/usePwaUpdate';
 import { useAppStore } from './store';
 import { AdminRoute, ProtectedRoute } from './components/auth/RouteGuards';
+import AppErrorBoundary from './components/ErrorBoundary';
 
 const Login = lazy(() => import('./pages/login/Login'));
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'));
@@ -64,11 +64,12 @@ export default function App() {
   usePwaUpdate();
 
   return (
-    <Router>
-      <Suspense fallback={<LoadingSpinner />}>
-        <Routes>
+    <AppErrorBoundary>
+      <Router>
+        <Suspense fallback={<LoadingSpinner />}>
+          <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/cadastro" element={<Cadastro />} />
+          <Route path="/cadastro" element={<Navigate to="/login" replace />} />
           <Route path="/recuperar-senha" element={<RecuperarSenha />} />
           <Route path="/redefinir-senha" element={<RedefinirSenha />} />
 
@@ -120,9 +121,10 @@ export default function App() {
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
-      <Toaster />
-    </Router>
+          </Routes>
+        </Suspense>
+        <Toaster />
+      </Router>
+    </AppErrorBoundary>
   );
 }

@@ -7,14 +7,14 @@ import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, upd
 import { carregarInspecoes, fetchInspectionById, updateInspectionRemote, recalculateEquipmentFromLatestInspectionRemote } from '../services/inspectionService';
 import { carregarPlanosDeAcao, fetchActionPlanById, updateActionPlanRemote } from '../services/actionPlanService';
 import { stripActionPlanSyncMeta } from '../services/mappers';
-import { canViewInspection, canEditInspection, canDeleteInspection } from '../services/permissions';
+import { canViewInspection, canEditInspection, canDeleteInspection, canManageUsers } from '../services/permissions';
 import { getLatestInspectionForEquipment } from '../utils/equipmentFilters';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { canAttemptNetwork, ensureNetworkListeners } from '../services/networkState';
 import { APP_COMPANY } from '../config/brand';
+import { partializeAppState } from './persistence';
 import {
   loginUser,
-  registerUser,
   resolveSession,
   logoutUser,
   listUsers,
@@ -140,11 +140,11 @@ function recomputeStats(eqs: Equipment[]): Stats {
 
 
 
-interface AppState {
+export interface AppState {
   user: Inspector | null;
   /** True after the first auth resolution has run (session check + orphan cleanup). */
   authReady: boolean;
-  /** True while a login/register request is in flight. */
+  /** True while a login request is in flight. */
   authLoading: boolean;
   equipments: Equipment[];
   inspections: Inspection[];
@@ -177,7 +177,6 @@ interface AppState {
   resolveInspectionConflictKeepLocal: (id: string) => Promise<void>;
   resolveInspectionConflictUseRemote: (id: string) => Promise<void>;
   login: (email: string, pass: string) => Promise<void>;
-  register: (input: { email: string; password: string; nome: string; cargo: string }) => Promise<void>;
   logout: () => Promise<void>;
   setCurrentTab: (tab: Tab) => void;
   addInspection: (data: {
@@ -342,19 +341,9 @@ export const useAppStore = create<AppState>()(
             throw err as AuthError;
           }
         },
-        register: async (input) => {
-          set({ authLoading: true });
-          try {
-            const user = await registerUser(input);
-            set({ user, authLoading: false });
-          } catch (err) {
-            set({ authLoading: false });
-            throw err as AuthError;
-          }
-        },
         logout: async () => {
           await logoutUser();
-          set({ user: null });
+          set({ user: null, users: [], usersLoading: false });
         },
         setCurrentTab: (tab) => set({ currentTab: tab }),
         updateConfig: (updates) =>
@@ -368,8 +357,6 @@ export const useAppStore = create<AppState>()(
         hydrate: async () => {
           const sessionUser = await resolveSession();
           const isOnline = canAttemptNetwork();
-          const allUsers = isOnline ? await listUsers() : get().users;
-
           ensureNetworkListeners();
 
           // Migrar planos legados do localStorage para Dexie (uma única vez)
@@ -387,7 +374,7 @@ export const useAppStore = create<AppState>()(
             actionPlans: loadedPlans,
             stats: recomputeStats(loadedEqs),
             user: sessionUser ?? get().user,
-            users: allUsers,
+            users: [],
             authReady: true,
           });
 
@@ -1333,6 +1320,10 @@ export const useAppStore = create<AppState>()(
         // User management (admin only — enforcement is at the call site)
         // -----------------------------------------------------------------
         loadUsers: async () => {
+          if (!canManageUsers(get().user)) {
+            set({ users: [], usersLoading: false });
+            return;
+          }
           set({ usersLoading: true });
           try {
             const users = await listUsers();
@@ -1344,12 +1335,14 @@ export const useAppStore = create<AppState>()(
         },
 
         setUserRole: async (id, role) => {
+          if (!canManageUsers(get().user)) throw new Error('Apenas administradores podem gerenciar usuários.');
           await setUserRole(id, role);
           const users = await listUsers();
           set({ users });
         },
 
         deleteUserAccount: async (id) => {
+          if (!canManageUsers(get().user)) throw new Error('Apenas administradores podem gerenciar usuários.');
           const current = get().user;
           if (current?.id === id) {
             throw new Error('Você não pode excluir a própria conta por aqui.');
@@ -1367,10 +1360,7 @@ export const useAppStore = create<AppState>()(
       // action plans now live in Dexie and are loaded via `hydrate()`.
       // `user` is no longer persisted — it is re-derived on each launch from
       // the Supabase session + the `profiles` table (see `resolveSession`).
-      partialize: (state) => ({
-        config: state.config,
-        users: state.users,
-      }),
+      partialize: partializeAppState,
       migrate: (persistedState, version) => {
         const base = (persistedState && typeof persistedState === 'object'
           ? persistedState
@@ -1416,7 +1406,7 @@ if (typeof window !== 'undefined' && supabase) {
           if (event === 'SIGNED_IN') void store.triggerSync();
         }
       } else if (event === 'SIGNED_OUT') {
-        useAppStore.setState({ user: null, authReady: true });
+        useAppStore.setState({ user: null, users: [], usersLoading: false, authReady: true });
       } else if (event === 'PASSWORD_RECOVERY') {
         // O usuário está no fluxo de recovery; o componente que chamou
         // verifyOtp já cuida da próxima etapa.
