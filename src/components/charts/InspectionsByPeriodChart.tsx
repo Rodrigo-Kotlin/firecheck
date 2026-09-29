@@ -14,11 +14,10 @@ interface InspectionsByPeriodChartProps {
   title: string;
   description: string;
   period: '30d' | '90d' | '6m' | '12m';
-  onSelectPeriod?: (periodKey: string) => void;
   onSelectStatus?: (status: 'regular' | 'observacao' | 'pendente' | 'vencido') => void;
 }
 
-export default function InspectionsByPeriodChart({ data, title, description, period, onSelectPeriod, onSelectStatus }: InspectionsByPeriodChartProps) {
+export default function InspectionsByPeriodChart({ data, title, description, period, onSelectStatus }: InspectionsByPeriodChartProps) {
   const total = data.reduce((sum, item) => sum + item.total, 0);
 
   if (total === 0) {
@@ -128,15 +127,6 @@ export default function InspectionsByPeriodChart({ data, title, description, per
           </button>
         ))}
       </div>
-      {onSelectPeriod && (
-        <div className="mt-1.5 flex flex-wrap gap-1 text-[10px]">
-          {data.filter(item => item.total > 0).map(item => (
-            <button key={item.periodKey ?? item.period} type="button" onClick={() => item.periodKey && onSelectPeriod(item.periodKey)} className="text-gray-500 hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded px-1">
-              {item.period}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

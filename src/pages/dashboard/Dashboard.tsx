@@ -529,10 +529,6 @@ export default function Dashboard() {
               title="Inspeções por Período"
               description="Volume de inspeções realizadas agrupadas por resultado"
               period={chartPeriod}
-              onSelectPeriod={() => {
-                const range = getControlCenterPeriodRange(todayYmd, chartPeriod);
-                navigate(withControlCenterParams('/relatorios', filters, { from: range.startYmd, to: range.endYmd }));
-              }}
               onSelectStatus={status => {
                 const range = getControlCenterPeriodRange(todayYmd, chartPeriod);
                 navigate(withControlCenterParams('/relatorios', filters, { from: range.startYmd, to: range.endYmd, status }));
