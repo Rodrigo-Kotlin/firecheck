@@ -1,6 +1,7 @@
 import type { EquipmentStatus } from '../../types';
 
 export type ChecklistValue = 'OK' | 'ATENCAO' | 'REPROVADO' | 'N.A.';
+export type InspectionResult = 'regular' | 'observacao' | 'vencido';
 
 export interface InspectionPhotoPayload {
   blob: Blob;
@@ -38,27 +39,36 @@ export function buildInspectionPayload(input: InspectionPayloadInput) {
 
 export function deriveInspectionStatus(
   checklist: Record<string, ChecklistValue>,
-  validadeDate: string,
-  now = new Date(),
-): EquipmentStatus {
-  let finalStatus: EquipmentStatus = 'regular';
+  validadeDate?: string,
+): InspectionResult {
+  // Keep the deadline argument for call-site compatibility, but never mix it
+  // with the inspection result.
+  void validadeDate;
   const values = Object.values(checklist);
   const hasReprovado = values.some((val) => val === 'REPROVADO');
   const hasAtencao = values.some((val) => val === 'ATENCAO');
 
   if (hasReprovado) {
-    finalStatus = 'vencido';
-  } else if (hasAtencao) {
-    finalStatus = 'pendente';
-  } else if (validadeDate) {
-    const expDate = new Date(validadeDate);
-    const diffDays = Math.ceil((expDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-    if (diffDays <= 7) {
-      finalStatus = 'vencido';
-    } else if (diffDays <= 30) {
-      finalStatus = 'observacao';
-    }
+    // `vencido` is the existing persisted value used for non-conforming results.
+    return 'vencido';
   }
 
-  return finalStatus;
+  if (hasAtencao) return 'observacao';
+
+  // The next inspection date is a deadline, not the inspection result.
+  return 'regular';
+}
+
+export function validateInspectionResult(
+  checklist: Record<string, ChecklistValue>,
+  result: InspectionResult,
+): string | null {
+  const values = Object.values(checklist);
+  if (values.includes('REPROVADO') && result !== 'vencido') {
+    return 'Itens reprovados exigem o resultado Não conforme.';
+  }
+  if (values.includes('ATENCAO') && result === 'regular') {
+    return 'Itens em atenção exigem o resultado Em observação ou Não conforme.';
+  }
+  return null;
 }

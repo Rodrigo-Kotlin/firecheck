@@ -1,20 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { buildInspectionPayload, deriveInspectionStatus } from './inspectionWorkflow';
+import { buildInspectionPayload, deriveInspectionStatus, validateInspectionResult } from './inspectionWorkflow';
 
 describe('inspection workflow status', () => {
   it('prioritizes failed checklist items', () => {
     expect(deriveInspectionStatus({ a: 'ATENCAO', b: 'REPROVADO' }, '2099-01-01')).toBe('vencido');
   });
 
-  it('returns pending when attention is the highest checklist result', () => {
-    expect(deriveInspectionStatus({ a: 'OK', b: 'ATENCAO' }, '2099-01-01')).toBe('pendente');
+  it('returns observation when attention is the highest checklist result', () => {
+    expect(deriveInspectionStatus({ a: 'OK', b: 'ATENCAO' }, '2099-01-01')).toBe('observacao');
   });
 
-  it('derives deadline status only when checklist is regular', () => {
-    const now = new Date('2026-09-28T12:00:00.000Z');
-    expect(deriveInspectionStatus({ a: 'OK' }, '2026-10-02', now)).toBe('vencido');
-    expect(deriveInspectionStatus({ a: 'OK' }, '2026-10-20', now)).toBe('observacao');
-    expect(deriveInspectionStatus({ a: 'OK' }, '2026-12-31', now)).toBe('regular');
+  it.each(['2026-10-28', '2026-12-31'])('returns regular for a checklist with only OK/N.A. regardless of deadline (%s)', (nextDate) => {
+    expect(deriveInspectionStatus({ a: 'OK', b: 'N.A.' }, nextDate)).toBe('regular');
+  });
+
+  it('returns non-conforming legacy status for a failed checklist', () => {
+    expect(deriveInspectionStatus({ a: 'REPROVADO' }, '2099-01-01')).toBe('vencido');
+  });
+
+  it('allows an explicit observation override for an otherwise regular checklist', () => {
+    expect(validateInspectionResult({ a: 'OK', b: 'N.A.' }, 'observacao')).toBeNull();
+  });
+
+  it('rejects a conforming result when the checklist has attention', () => {
+    expect(validateInspectionResult({ a: 'ATENCAO' }, 'regular')).toContain('Em observação');
+  });
+
+  it('rejects a conforming result when the checklist has a failed item', () => {
+    expect(validateInspectionResult({ a: 'REPROVADO' }, 'regular')).toContain('Não conforme');
   });
 
   it('builds the same persisted inspection fields, including photo and identity', () => {

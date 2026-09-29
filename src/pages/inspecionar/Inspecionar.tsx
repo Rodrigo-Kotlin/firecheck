@@ -28,7 +28,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
-import { buildInspectionPayload, deriveInspectionStatus, type ChecklistValue } from './inspectionWorkflow';
+import { buildInspectionPayload, deriveInspectionStatus, validateInspectionResult, type ChecklistValue, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
 import {
   createPreviewUrl,
@@ -152,6 +152,36 @@ const EQUIPMENT_STATUS_CONFIGS: Record<
     icon: XCircle,
   },
 };
+
+const INSPECTION_RESULT_OPTIONS: Array<{
+  value: InspectionResult;
+  label: string;
+  description: string;
+  selectedClass: string;
+  icon: LucideIcon;
+}> = [
+  {
+    value: 'regular',
+    label: 'Conforme',
+    description: 'Todos os itens estão OK ou N.A.',
+    selectedClass: 'border-success bg-green-50 text-success',
+    icon: CheckCircle2,
+  },
+  {
+    value: 'observacao',
+    label: 'Em observação',
+    description: 'Há pelo menos um item que exige atenção.',
+    selectedClass: 'border-pending bg-amber-50 text-pending',
+    icon: AlertTriangle,
+  },
+  {
+    value: 'vencido',
+    label: 'Não conforme',
+    description: 'Há pelo menos um item reprovado.',
+    selectedClass: 'border-critical bg-red-50 text-critical',
+    icon: XCircle,
+  },
+];
 
 // ---------------------------------------------------------------------------
 // PhotoCapture — capture / preview / replace / remove flow for inspection
@@ -468,6 +498,7 @@ export default function Inspecionar() {
 
   const [eqId, setEqId] = useState(preSelectedId || '');
   const [checklist, setChecklist] = useState<Record<string, ChecklistValue>>({});
+  const [inspectionResult, setInspectionResult] = useState<InspectionResult>('regular');
   const [validadeDate, setValidadeDate] = useState('');
   const [observacoes, setObservacoes] = useState('');
   const [photoDraft, setPhotoDraft] = useState<PhotoDraft | null>(null);
@@ -535,6 +566,7 @@ export default function Inspecionar() {
       checklistItems.forEach((item) => { initial[item] = 'OK'; });
       setChecklist(initial);
     }
+    setInspectionResult('regular');
   }
 
   // Set a default expiration date on first render only.
@@ -554,6 +586,15 @@ export default function Inspecionar() {
     });
     return counts;
   }, [checklist]);
+
+  const hasReprovado = checklistCounts.REPROVADO > 0;
+  const hasAtencao = checklistCounts.ATENCAO > 0;
+
+  const handleChecklistChange = (item: string, value: ChecklistValue) => {
+    const nextChecklist = { ...checklist, [item]: value };
+    setChecklist(nextChecklist);
+    setInspectionResult(deriveInspectionStatus(nextChecklist, validadeDate));
+  };
 
   const handleFinalize = async (e: FormEvent) => {
     e.preventDefault();
@@ -576,6 +617,12 @@ export default function Inspecionar() {
       return;
     }
 
+    const resultValidationError = validateInspectionResult(checklist, inspectionResult);
+    if (resultValidationError) {
+      setErrorMsg(resultValidationError);
+      return;
+    }
+
     submitLockRef.current = true;
 
     // IDENTIDADE DA TENTATIVA — gerada UMA vez por tentativa. Retry da mesma
@@ -588,7 +635,7 @@ export default function Inspecionar() {
       console.log(`[inspection-submit] accepted ${submissionIdRef.current}`);
     }
 
-    const finalStatus: EquipmentStatus = deriveInspectionStatus(checklist, validadeDate);
+    const finalStatus: EquipmentStatus = inspectionResult;
 
     setIsSaving(true);
     setErrorMsg('');
@@ -649,6 +696,7 @@ export default function Inspecionar() {
     setSuccess(false);
     setErrorMsg('');
     setIsSaving(false);
+    setInspectionResult('regular');
     setObservacoes('');
     setPhotoDraft(null);
     setPhotoProcessing(false);
@@ -797,13 +845,55 @@ export default function Inspecionar() {
               items={checklistItems}
               values={checklist}
               counts={checklistCounts}
-              onChange={(item, value) => setChecklist((prev) => ({ ...prev, [item]: value }))}
+              onChange={handleChecklistChange}
             />
           )}
 
           {/* Date, photo and observations — only when equipment is selected */}
           {selectedEquipment && (
             <>
+              <fieldset className="card-subtle bg-white space-y-3" aria-describedby="inspection-result-help">
+                <legend className="field-label flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4" />
+                  Resultado da inspeção
+                </legend>
+                <p id="inspection-result-help" className="text-xs text-gray-500">
+                  Sugestão baseada no checklist. Você pode escolher Em observação para registrar uma observação técnica adicional.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {INSPECTION_RESULT_OPTIONS.map((option) => {
+                    const Icon = option.icon;
+                    const isSelected = inspectionResult === option.value;
+                    const disabled = hasReprovado
+                      ? option.value !== 'vencido'
+                      : hasAtencao && option.value === 'regular';
+                    return (
+                      <label
+                        key={option.value}
+                        className={`flex items-start gap-2 min-h-16 rounded-lg border p-3 transition-colors ${
+                          isSelected ? option.selectedClass : 'border-gray-200 bg-white text-gray-600'
+                        } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-primary'}`}
+                      >
+                        <input
+                          type="radio"
+                          name="inspection-result"
+                          value={option.value}
+                          checked={isSelected}
+                          disabled={disabled}
+                          onChange={() => setInspectionResult(option.value)}
+                          className="sr-only"
+                        />
+                        <Icon className="w-4 h-4 mt-0.5 flex-shrink-0" aria-hidden="true" />
+                        <span>
+                          <span className="block text-sm font-bold">{option.label}</span>
+                          <span className="block text-[10px] leading-snug mt-0.5 opacity-80">{option.description}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+
               {/* Inspector */}
               <div className="card-subtle bg-white space-y-2">
                 <label htmlFor="inspectorName" className="field-label flex items-center gap-1.5">
