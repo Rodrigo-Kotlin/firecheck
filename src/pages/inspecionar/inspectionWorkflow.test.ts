@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getInspectionResultPresentation, isChecklistComplete, validateInspectionResult } from './inspectionWorkflow';
+import { buildInspectionNotes, buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateDeviationDescription, validateInspectionResult } from './inspectionWorkflow';
 
 describe('inspection workflow status', () => {
   it('prioritizes failed checklist items', () => {
@@ -107,5 +107,80 @@ describe('inspection workflow status', () => {
   it('uses final result labels only when the checklist is complete', () => {
     const progress = getChecklistProgress(['a'], { a: 'REPROVADO' });
     expect(getInspectionResultPresentation(progress, 'vencido')).toEqual({ label: 'Não conforme', state: 'final' });
+  });
+
+  it('detects deviations in checklist order and keeps their severity distinct', () => {
+    const deviations = getInspectionDeviations(
+      ['Acesso', 'Lacre', 'Sinalização', 'Carga'],
+      { Acesso: 'OK', Lacre: 'REPROVADO', Sinalização: 'ATENCAO', Carga: 'N.A.' },
+    );
+    expect(deviations).toEqual([
+      { item: 'Lacre', severity: 'nonconformity', description: '' },
+      { item: 'Sinalização', severity: 'warning', description: '' },
+    ]);
+  });
+
+  it('preserves a description when a deviation changes severity', () => {
+    const descriptions = { Lacre: 'Lacre rompido', Manômetro: 'Ponteiro no limite' };
+    expect(getInspectionDeviations(['Lacre', 'Manômetro'], { Lacre: 'ATENCAO', Manômetro: 'REPROVADO' }, descriptions)).toEqual([
+      { item: 'Lacre', severity: 'warning', description: 'Lacre rompido' },
+      { item: 'Manômetro', severity: 'nonconformity', description: 'Ponteiro no limite' },
+    ]);
+    expect(getInspectionDeviations(['Lacre', 'Manômetro'], { Lacre: 'REPROVADO', Manômetro: 'ATENCAO' }, descriptions)).toEqual([
+      { item: 'Lacre', severity: 'nonconformity', description: 'Lacre rompido' },
+      { item: 'Manômetro', severity: 'warning', description: 'Ponteiro no limite' },
+    ]);
+    expect(getInspectionDeviations(['Lacre', 'Manômetro'], { Lacre: 'OK', Manômetro: 'ATENCAO' }, descriptions)).toEqual([
+      { item: 'Manômetro', severity: 'warning', description: 'Ponteiro no limite' },
+    ]);
+  });
+
+  it('validates useful deviation descriptions without linguistic parsing', () => {
+    expect(validateDeviationDescription('')).not.toBeNull();
+    expect(validateDeviationDescription('   ')).not.toBeNull();
+    expect(validateDeviationDescription('.')).not.toBeNull();
+    expect(validateDeviationDescription('-')).not.toBeNull();
+    expect(validateDeviationDescription('ok')).not.toBeNull();
+    expect(validateDeviationDescription('Lacre rompido')).toBeNull();
+    expect(getDeviationValidationMessage([
+      { item: 'A', severity: 'warning', description: '' },
+      { item: 'B', severity: 'nonconformity', description: 'x' },
+    ])).toBe('Descreva os 2 desvios identificados para concluir.');
+  });
+
+  it('serializes deviations and general observations deterministically', () => {
+    const deviations = [
+      { item: 'Manômetro na faixa verde', severity: 'warning' as const, description: 'Ponteiro próximo ao limite.' },
+      { item: 'Lacre íntegro', severity: 'nonconformity' as const, description: 'Lacre rompido no momento da inspeção.' },
+    ];
+    expect(buildInspectionNotes(deviations, 'Área com circulação intensa de pessoas.')).toBe(
+      '[REGISTRO DE DESVIOS]\n' +
+      'OBSERVAÇÃO — Manômetro na faixa verde\n' +
+      'Descrição: Ponteiro próximo ao limite.\n' +
+      'NÃO CONFORME — Lacre íntegro\n' +
+      'Descrição: Lacre rompido no momento da inspeção.\n\n' +
+      '[OBSERVAÇÕES GERAIS]\nÁrea com circulação intensa de pessoas.',
+    );
+    expect(buildInspectionNotes([], '')).toBe('');
+    expect(buildInspectionNotes([], 'Somente observação geral')).toBe('[OBSERVAÇÕES GERAIS]\nSomente observação geral');
+    expect(buildInspectionNotes([deviations[0]], '')).toContain('[REGISTRO DE DESVIOS]');
+  });
+
+  it('keeps the persisted payload shape unchanged while storing structured notes', () => {
+    const notes = buildInspectionNotes([
+      { item: 'Lacre íntegro', severity: 'nonconformity', description: 'Lacre rompido' },
+    ], 'Sem outras informações.');
+    const payload = buildInspectionPayload({
+      inspectionId: 'INSP-notes',
+      equipmentId: 'EQ-001',
+      inspectionDate: '2026-09-29',
+      inspectorName: 'Ana',
+      status: 'vencido',
+      notes,
+    });
+    expect(payload.observacoes).toContain('[REGISTRO DE DESVIOS]');
+    expect(payload.observacoes).toContain('[OBSERVAÇÕES GERAIS]');
+    expect(payload).not.toHaveProperty('deviations');
+    expect(payload).not.toHaveProperty('deviationNotes');
   });
 });

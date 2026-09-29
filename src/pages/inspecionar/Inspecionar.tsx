@@ -28,7 +28,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
-import { buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getInspectionResultPresentation, isChecklistComplete, validateInspectionResult, type ChecklistValue, type InspectionResult } from './inspectionWorkflow';
+import { buildInspectionNotes, buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateDeviationDescription, validateInspectionResult, type ChecklistValue, type InspectionDeviation, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
 import {
   createPreviewUrl,
@@ -504,6 +504,7 @@ export default function Inspecionar() {
 
   const [eqId, setEqId] = useState(preSelectedId || '');
   const [checklist, setChecklist] = useState<Record<string, ChecklistValue>>({});
+  const [deviationNotes, setDeviationNotes] = useState<Record<string, string>>({});
   const [inspectionResult, setInspectionResult] = useState<InspectionResult>('regular');
   const [validadeDate, setValidadeDate] = useState('');
   const [observacoes, setObservacoes] = useState('');
@@ -570,6 +571,7 @@ export default function Inspecionar() {
     } else {
       setChecklist({});
     }
+    setDeviationNotes({});
     setInspectionResult('regular');
   }
 
@@ -587,20 +589,34 @@ export default function Inspecionar() {
     [checklistItems, checklist],
   );
   const checklistCounts = checklistProgress.counts;
+  const inspectionDeviations = useMemo<InspectionDeviation[]>(
+    () => getInspectionDeviations(checklistItems, checklist, deviationNotes),
+    [checklistItems, checklist, deviationNotes],
+  );
+  const deviationValidationMessage = getDeviationValidationMessage(inspectionDeviations);
 
   const hasReprovado = checklistCounts.REPROVADO > 0;
   const hasAtencao = checklistCounts.ATENCAO > 0;
   const resultValidationMessage = validateInspectionResult(checklist, inspectionResult);
   const remainingMessage = getChecklistRemainingMessage(checklistProgress.remaining);
   const blockingMessage = remainingMessage
+    ?? deviationValidationMessage
     ?? (!inspectorName ? 'Selecione o inspetor responsável pela inspeção.' : resultValidationMessage)
     ?? (!validadeDate ? 'Informe a data da próxima inspeção.' : null);
-  const canFinalize = isChecklistComplete(checklistProgress) && Boolean(inspectorName) && Boolean(validadeDate) && !resultValidationMessage;
+  const canFinalize = isChecklistComplete(checklistProgress) && Boolean(inspectorName) && Boolean(validadeDate) && !resultValidationMessage && !deviationValidationMessage;
   const resultPresentation = getInspectionResultPresentation(checklistProgress, inspectionResult);
 
   const handleChecklistChange = (item: string, value: ChecklistValue) => {
     const nextChecklist = { ...checklist, [item]: value };
     setChecklist(nextChecklist);
+    if (value === 'OK' || value === 'N.A.') {
+      setDeviationNotes((current) => {
+        if (!(item in current)) return current;
+        const next = { ...current };
+        delete next[item];
+        return next;
+      });
+    }
     setInspectionResult(deriveInspectionStatus(nextChecklist, validadeDate));
   };
 
@@ -622,6 +638,11 @@ export default function Inspecionar() {
 
     if (!isChecklistComplete(checklistProgress)) {
       setErrorMsg(remainingMessage ?? 'Avalie o checklist técnico para concluir.');
+      return;
+    }
+
+    if (deviationValidationMessage) {
+      setErrorMsg(deviationValidationMessage);
       return;
     }
 
@@ -660,7 +681,7 @@ export default function Inspecionar() {
         inspectionDate: new Date().toISOString().split('T')[0],
         inspectorName,
         status: finalStatus,
-        notes: observacoes,
+        notes: buildInspectionNotes(inspectionDeviations, observacoes),
         userId: user?.id,
         photo: photoDraft
           ? {
@@ -709,6 +730,7 @@ export default function Inspecionar() {
     setErrorMsg('');
     setIsSaving(false);
     setInspectionResult('regular');
+    setDeviationNotes({});
     setObservacoes('');
     setPhotoDraft(null);
     setPhotoProcessing(false);
@@ -861,6 +883,61 @@ export default function Inspecionar() {
           {/* Date, photo and observations — only when equipment is selected */}
           {selectedEquipment && (
             <>
+              {inspectionDeviations.length > 0 && (
+                <section className="card-subtle bg-white space-y-4" aria-labelledby="deviations-title">
+                  <div className="flex items-start gap-2.5 border-b border-gray-50 pb-3">
+                    <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-amber-100 text-pending flex items-center justify-center flex-shrink-0">
+                      <AlertTriangle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    </span>
+                    <div>
+                      <h2 id="deviations-title" className="label-uppercase">Registro de desvios</h2>
+                      <p className="text-[10px] text-gray-500 mt-0.5">Descreva cada item que exige atenção ou correção.</p>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    {inspectionDeviations.map((deviation, index) => {
+                      const isNonconformity = deviation.severity === 'nonconformity';
+                      const descriptionId = `deviation-description-${index}`;
+                      const errorId = `${descriptionId}-error`;
+                      const validationError = validateDeviationDescription(deviation.description);
+                      return (
+                        <div
+                          key={deviation.item}
+                          className={`rounded-xl border p-3 sm:p-4 space-y-2.5 ${isNonconformity ? 'border-red-200 bg-red-50/50' : 'border-amber-200 bg-amber-50/50'}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            {isNonconformity ? <XCircle className="w-4 h-4 mt-0.5 text-critical flex-shrink-0" aria-hidden="true" /> : <AlertTriangle className="w-4 h-4 mt-0.5 text-pending flex-shrink-0" aria-hidden="true" />}
+                            <div className="min-w-0">
+                              <span className={`block text-[10px] font-black uppercase tracking-wider ${isNonconformity ? 'text-critical' : 'text-pending'}`}>
+                                {isNonconformity ? 'Não conforme' : 'Observação'}
+                              </span>
+                              <h3 className="text-sm font-bold text-gray-800 leading-snug">{deviation.item}</h3>
+                            </div>
+                          </div>
+                          <label htmlFor={descriptionId} className="sr-only">Descrição do desvio: {deviation.item}</label>
+                          <textarea
+                            id={descriptionId}
+                            value={deviation.description}
+                            onChange={(e) => setDeviationNotes((current) => ({ ...current, [deviation.item]: e.target.value }))}
+                            placeholder={isNonconformity ? 'Descreva a não conformidade identificada e a providência recomendada.' : 'Descreva a condição observada e, se aplicável, a recomendação técnica.'}
+                            rows={3}
+                            className={`field-textarea ${validationError ? 'border-critical focus:border-critical focus:ring-critical/20' : ''}`}
+                            aria-describedby={`${errorId} ${descriptionId}-help`}
+                            aria-invalid={Boolean(validationError)}
+                          />
+                          <p id={`${descriptionId}-help`} className="text-[10px] text-gray-500">
+                            {isNonconformity ? 'Descreva a não conformidade identificada e a providência recomendada.' : 'Descreva a condição observada e, se aplicável, a recomendação técnica.'}
+                          </p>
+                          {validationError && (
+                            <p id={errorId} className="text-xs font-semibold text-critical" role="alert">{validationError}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
               <fieldset className="card-subtle bg-white space-y-3" aria-describedby="inspection-result-help">
                 <legend className="field-label flex items-center gap-1.5">
                   <ShieldCheck className="w-4 h-4" />
@@ -966,21 +1043,21 @@ export default function Inspecionar() {
                 />
               </div>
 
-              {/* Observations — prominent section */}
+              {/* General observations — separate from the required deviation records */}
               <div className="card-subtle bg-white space-y-3">
                 <div className="flex items-center gap-2.5 border-b border-gray-50 pb-3">
                   <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
                     <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </span>
                   <div>
-                    <h2 className="label-uppercase">Observações</h2>
-                    <p className="text-[10px] text-gray-500 mt-0.5">Anomalias, condições ou detalhes técnicos</p>
+                    <h2 className="label-uppercase">Observações Gerais</h2>
+                    <p className="text-[10px] text-gray-500 mt-0.5">Informações adicionais sobre a inspeção.</p>
                   </div>
                 </div>
                 <textarea
                   value={observacoes}
                   onChange={(e) => setObservacoes(e.target.value)}
-                  placeholder="Ex: Lacre rompido, manômetro fora da faixa verde..."
+                  placeholder="Informações adicionais sobre a inspeção..."
                   rows={4}
                   className="field-textarea"
                 />
@@ -1002,6 +1079,13 @@ export default function Inspecionar() {
                   <div><span className="block text-gray-500">Resultado</span><strong className="block mt-0.5">{resultPresentation.label}</strong></div>
                   <div><span className="block text-gray-500">Próxima inspeção</span><strong className="block mt-0.5">{formatInspectionDate(validadeDate)}</strong></div>
                   <div><span className="block text-gray-500">Evidência</span><strong className="block mt-0.5">{photoDraft ? 'Presente' : 'Não adicionada'}</strong></div>
+                  <div><span className="block text-gray-500">Desvios</span><strong className="block mt-0.5">{inspectionDeviations.length}</strong></div>
+                  {inspectionDeviations.length > 0 && (
+                    <>
+                      <div><span className="block text-gray-500">Observações</span><strong className="block mt-0.5 text-pending">{checklistCounts.ATENCAO}</strong></div>
+                      <div><span className="block text-gray-500">Não conformidades</span><strong className="block mt-0.5 text-critical">{checklistCounts.REPROVADO}</strong></div>
+                    </>
+                  )}
                 </div>
                 {blockingMessage && (
                   <p className="text-xs font-semibold text-gray-600" role="status">{blockingMessage}</p>

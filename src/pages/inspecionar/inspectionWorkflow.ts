@@ -2,6 +2,7 @@ import type { EquipmentStatus } from '../../types';
 
 export type ChecklistValue = 'OK' | 'ATENCAO' | 'REPROVADO' | 'N.A.';
 export type InspectionResult = 'regular' | 'observacao' | 'vencido';
+export type DeviationSeverity = 'warning' | 'nonconformity';
 
 export interface ChecklistProgress {
   total: number;
@@ -14,6 +15,12 @@ export interface ChecklistProgress {
 export interface InspectionResultPresentation {
   label: string;
   state: 'waiting' | 'partial' | 'final';
+}
+
+export interface InspectionDeviation {
+  item: string;
+  severity: DeviationSeverity;
+  description: string;
 }
 
 export interface InspectionPhotoPayload {
@@ -48,6 +55,60 @@ export function buildInspectionPayload(input: InspectionPayloadInput) {
     photo: input.photo,
     dataProximaInspecao: input.nextInspectionDate,
   };
+}
+
+export function getInspectionDeviations(
+  items: string[],
+  checklist: Record<string, ChecklistValue>,
+  descriptions: Record<string, string> = {},
+): InspectionDeviation[] {
+  return items.flatMap((item) => {
+    const value = checklist[item];
+    if (value !== 'ATENCAO' && value !== 'REPROVADO') return [];
+    return [{
+      item,
+      severity: value === 'ATENCAO' ? 'warning' : 'nonconformity',
+      description: descriptions[item] ?? '',
+    }];
+  });
+}
+
+/** Descrições precisam de ao menos 5 caracteres alfanuméricos úteis. */
+export function validateDeviationDescription(description: string): string | null {
+  const normalized = description.trim();
+  const usefulCharacters = normalized.replace(/[^\p{L}\p{N}]/gu, '');
+  if (usefulCharacters.length < 5) return 'Descreva a condição com pelo menos 5 caracteres úteis.';
+  if (/^(ok|x|teste)$/i.test(usefulCharacters)) return 'Informe uma descrição técnica do desvio.';
+  return null;
+}
+
+export function getDeviationValidationMessage(deviations: InspectionDeviation[]): string | null {
+  const invalidCount = deviations.filter((deviation) => validateDeviationDescription(deviation.description)).length;
+  if (invalidCount === 0) return null;
+  return invalidCount === 1
+    ? 'Descreva o desvio identificado para concluir.'
+    : `Descreva os ${invalidCount} desvios identificados para concluir.`;
+}
+
+export function buildInspectionNotes(
+  deviations: InspectionDeviation[],
+  generalNotes: string,
+): string {
+  const sections: string[] = [];
+  const activeDeviations = deviations.filter((deviation) => deviation.description.trim());
+
+  if (activeDeviations.length > 0) {
+    const lines = ['[REGISTRO DE DESVIOS]'];
+    activeDeviations.forEach((deviation) => {
+      const label = deviation.severity === 'warning' ? 'OBSERVAÇÃO' : 'NÃO CONFORME';
+      lines.push(`${label} — ${deviation.item}`, `Descrição: ${deviation.description.trim()}`);
+    });
+    sections.push(lines.join('\n'));
+  }
+
+  const trimmedGeneralNotes = generalNotes.trim();
+  if (trimmedGeneralNotes) sections.push(`[OBSERVAÇÕES GERAIS]\n${trimmedGeneralNotes}`);
+  return sections.join('\n\n');
 }
 
 export function deriveInspectionStatus(
