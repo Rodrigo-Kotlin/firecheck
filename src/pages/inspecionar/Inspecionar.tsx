@@ -28,7 +28,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
-import { buildInspectionNotes, buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateDeviationDescription, validateInspectionResult, type ChecklistValue, type InspectionDeviation, type InspectionResult } from './inspectionWorkflow';
+import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateDeviationDescription, validateInspectionResult, type ChecklistValue, type EvidenceRequirement, type InspectionDeviation, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
 import {
   createPreviewUrl,
@@ -189,6 +189,24 @@ const INSPECTION_RESULT_OPTIONS: Array<{
   },
 ];
 
+const EVIDENCE_REQUIREMENT_CONFIG: Record<EvidenceRequirement, {
+  label: string;
+  badgeClass: string;
+}> = {
+  optional: {
+    label: 'Opcional',
+    badgeClass: 'bg-gray-100 text-gray-600',
+  },
+  recommended: {
+    label: 'Recomendada',
+    badgeClass: 'bg-amber-100 text-pending',
+  },
+  required: {
+    label: 'Obrigatória',
+    badgeClass: 'bg-red-100 text-critical',
+  },
+};
+
 // ---------------------------------------------------------------------------
 // PhotoCapture — capture / preview / replace / remove flow for inspection
 // evidence photos. Mobile-first: a primary "Tirar foto" button uses
@@ -211,6 +229,7 @@ const INSPECTION_RESULT_OPTIONS: Array<{
 type PhotoCaptureProps = {
   value: PhotoDraft | null;
   onChange: (draft: PhotoDraft | null) => void;
+  requirement: EvidenceRequirement;
   disabled?: boolean;
   /** Network status from the parent's listener (reactive). */
   online?: boolean;
@@ -219,7 +238,7 @@ type PhotoCaptureProps = {
   onProcessingChange?: (processing: boolean) => void;
 };
 
-function PhotoCapture({ value, onChange, disabled = false, online, onProcessingChange }: PhotoCaptureProps) {
+function PhotoCapture({ value, onChange, requirement, disabled = false, online, onProcessingChange }: PhotoCaptureProps) {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
@@ -327,7 +346,7 @@ function PhotoCapture({ value, onChange, disabled = false, online, onProcessingC
               className="btn-ghost btn-sm btn-auto"
             >
               <ImagePlus className="w-4 h-4" />
-              Trocar foto
+              Substituir foto
             </button>
             <button
               type="button"
@@ -336,7 +355,7 @@ function PhotoCapture({ value, onChange, disabled = false, online, onProcessingC
               className="btn-ghost btn-sm btn-auto text-critical hover:bg-red-50"
             >
               <Trash2 className="w-4 h-4" />
-              Remover
+              Remover foto
             </button>
           </div>
         ) : (
@@ -413,7 +432,7 @@ function PhotoCapture({ value, onChange, disabled = false, online, onProcessingC
             onClick={() => cameraInputRef.current?.click()}
             disabled={disabled}
             className="w-full flex flex-col items-center justify-center gap-1.5 py-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            aria-label="Tirar foto"
+            aria-label={`Tirar foto (${EVIDENCE_REQUIREMENT_CONFIG[requirement].label})`}
           >
             <div className="w-12 h-12 bg-white border border-gray-200 rounded-full flex items-center justify-center shadow-sm">
               <Camera className="w-6 h-6 text-gray-500" />
@@ -589,6 +608,10 @@ export default function Inspecionar() {
     [checklistItems, checklist],
   );
   const checklistCounts = checklistProgress.counts;
+  const evidenceRequirement = deriveEvidenceRequirement(checklist, inspectionResult);
+  const evidenceRequirementConfig = EVIDENCE_REQUIREMENT_CONFIG[evidenceRequirement];
+  const evidenceInstruction = getEvidenceInstruction(evidenceRequirement, checklistCounts.REPROVADO);
+  const evidenceValidationMessage = getEvidenceValidationMessage(evidenceRequirement, Boolean(photoDraft));
   const inspectionDeviations = useMemo<InspectionDeviation[]>(
     () => getInspectionDeviations(checklistItems, checklist, deviationNotes),
     [checklistItems, checklist, deviationNotes],
@@ -601,9 +624,10 @@ export default function Inspecionar() {
   const remainingMessage = getChecklistRemainingMessage(checklistProgress.remaining);
   const blockingMessage = remainingMessage
     ?? deviationValidationMessage
+    ?? evidenceValidationMessage
     ?? (!inspectorName ? 'Selecione o inspetor responsável pela inspeção.' : resultValidationMessage)
     ?? (!validadeDate ? 'Informe a data da próxima inspeção.' : null);
-  const canFinalize = isChecklistComplete(checklistProgress) && Boolean(inspectorName) && Boolean(validadeDate) && !resultValidationMessage && !deviationValidationMessage;
+  const canFinalize = isChecklistComplete(checklistProgress) && Boolean(inspectorName) && Boolean(validadeDate) && !resultValidationMessage && !deviationValidationMessage && !evidenceValidationMessage;
   const resultPresentation = getInspectionResultPresentation(checklistProgress, inspectionResult);
 
   const handleChecklistChange = (item: string, value: ChecklistValue) => {
@@ -643,6 +667,11 @@ export default function Inspecionar() {
 
     if (deviationValidationMessage) {
       setErrorMsg(deviationValidationMessage);
+      return;
+    }
+
+    if (evidenceValidationMessage) {
+      setErrorMsg(evidenceValidationMessage);
       return;
     }
 
@@ -1025,21 +1054,30 @@ export default function Inspecionar() {
                 <p className="text-[10px] text-gray-500">Data prevista para a próxima verificação.</p>
               </div>
 
-              {/* Photo */}
-              <div className="card-subtle bg-white space-y-2">
-                <span className="field-label flex items-center gap-1.5">
-                  <Camera className="w-4 h-4" />
-                  Evidência Visual
-                  <span className="text-gray-400 text-[10px] font-medium normal-case ml-1">
-                    (opcional)
-                  </span>
-                </span>
-                <PhotoCapture
-                  value={photoDraft}
-                  onChange={setPhotoDraft}
-                  disabled={isSaving}
-                  online={online}
-                  onProcessingChange={setPhotoProcessing}
+               {/* Photo */}
+               <div className="card-subtle bg-white space-y-2">
+                 <div className="flex items-start justify-between gap-3">
+                   <div>
+                     <span className="field-label flex items-center gap-1.5">
+                       <Camera className="w-4 h-4" />
+                       Evidência Visual
+                     </span>
+                     <p className="text-[10px] text-gray-500 mt-0.5">{evidenceInstruction}</p>
+                   {evidenceRequirement === 'required' && checklistProgress.remaining > 0 && (
+                     <p className="text-[10px] font-semibold text-critical mt-0.5">Evidência será obrigatória para esta inspeção.</p>
+                   )}
+                   </div>
+                   <span className={`pill text-[10px] flex-shrink-0 ${evidenceRequirementConfig.badgeClass}`}>
+                     {evidenceRequirementConfig.label}
+                   </span>
+                 </div>
+                 <PhotoCapture
+                   value={photoDraft}
+                   onChange={setPhotoDraft}
+                   requirement={evidenceRequirement}
+                   disabled={isSaving}
+                   online={online}
+                   onProcessingChange={setPhotoProcessing}
                 />
               </div>
 
@@ -1078,7 +1116,12 @@ export default function Inspecionar() {
                   <div><span className="block text-gray-500">N.A.</span><strong className="block mt-0.5 text-gray-600">{checklistCounts['N.A.']}</strong></div>
                   <div><span className="block text-gray-500">Resultado</span><strong className="block mt-0.5">{resultPresentation.label}</strong></div>
                   <div><span className="block text-gray-500">Próxima inspeção</span><strong className="block mt-0.5">{formatInspectionDate(validadeDate)}</strong></div>
-                  <div><span className="block text-gray-500">Evidência</span><strong className="block mt-0.5">{photoDraft ? 'Presente' : 'Não adicionada'}</strong></div>
+                  <div>
+                    <span className="block text-gray-500">Evidência</span>
+                    <strong className={`block mt-0.5 ${photoDraft ? 'text-success' : evidenceRequirement === 'required' ? 'text-critical' : ''}`}>
+                      {photoDraft ? 'Adicionada' : evidenceRequirement === 'required' ? 'Pendente · Obrigatória' : evidenceRequirement === 'recommended' ? 'Não adicionada · Recomendada' : 'Não adicionada · Opcional'}
+                    </strong>
+                  </div>
                   <div><span className="block text-gray-500">Desvios</span><strong className="block mt-0.5">{inspectionDeviations.length}</strong></div>
                   {inspectionDeviations.length > 0 && (
                     <>

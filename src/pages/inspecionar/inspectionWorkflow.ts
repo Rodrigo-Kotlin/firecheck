@@ -3,6 +3,7 @@ import type { EquipmentStatus } from '../../types';
 export type ChecklistValue = 'OK' | 'ATENCAO' | 'REPROVADO' | 'N.A.';
 export type InspectionResult = 'regular' | 'observacao' | 'vencido';
 export type DeviationSeverity = 'warning' | 'nonconformity';
+export type EvidenceRequirement = 'optional' | 'recommended' | 'required';
 
 export interface ChecklistProgress {
   total: number;
@@ -21,6 +22,34 @@ export interface InspectionDeviation {
   item: string;
   severity: DeviationSeverity;
   description: string;
+}
+
+export function deriveEvidenceRequirement(
+  checklist: Record<string, ChecklistValue>,
+  result: InspectionResult,
+): EvidenceRequirement {
+  if (result === 'vencido' || Object.values(checklist).includes('REPROVADO')) return 'required';
+  if (result === 'observacao' || Object.values(checklist).includes('ATENCAO')) return 'recommended';
+  return 'optional';
+}
+
+export function getEvidenceValidationMessage(
+  requirement: EvidenceRequirement,
+  hasPhoto: boolean,
+): string | null {
+  if (requirement !== 'required' || hasPhoto) return null;
+  return 'Adicione uma evidência visual da não conformidade para concluir.';
+}
+
+export function getEvidenceInstruction(
+  requirement: EvidenceRequirement,
+  nonconformityCount: number,
+): string {
+  if (requirement === 'optional') return 'Adicione uma foto caso queira complementar o registro da inspeção.';
+  if (requirement === 'recommended') return 'Uma foto ajuda a documentar a condição observada.';
+  return nonconformityCount > 1
+    ? 'Adicione uma evidência visual representativa das não conformidades identificadas.'
+    : 'Adicione uma foto que evidencie a não conformidade identificada.';
 }
 
 export interface InspectionPhotoPayload {

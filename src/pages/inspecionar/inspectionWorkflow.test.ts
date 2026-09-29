@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildInspectionNotes, buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateDeviationDescription, validateInspectionResult } from './inspectionWorkflow';
+import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateDeviationDescription, validateInspectionResult } from './inspectionWorkflow';
 
 describe('inspection workflow status', () => {
   it('prioritizes failed checklist items', () => {
@@ -96,6 +96,25 @@ describe('inspection workflow status', () => {
       label: 'Aguardando avaliação',
       state: 'waiting',
     });
+  });
+
+  it('derives evidence policy from technical result, never from the deadline', () => {
+    expect(deriveEvidenceRequirement({ a: 'OK' }, 'regular')).toBe('optional');
+    expect(deriveEvidenceRequirement({ a: 'ATENCAO' }, 'observacao')).toBe('recommended');
+    expect(deriveEvidenceRequirement({ a: 'REPROVADO' }, 'vencido')).toBe('required');
+    expect(deriveEvidenceRequirement({ a: 'OK' }, deriveInspectionStatus({ a: 'OK' }, '2026-01-01'))).toBe('optional');
+    expect(deriveEvidenceRequirement({ a: 'OK' }, deriveInspectionStatus({ a: 'OK' }, '2028-01-01'))).toBe('optional');
+  });
+
+  it('requires a local photo only for non-conforming inspections', () => {
+    expect(getEvidenceValidationMessage('optional', false)).toBeNull();
+    expect(getEvidenceValidationMessage('recommended', false)).toBeNull();
+    expect(getEvidenceValidationMessage('required', false)).toBe('Adicione uma evidência visual da não conformidade para concluir.');
+    expect(getEvidenceValidationMessage('required', true)).toBeNull();
+    expect(getEvidenceInstruction('optional', 0)).toContain('complementar');
+    expect(getEvidenceInstruction('recommended', 0)).toContain('documentar');
+    expect(getEvidenceInstruction('required', 1)).toContain('não conformidade identificada');
+    expect(getEvidenceInstruction('required', 2)).toContain('representativa das não conformidades');
   });
 
   it('marks partial conforming and observation results as provisional', () => {
