@@ -21,7 +21,7 @@
  * sync runs. Callers that attempt a concurrent sync will get a skipped
  * report.
  */
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { db, type LocalInspection, type LocalEquipment, type LocalInspectionPhoto } from '../db';
 import {
   fetchEquipments, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById, softDeleteEquipment, type ServiceResult,
@@ -45,101 +45,18 @@ import { getInspectionPhotoBlob, mimeToExtension, uploadInspectionPhotoBlob, rem
 import type { Equipment } from '../types';
 import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
 import { isNetworkUnavailableError } from '../utils/network';
-import {
-  canAttemptNetwork,
-  markNetworkFailure,
-  markNetworkSuccess,
-} from './networkState';
+import { markNetworkFailure, markNetworkSuccess } from './networkState';
 import { fetchAllPages } from './pagination';
+import { canSync, isConflict, ownsPending, skip } from './sync/guards';
+import type { PullResult, SyncOptions, SyncReport } from './sync/types';
+export { conflictCount, pendingSyncCount } from './sync/telemetry';
+export type { SyncOptions, SyncReport } from './sync/types';
 
 /** Concurrency guard — prevents overlapping sync runs. */
 let _syncInProgress = false;
 
-function ownsPending(row: { syncOwnerUserId?: string }, userId: string | undefined, domain: string, id: string): boolean {
-  if (row.syncOwnerUserId === userId && !!userId) return true;
-  if (import.meta.env.DEV && !row.syncOwnerUserId) {
-    console.warn(`[sync] legacy-unowned-pending skipped: ${domain}/${id}`);
-  }
-  return false;
-}
-
-export interface SyncReport {
-  pushed: number;
-  pulled: number;
-  deleted: number;
-  errors: number;
-  skipped: boolean;
-  reason?: string;
-  /** Circuit breaker abriu durante a rodada por erro real de rede — a rodada
-   *  foi interrompida prematuramente (short-circuit) e o backoff foi ativado. */
-  networkUnavailable: boolean;
-
-  // -- Detalhamento por domínio --
-  pushEqOk: number;
-  pushInsOk: number;
-  pushErrors: number;
-  pullEqImported: number;
-  pullEqReconciled: number;
-  pullInsImported: number;
-  pullInsReconciled: number;
-  pullEqError: boolean;
-  pullInsError: boolean;
-  pullEqEmpty: boolean;
-  pullInsEmpty: boolean;
-
-  // -- Detalhamento de planos de ação --
-  pushApOk: number;
-  pushApErrors: number;
-  pullApImported: number;
-  pullApReconciled: number;
-  pullApError: boolean;
-  pullApEmpty: boolean;
-
-  // -- Detalhamento de fotos de inspeção --
-  pushPhotoOk: number;
-  pushPhotoErrors: number;
-  /** Fotos adiadas porque a inspeção pai ainda não existe remotamente. */
-  pushPhotoSkipped: number;
-  pullPhotoImported: number;
-  pullPhotoReconciled: number;
-  pullPhotoError: boolean;
-  pullPhotoEmpty: boolean;
-}
-
-function skip(reason: string): SyncReport {
-  return {
-    pushed: 0, pulled: 0, deleted: 0, errors: 0, skipped: true, reason, networkUnavailable: false,
-    pushEqOk: 0, pushInsOk: 0, pushErrors: 0,
-    pullEqImported: 0, pullEqReconciled: 0,
-    pullInsImported: 0, pullInsReconciled: 0,
-    pullEqError: false, pullInsError: false,
-    pullEqEmpty: false, pullInsEmpty: false,
-    pushApOk: 0, pushApErrors: 0,
-    pullApImported: 0, pullApReconciled: 0,
-    pullApError: false, pullApEmpty: false,
-    pushPhotoOk: 0, pushPhotoErrors: 0, pushPhotoSkipped: 0,
-    pullPhotoImported: 0, pullPhotoReconciled: 0,
-    pullPhotoError: false, pullPhotoEmpty: false,
-  };
-}
-
-/** Por que a rodada NÃO deve iniciar (null = pode iniciar). */
-function canSync(): string | null {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return 'offline';
-  if (!isSupabaseConfigured || !supabase) return 'supabase-not-configured';
-  if (!canAttemptNetwork()) return 'network-cooldown';
-  return null;
-}
-
 export function isSyncInProgress(): boolean {
   return _syncInProgress;
-}
-
-/** Compare two ISO date strings by their numeric timestamp.
- *  Returns true when the remote timestamp differs from the local base. */
-function isConflict(localBase: string | null | undefined, remoteUpdatedAt: string | undefined): boolean {
-  if (!localBase || !remoteUpdatedAt) return false;
-  return new Date(remoteUpdatedAt).getTime() !== new Date(localBase).getTime();
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,18 +1059,6 @@ async function pushInspectionPhotos(userId?: string): Promise<{ pushed: number; 
 // PULL
 // ---------------------------------------------------------------------------
 
-interface PullResult {
-  imported: number;
-  reconciled: number;
-  error: boolean;
-  /** true quando o Supabase retornou resposta válida vazia (não erro). */
-  empty: boolean;
-  /** Comprovado que o backend está inalcançável (erro real de rede). */
-  network?: boolean;
-  /** True only when the pull is a complete remote snapshot. */
-  complete: boolean;
-}
-
 /** Import cloud equipment rows, reconcile orphans, preserve pending changes.
  *  Regras:
  *   • Se fetch falhar (rede/RLS/Supabase) → preserva tudo, não reconcilia.
@@ -1520,15 +1425,6 @@ async function pullInspectionPhotos(): Promise<PullResult> {
 // PUBLIC API
 // ---------------------------------------------------------------------------
 
-export interface SyncOptions {
-  /** Skip the cloud→local pull phase (push only). */
-  pushOnly?: boolean;
-  /** Skip the local→cloud push phase (pull only). */
-  pullOnly?: boolean;
-  /** Current user ID to stamp ownership on records that lack it. */
-  userId?: string;
-}
-
 export async function syncAll(
   options: SyncOptions = {},
 ): Promise<SyncReport> {
@@ -1758,33 +1654,6 @@ export async function syncAll(
     pullPhotoError,
     pullPhotoEmpty,
   };
-}
-
-/** Counts the rows that still need to be pushed — surfaced in the UI.
- *  Includes conflict rows (syncConflict === true) since they block sync.
- *  Photos whose parent inspection is pending delete (or missing) are not
- *  counted — they cannot be pushed until the inspection exists remotely. */
-export async function pendingSyncCount(): Promise<number> {
-  const eqs = await db.equipamentos.filter((e) => !e.sincronizado || !!e.pendingDelete).count();
-  const ins = await db.inspecoes.filter((i) => !i.sincronizado || !!i.pendingDelete).count();
-  const aps = await db.planosAcao.filter((p) => !p.sincronizado || !!p.pendingDelete).count();
-
-  const pendingPhotos = await db.fotos.filter((p) => !p.sincronizado).toArray();
-  let photos = 0;
-  for (const p of pendingPhotos) {
-    const insp = await db.inspecoes.get(p.inspectionId);
-    if (insp && !insp.pendingDelete) photos++;
-  }
-
-  return eqs + ins + aps + photos;
-}
-
-/** Counts rows in conflict (syncConflict === true) for UI badges. */
-export async function conflictCount(): Promise<{ equipments: number; actionPlans: number; inspections: number }> {
-  const equipments = await db.equipamentos.filter((e) => !!e.syncConflict).count();
-  const actionPlans = await db.planosAcao.filter((p) => !!p.syncConflict).count();
-  const inspections = await db.inspecoes.filter((i) => !!i.syncConflict).count();
-  return { equipments, actionPlans, inspections };
 }
 
 // Re-export the mapper helpers for convenience.

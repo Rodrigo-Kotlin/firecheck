@@ -13,6 +13,9 @@ import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { canAttemptNetwork, ensureNetworkListeners } from '../services/networkState';
 import { APP_COMPANY } from '../config/brand';
 import { normalizePersistedConfig, partializeAppState } from './persistence';
+import { inferCriticidade, recomputeStats } from './derived';
+import { migratePersistedActionPlansToDexie } from './actionPlanMigration';
+import { loadPlansFromDexie } from './loaders';
 import { canStartOperationalSync } from '../services/syncPolicy';
 import {
   loginUser,
@@ -71,75 +74,6 @@ export interface InspectionSaveResult {
   conflict?: boolean;
   message?: string;
 }
-
-function inferCriticidade(inspectionObs: string, eqTipo: string): import('../types').Criticidade {
-  const obs = inspectionObs.toLowerCase();
-  const tipo = eqTipo.toLowerCase();
-  if (
-    obs.includes('sem carga') || obs.includes('sem lacre') || obs.includes('sem acesso') ||
-    obs.includes('sem mangueira') || obs.includes('inoperante') ||
-    (tipo.includes('extintor') && obs.includes('vencido'))
-  ) return 'Crítico';
-  if (obs.includes('sinalização') || obs.includes('mangueira') || obs.includes('abrigo')) return 'Alto';
-  if (obs.includes('etiqueta') || obs.includes('sujeira') || obs.includes('avaria')) return 'Médio';
-  return 'Baixo';
-}
-
-const MIGRATION_FLAG = 'firecheck_action_plans_migrated_to_dexie';
-
-/** Migrate action plans from persisted Zustand/localStorage to Dexie.
- *  Runs once on first load after this code ships. */
-async function migratePersistedActionPlansToDexie(): Promise<void> {
-  if (typeof localStorage === 'undefined') return;
-  if (localStorage.getItem(MIGRATION_FLAG) === 'true') return;
-
-  try {
-    const raw = localStorage.getItem('firecheck-storage');
-    if (!raw) return;
-
-    const parsed = JSON.parse(raw);
-    const plans: ActionPlan[] = parsed?.state?.actionPlans ?? [];
-    const meta: Record<string, { sincronizado: boolean; pendingDelete: boolean }> =
-      parsed?.state?.actionPlanMeta ?? {};
-
-    if (!Array.isArray(plans) || plans.length === 0) return;
-
-    for (const plan of plans) {
-      const exists = await db.planosAcao.get(plan.id);
-      if (exists) continue;
-
-      const m = meta[plan.id];
-      await db.planosAcao.put({
-        ...plan,
-        sincronizado: m?.sincronizado ?? true,
-        pendingDelete: m?.pendingDelete ?? false,
-        syncAction: undefined,
-        syncError: undefined,
-        deletedAt: undefined,
-        updatedAt: undefined,
-      });
-    }
-
-    localStorage.setItem(MIGRATION_FLAG, 'true');
-    if (import.meta.env.DEV) {
-      console.log(`[store.migration] ${plans.length} planos migrados do localStorage para Dexie`);
-    }
-  } catch (err) {
-    console.error('[store.migration] Erro ao migrar planos:', err);
-  }
-}
-
-function recomputeStats(eqs: Equipment[]): Stats {
-  const total = eqs.length;
-  const emDia = eqs.filter((e) => e.status === 'regular').length;
-  const pendentes = eqs.filter((e) => e.status === 'pendente').length;
-  const vencidos = eqs.filter((e) => e.status === 'vencido' || e.status === 'extraviado').length;
-  const observacao = eqs.filter((e) => e.status === 'observacao' || e.status === 'em_manutencao' || e.status === 'inativo' || e.status === 'substituido').length;
-  const conformidade = total === 0 ? 0 : Math.round(((emDia + observacao) / total) * 100);
-  return { total, emDia, pendentes, vencidos, conformidade };
-}
-
-
 
 export interface AppState {
   user: Inspector | null;
@@ -228,18 +162,6 @@ export const useAppStore = create<AppState>()(
        * Never throws — failures are reflected in `lastSync.errors`.
        * Guards against concurrent sync via the sync module's flag.
        */
-      const loadPlansFromDexie = async (): Promise<ActionPlan[]> => {
-        const rows = await db.planosAcao
-          .filter((p) => !p.pendingDelete && !p.deletedAt)
-          .toArray();
-        return rows.map(({
-            sincronizado: _s, pendingDelete: _p, syncAction: _a, syncOwnerUserId: _o, ...rest
-          }) => {
-          void _s; void _p; void _a; void _o;
-          return rest as ActionPlan;
-        });
-      };
-
       const runSync = async (): Promise<void> => {
         const syncAllowed = canStartOperationalSync({
           isOnline: typeof navigator === 'undefined' || navigator.onLine,
