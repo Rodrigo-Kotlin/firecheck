@@ -7,32 +7,11 @@ import { canDeleteInspection } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import type { Inspection, Equipment, Stats } from '../../types';
-import { filterControlCenterData, getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
+import { getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
 import { APP_NAME } from '../../config/brand';
-
-type HistoryEntry = {
-  id: string;
-  data: string;
-  dataISO: string;
-  inspetor: string;
-  equipId: string;
-  status: HistoryStatus;
-  statusCode: Inspection['status'];
-  observacoes?: string;
-};
-
-type HistoryStatus = 'APROVADO' | 'OBSERVAÇÃO' | 'REPROVADO' | 'PENDENTE';
-
-function getHistoryStatusFromQuery(value: string | null): HistoryStatus | 'Todos' {
-  return value === 'regular' ? 'APROVADO' : value === 'observacao' ? 'OBSERVAÇÃO' : value === 'vencido' ? 'REPROVADO' : value === 'pendente' ? 'PENDENTE' : 'Todos';
-}
-
-const STATUS_MAP: Record<string, HistoryStatus> = {
-  regular: 'APROVADO',
-  observacao: 'OBSERVAÇÃO',
-  vencido: 'REPROVADO',
-  pendente: 'PENDENTE',
-};
+import { buildHistoryEntries, filterHistoryEntries, scopeReportData } from './reportData';
+import { getHistoryStatusFromQuery, HISTORY_STATUS_BADGE, type HistoryEntry, type HistoryStatus } from './reportTypes';
+import { individualReportFilename, monthlyReportFilename } from './reportFileNames';
 
 const PDF_COLORS = {
   primary: [220, 38, 38] as [number, number, number],
@@ -59,13 +38,6 @@ const HISTORY_STATUS_COLORS: Record<HistoryStatus, [number, number, number]> = {
   'OBSERVAÇÃO': PDF_COLORS.warning,
   REPROVADO: PDF_COLORS.critical,
   PENDENTE: PDF_COLORS.warning,
-};
-
-const HISTORY_STATUS_BADGE: Record<HistoryStatus, string> = {
-  APROVADO: 'bg-green-100 text-success',
-  'OBSERVAÇÃO': 'bg-amber-100 text-pending',
-  REPROVADO: 'bg-red-100 text-critical',
-  PENDENTE: 'bg-orange-100 text-orange-600',
 };
 
 const PDF_PAGE = { w: 210, h: 297 };
@@ -376,12 +348,6 @@ function drawStatusPill(ctx: DrawCtx, x: number, y: number, label: string, color
   return w;
 }
 
-function isoToBr(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-  if (!m) return iso;
-  return `${m[3]}/${m[2]}/${m[1]}`;
-}
-
 function generateIndividualPDF(entry: HistoryEntry, company: string, unit: string, equipment?: Equipment) {
   const doc = new jsPDF();
   const ctx = makeCtx(doc, entry.id, company, unit);
@@ -542,7 +508,7 @@ function generateIndividualPDF(entry: HistoryEntry, company: string, unit: strin
   ctx.y = sigY + 16;
 
   drawFooter(ctx);
-  doc.save(`efetivafire-relatorio_${entry.equipId}_${entry.id}.pdf`);
+  doc.save(individualReportFilename(entry.equipId, entry.id));
 }
 
 function generateMonthlyPDF(
@@ -723,7 +689,7 @@ function generateMonthlyPDF(
   });
 
   drawFooter(ctx);
-  doc.save(`efetivafire-relatorio-mensal_${now.getMonth() + 1}_${now.getFullYear()}.pdf`);
+  doc.save(monthlyReportFilename(now.getMonth() + 1, now.getFullYear()));
 }
 
 export default function Relatorios() {
@@ -732,7 +698,8 @@ export default function Relatorios() {
   const [searchParams, setSearchParams] = useSearchParams();
   const filterOptions = useMemo(() => getControlCenterFilterOptions(equipments), [equipments]);
   const controlCenterFilters = useMemo<ControlCenterFilters>(() => parseControlCenterFilters(searchParams, filterOptions), [searchParams, filterOptions]);
-  const scopedInspections = useMemo(() => filterControlCenterData(equipments, inspections, [], controlCenterFilters).inspections, [equipments, inspections, controlCenterFilters]);
+  const scopedReportData = useMemo(() => scopeReportData(equipments, inspections, controlCenterFilters), [equipments, inspections, controlCenterFilters]);
+  const scopedInspections = scopedReportData.inspections;
 
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState(() => searchParams.get('date') ?? '');
@@ -748,40 +715,22 @@ export default function Relatorios() {
   const urlStatusFilter = searchParams.has('status') ? getHistoryStatusFromQuery(searchParams.get('status')) : statusFilter;
 
   const history = useMemo(() => {
-    return scopedInspections.map(i => ({
-      id: i.id,
-      data: isoToBr(i.data),
-      dataISO: i.data,
-      inspetor: i.inspetor,
-      equipId: i.equipmentId,
-      status: STATUS_MAP[i.status] ?? 'PENDENTE' as HistoryStatus,
-      statusCode: i.status,
-      observacoes: i.observacoes,
-    }));
+    return buildHistoryEntries(scopedInspections);
   }, [scopedInspections]);
 
   const filtered = useMemo(() => {
-    return history.filter(h => {
-      const term = search.toLowerCase();
-      const matchSearch = !term ||
-        h.inspetor.toLowerCase().includes(term) ||
-        h.equipId.toLowerCase().includes(term) ||
-        (h.observacoes && h.observacoes.toLowerCase().includes(term));
-      const matchDate = (!dateFilter || h.dataISO === dateFilter) && (!dateFrom || h.dataISO >= dateFrom) && (!dateTo || h.dataISO <= dateTo);
-      const matchStatus = urlStatusFilter === 'Todos' || h.status === urlStatusFilter;
-      return matchSearch && matchDate && matchStatus;
+    return filterHistoryEntries(history, {
+      search,
+      date: dateFilter,
+      dateFrom,
+      dateTo,
+      status: urlStatusFilter,
     });
   }, [history, search, dateFilter, dateFrom, dateTo, urlStatusFilter]);
 
   const visible = filtered.slice(0, visibleCount);
 
-  const totalInspecoes = scopedInspections.length;
-  const scopedEquipment = filterControlCenterData(equipments, inspections, [], controlCenterFilters).equipments;
-  const conformesCount = scopedEquipment.filter(e => e.status === 'regular' || e.status === 'observacao').length;
-  const pendentesCriticos = scopedEquipment.filter(e => e.status === 'vencido').length;
-  const conformidadePct = scopedEquipment.length > 0
-    ? Math.round((conformesCount / scopedEquipment.length) * 100)
-    : 0;
+  const { totalInspecoes, conformesCount, pendentesCriticos, conformidadePct } = scopedReportData.summary;
 
   const clearFilters = () => {
     setSearch('');
