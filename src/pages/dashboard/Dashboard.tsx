@@ -244,9 +244,9 @@ export default function Dashboard() {
       label: 'Requer atenção',
       value: indicators.equipment.requiresAttention.count,
       icon: AlertOctagon,
-      iconBg: 'bg-red-50 text-critical',
-      color: 'text-critical',
-      accent: 'border-l-critical',
+      iconBg: 'bg-amber-50 text-pending',
+      color: 'text-pending',
+      accent: 'border-l-pending',
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'attention' }),
     },
   ];

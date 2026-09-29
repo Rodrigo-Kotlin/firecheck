@@ -102,7 +102,7 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
             </div>
             <div>
               <div className="text-white font-black text-lg leading-none">{APP_NAME}</div>
-              <div className="text-red-100 text-[10px] font-bold uppercase tracking-wider mt-0.5">Sistema de Inspeção</div>
+              <div className="text-green-100 text-[10px] font-bold uppercase tracking-wider mt-0.5">Sistema de Inspeção</div>
             </div>
           </div>
           <button

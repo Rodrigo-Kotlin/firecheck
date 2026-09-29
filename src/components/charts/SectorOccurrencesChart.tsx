@@ -67,7 +67,7 @@ export default function SectorOccurrencesChart({ data, title, description, onSel
             <Bar
               dataKey="count"
               name="Não conformidades"
-              fill="#dc2626"
+              fill="var(--color-critical)"
               radius={[0, 4, 4, 0]}
               maxBarSize={28}
               isAnimationActive={false}

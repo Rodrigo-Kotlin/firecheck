@@ -218,13 +218,13 @@ export function getControlCenterCharts(
 
   const situationTotal = activeEquipments.length;
   const situationColors: Record<string, string> = {
-    em_dia: '#16a34a',
-    observacao: '#ca8a04',
-    nao_conforme: '#dc2626',
-    sem_inspecao: '#2563eb',
-    prazo_vencido: '#ef4444',
-    sem_prazo: '#6b7280',
-    fora_operacao: '#9ca3af',
+    em_dia: 'var(--color-success)',
+    observacao: 'var(--color-pending)',
+    nao_conforme: 'var(--color-critical)',
+    sem_inspecao: 'var(--color-info)',
+    prazo_vencido: 'var(--color-critical)',
+    sem_prazo: 'var(--color-text-muted)',
+    fora_operacao: '#94A3B8',
   };
 
   const situationLabels: Record<string, string> = {
@@ -349,10 +349,10 @@ export function getControlCenterCharts(
   }
 
   const planStatusColors: Record<string, string> = {
-    Aberta: '#ef4444',
-    'Em andamento': '#ca8a04',
-    Vencida: '#991b1b',
-    Concluída: '#16a34a',
+    Aberta: 'var(--color-info)',
+    'Em andamento': 'var(--color-primary)',
+    Vencida: 'var(--color-critical)',
+    Concluída: 'var(--color-success)',
   };
 
   const actionPlansData: ActionPlanChartData[] = Object.entries(planStatusCounts)
@@ -365,7 +365,7 @@ export function getControlCenterCharts(
     }));
 
   const overduePlans: OverduePlansChartData[] = overduePlansCount > 0
-    ? [{ label: 'Planos atrasados', value: overduePlansCount, color: '#ef4444' }]
+    ? [{ label: 'Planos atrasados', value: overduePlansCount, color: 'var(--color-critical)' }]
     : [];
 
   // ============================================

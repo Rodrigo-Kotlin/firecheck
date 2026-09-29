@@ -219,7 +219,7 @@ export default function ScanQr() {
                   {/* Animated scan line */}
                   <div
                     className="absolute left-2 right-2 h-0.5 bg-primary top-1/2 animate-pulse"
-                    style={{ boxShadow: '0 0 8px #DC2626' }}
+                    style={{ boxShadow: '0 0 8px var(--color-primary)' }}
                   />
                 </div>
               </div>

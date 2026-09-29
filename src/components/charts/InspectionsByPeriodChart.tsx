@@ -54,7 +54,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
             <XAxis
               dataKey="period"
               interval={isDaily ? 'preserveStartEnd' : 0}
-              tick={{ fontSize: 10, fill: '#6b7280' }}
+              tick={{ fontSize: 10, fill: 'var(--color-text-muted)' }}
               axisLine={false}
               tickLine={false}
             />
@@ -63,15 +63,15 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               allowDecimals={false}
               domain={[0, 'dataMax']}
               width={isDaily ? 34 : 30}
-              tick={{ fontSize: 10, fill: '#6b7280' }}
+              tick={{ fontSize: 10, fill: 'var(--color-text-muted)' }}
               axisLine={false}
               tickLine={false}
             />
             <Tooltip
               formatter={tooltipFormatter}
               contentStyle={{
-                backgroundColor: '#fff',
-                border: '1px solid #e5e7eb',
+                backgroundColor: 'var(--color-surface)',
+                border: '1px solid var(--color-border-soft)',
                 borderRadius: '8px',
                 boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
               }}
@@ -81,7 +81,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               dataKey="regular"
               stackId="a"
               name="Regular"
-              fill="#16a34a"
+              fill="var(--color-success)"
               radius={[0, 4, 4, 0]}
               maxBarSize={32}
               isAnimationActive={false}
@@ -90,7 +90,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               dataKey="observacao"
               stackId="a"
               name="Observação"
-              fill="#ca8a04"
+              fill="var(--color-pending)"
               radius={[0, 4, 4, 0]}
               maxBarSize={32}
               isAnimationActive={false}
@@ -99,7 +99,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               dataKey="pendente"
               stackId="a"
               name="Pendente"
-              fill="#f59e0b"
+              fill="var(--color-pending)"
               radius={[0, 4, 4, 0]}
               maxBarSize={32}
               isAnimationActive={false}
@@ -108,7 +108,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
               dataKey="vencido"
               stackId="a"
               name="Vencido"
-              fill="#dc2626"
+              fill="var(--color-critical)"
               radius={[0, 4, 4, 0]}
               maxBarSize={32}
               isAnimationActive={false}
@@ -118,10 +118,10 @@ export default function InspectionsByPeriodChart({ data, title, description, per
       </div>
       <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[10px] font-medium">
         {([
-          ['regular', 'Regular', '#16a34a'],
-          ['observacao', 'Observação', '#ca8a04'],
-          ['pendente', 'Pendente', '#f59e0b'],
-          ['vencido', 'Vencido', '#dc2626'],
+          ['regular', 'Regular', 'var(--color-success)'],
+          ['observacao', 'Observação', 'var(--color-pending)'],
+          ['pendente', 'Pendente', 'var(--color-pending)'],
+          ['vencido', 'Vencido', 'var(--color-critical)'],
         ] as const).map(([status, label, color]) => (
           <button key={status} type="button" onClick={() => onSelectStatus?.(status)} disabled={!onSelectStatus} className="flex items-center gap-1 enabled:hover:underline disabled:cursor-default">
             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} /> {label}

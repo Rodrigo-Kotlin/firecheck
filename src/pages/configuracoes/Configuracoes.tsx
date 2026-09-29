@@ -49,7 +49,7 @@ function Section({ icon: Icon, index, title, description, action, children }: Se
     <section className="card-subtle bg-white">
       <header className="flex items-start justify-between gap-2 pb-3 mb-4 border-b border-gray-100">
         <div className="flex items-start gap-2.5 min-w-0 flex-1">
-          <div className="w-9 h-9 sm:w-10 sm:h-10 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0">
+          <div className="w-9 h-9 sm:w-10 sm:h-10 bg-primary-soft rounded-lg flex items-center justify-center flex-shrink-0">
             <Icon className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
           </div>
           <div className="min-w-0 flex-1">
@@ -109,7 +109,7 @@ function ToggleRow({
       >
         <div
           className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${
-            status ? 'bg-red-50 text-primary' : 'bg-gray-100 text-gray-400'
+            status ? 'bg-primary-soft text-primary' : 'bg-gray-100 text-gray-400'
           }`}
         >
           <Icon className="w-4 h-4" />

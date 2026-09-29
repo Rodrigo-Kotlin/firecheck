@@ -57,10 +57,10 @@ const CRITICIDADE_ICONS: Record<Criticidade, LucideIcon> = {
 };
 
 const STATUS_STYLES: Record<ActionPlanStatus, string> = {
-  'Aberta': 'bg-red-50 text-critical',
-  'Em andamento': 'bg-amber-50 text-pending',
+  'Aberta': 'bg-blue-50 text-blue-700',
+  'Em andamento': 'bg-primary/10 text-primary',
   'Concluída': 'bg-green-50 text-success',
-  'Vencida': 'bg-gray-100 text-gray-500',
+  'Vencida': 'bg-red-50 text-critical',
 };
 
 const STATUS_ICONS: Record<ActionPlanStatus, LucideIcon> = {
