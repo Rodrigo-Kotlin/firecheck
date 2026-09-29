@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateDeviationDescription, validateInspectionResult } from './inspectionWorkflow';
+import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionReadiness, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationDescriptionMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateDeviationDescription, validateInspectionResult } from './inspectionWorkflow';
 
 describe('inspection workflow status', () => {
   it('prioritizes failed checklist items', () => {
@@ -115,6 +115,31 @@ describe('inspection workflow status', () => {
     expect(getEvidenceInstruction('recommended', 0)).toContain('documentar');
     expect(getEvidenceInstruction('required', 1)).toContain('não conformidade identificada');
     expect(getEvidenceInstruction('required', 2)).toContain('representativa das não conformidades');
+  });
+
+  it('uses one readiness decision for badge and finalization', () => {
+    const base = {
+      checklistComplete: true,
+      checklistMessage: null,
+      deviationMessage: null,
+      evidenceMessage: null,
+      inspectorName: 'Ana',
+      resultMessage: null,
+      inspectionDate: '2026-10-29',
+    };
+    expect(deriveInspectionReadiness({ ...base, checklistComplete: false, checklistMessage: 'Avalie o item restante para concluir.' })).toEqual({ ready: false, message: 'Avalie o item restante para concluir.' });
+    expect(deriveInspectionReadiness({ ...base, deviationMessage: 'Descreva os 2 desvios identificados para concluir.' }).ready).toBe(false);
+    expect(deriveInspectionReadiness({ ...base, evidenceMessage: 'Adicione uma evidência visual da não conformidade para concluir.' }).ready).toBe(false);
+    expect(deriveInspectionReadiness({ ...base, inspectorName: '' }).message).toBe('Selecione o inspetor responsável pela inspeção.');
+    expect(deriveInspectionReadiness({ ...base, resultMessage: 'Resultado inválido.' }).ready).toBe(false);
+    expect(deriveInspectionReadiness({ ...base, inspectionDate: '' }).ready).toBe(false);
+    expect(deriveInspectionReadiness(base)).toEqual({ ready: true, message: null });
+  });
+
+  it('keeps a new deviation neutral until it is touched', () => {
+    expect(getDeviationDescriptionMessage('', false)).toBe('Descrição obrigatória · mínimo de 5 caracteres úteis.');
+    expect(getDeviationDescriptionMessage('x', true)).toBe('Descreva a condição com pelo menos 5 caracteres úteis.');
+    expect(getDeviationDescriptionMessage('Lacre rompido', true)).toBeNull();
   });
 
   it('marks partial conforming and observation results as provisional', () => {

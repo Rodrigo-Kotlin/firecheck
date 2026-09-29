@@ -5,6 +5,21 @@ export type InspectionResult = 'regular' | 'observacao' | 'vencido';
 export type DeviationSeverity = 'warning' | 'nonconformity';
 export type EvidenceRequirement = 'optional' | 'recommended' | 'required';
 
+export interface InspectionReadinessInput {
+  checklistComplete: boolean;
+  checklistMessage: string | null;
+  deviationMessage: string | null;
+  evidenceMessage: string | null;
+  inspectorName: string;
+  resultMessage: string | null;
+  inspectionDate: string;
+}
+
+export interface InspectionReadiness {
+  ready: boolean;
+  message: string | null;
+}
+
 export interface ChecklistProgress {
   total: number;
   answered: number;
@@ -22,6 +37,16 @@ export interface InspectionDeviation {
   item: string;
   severity: DeviationSeverity;
   description: string;
+}
+
+export function deriveInspectionReadiness(input: InspectionReadinessInput): InspectionReadiness {
+  if (!input.checklistComplete) return { ready: false, message: input.checklistMessage };
+  if (input.deviationMessage) return { ready: false, message: input.deviationMessage };
+  if (input.evidenceMessage) return { ready: false, message: input.evidenceMessage };
+  if (!input.inspectorName) return { ready: false, message: 'Selecione o inspetor responsável pela inspeção.' };
+  if (input.resultMessage) return { ready: false, message: input.resultMessage };
+  if (!input.inspectionDate) return { ready: false, message: 'Informe a data da próxima inspeção.' };
+  return { ready: true, message: null };
 }
 
 export function deriveEvidenceRequirement(
@@ -117,6 +142,11 @@ export function getDeviationValidationMessage(deviations: InspectionDeviation[])
   return invalidCount === 1
     ? 'Descreva o desvio identificado para concluir.'
     : `Descreva os ${invalidCount} desvios identificados para concluir.`;
+}
+
+export function getDeviationDescriptionMessage(description: string, touched: boolean): string | null {
+  if (!touched) return 'Descrição obrigatória · mínimo de 5 caracteres úteis.';
+  return validateDeviationDescription(description);
 }
 
 export function buildInspectionNotes(

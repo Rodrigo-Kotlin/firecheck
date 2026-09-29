@@ -28,7 +28,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
-import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateDeviationDescription, validateInspectionResult, type ChecklistValue, type EvidenceRequirement, type InspectionDeviation, type InspectionResult } from './inspectionWorkflow';
+import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionReadiness, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationDescriptionMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateInspectionResult, type ChecklistValue, type EvidenceRequirement, type InspectionDeviation, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
 import {
   createPreviewUrl,
@@ -524,6 +524,7 @@ export default function Inspecionar() {
   const [eqId, setEqId] = useState(preSelectedId || '');
   const [checklist, setChecklist] = useState<Record<string, ChecklistValue>>({});
   const [deviationNotes, setDeviationNotes] = useState<Record<string, string>>({});
+  const [touchedDeviationNotes, setTouchedDeviationNotes] = useState<Record<string, boolean>>({});
   const [inspectionResult, setInspectionResult] = useState<InspectionResult>('regular');
   const [validadeDate, setValidadeDate] = useState('');
   const [observacoes, setObservacoes] = useState('');
@@ -591,6 +592,7 @@ export default function Inspecionar() {
       setChecklist({});
     }
     setDeviationNotes({});
+    setTouchedDeviationNotes({});
     setInspectionResult('regular');
   }
 
@@ -622,12 +624,17 @@ export default function Inspecionar() {
   const hasAtencao = checklistCounts.ATENCAO > 0;
   const resultValidationMessage = validateInspectionResult(checklist, inspectionResult);
   const remainingMessage = getChecklistRemainingMessage(checklistProgress.remaining);
-  const blockingMessage = remainingMessage
-    ?? deviationValidationMessage
-    ?? evidenceValidationMessage
-    ?? (!inspectorName ? 'Selecione o inspetor responsável pela inspeção.' : resultValidationMessage)
-    ?? (!validadeDate ? 'Informe a data da próxima inspeção.' : null);
-  const canFinalize = isChecklistComplete(checklistProgress) && Boolean(inspectorName) && Boolean(validadeDate) && !resultValidationMessage && !deviationValidationMessage && !evidenceValidationMessage;
+  const readiness = deriveInspectionReadiness({
+    checklistComplete: isChecklistComplete(checklistProgress),
+    checklistMessage: remainingMessage,
+    deviationMessage: deviationValidationMessage,
+    evidenceMessage: evidenceValidationMessage,
+    inspectorName,
+    resultMessage: resultValidationMessage,
+    inspectionDate: validadeDate,
+  });
+  const blockingMessage = readiness.message;
+  const canFinalize = readiness.ready && !isSaving && !photoProcessing;
   const resultPresentation = getInspectionResultPresentation(checklistProgress, inspectionResult);
 
   const handleChecklistChange = (item: string, value: ChecklistValue) => {
@@ -635,6 +642,12 @@ export default function Inspecionar() {
     setChecklist(nextChecklist);
     if (value === 'OK' || value === 'N.A.') {
       setDeviationNotes((current) => {
+        if (!(item in current)) return current;
+        const next = { ...current };
+        delete next[item];
+        return next;
+      });
+      setTouchedDeviationNotes((current) => {
         if (!(item in current)) return current;
         const next = { ...current };
         delete next[item];
@@ -660,28 +673,8 @@ export default function Inspecionar() {
       return;
     }
 
-    if (!isChecklistComplete(checklistProgress)) {
-      setErrorMsg(remainingMessage ?? 'Avalie o checklist técnico para concluir.');
-      return;
-    }
-
-    if (deviationValidationMessage) {
-      setErrorMsg(deviationValidationMessage);
-      return;
-    }
-
-    if (evidenceValidationMessage) {
-      setErrorMsg(evidenceValidationMessage);
-      return;
-    }
-
-    if (!inspectorName) {
-      setErrorMsg('Selecione o inspetor responsável pela inspeção.');
-      return;
-    }
-
-    if (resultValidationMessage) {
-      setErrorMsg(resultValidationMessage);
+    if (!readiness.ready) {
+      setErrorMsg(readiness.message ?? 'Revise os dados obrigatórios para concluir.');
       return;
     }
 
@@ -760,6 +753,7 @@ export default function Inspecionar() {
     setIsSaving(false);
     setInspectionResult('regular');
     setDeviationNotes({});
+    setTouchedDeviationNotes({});
     setObservacoes('');
     setPhotoDraft(null);
     setPhotoProcessing(false);
@@ -927,8 +921,11 @@ export default function Inspecionar() {
                     {inspectionDeviations.map((deviation, index) => {
                       const isNonconformity = deviation.severity === 'nonconformity';
                       const descriptionId = `deviation-description-${index}`;
+                      const helpId = `${descriptionId}-help`;
                       const errorId = `${descriptionId}-error`;
-                      const validationError = validateDeviationDescription(deviation.description);
+                      const isTouched = touchedDeviationNotes[deviation.item] === true;
+                      const descriptionMessage = getDeviationDescriptionMessage(deviation.description, isTouched);
+                      const validationError = isTouched ? descriptionMessage : null;
                       return (
                         <div
                           key={deviation.item}
@@ -947,16 +944,22 @@ export default function Inspecionar() {
                           <textarea
                             id={descriptionId}
                             value={deviation.description}
-                            onChange={(e) => setDeviationNotes((current) => ({ ...current, [deviation.item]: e.target.value }))}
+                            onChange={(e) => {
+                              setDeviationNotes((current) => ({ ...current, [deviation.item]: e.target.value }));
+                              setTouchedDeviationNotes((current) => ({ ...current, [deviation.item]: true }));
+                            }}
+                            onBlur={() => setTouchedDeviationNotes((current) => ({ ...current, [deviation.item]: true }))}
                             placeholder={isNonconformity ? 'Descreva a não conformidade identificada e a providência recomendada.' : 'Descreva a condição observada e, se aplicável, a recomendação técnica.'}
                             rows={3}
                             className={`field-textarea ${validationError ? 'border-critical focus:border-critical focus:ring-critical/20' : ''}`}
-                            aria-describedby={`${errorId} ${descriptionId}-help`}
+                            aria-describedby={descriptionMessage ? validationError ? `${errorId} ${helpId}` : helpId : undefined}
                             aria-invalid={Boolean(validationError)}
                           />
-                          <p id={`${descriptionId}-help`} className="text-[10px] text-gray-500">
-                            {isNonconformity ? 'Descreva a não conformidade identificada e a providência recomendada.' : 'Descreva a condição observada e, se aplicável, a recomendação técnica.'}
-                          </p>
+                          {descriptionMessage && (
+                            <p id={helpId} className={`text-[10px] ${validationError ? 'text-critical font-semibold' : 'text-gray-500'}`}>
+                              {descriptionMessage}
+                            </p>
+                          )}
                           {validationError && (
                             <p id={errorId} className="text-xs font-semibold text-critical" role="alert">{validationError}</p>
                           )}
@@ -1104,8 +1107,8 @@ export default function Inspecionar() {
               <section className="card-subtle bg-gray-50 border border-gray-200 space-y-3" aria-labelledby="inspection-summary-title">
                 <div className="flex items-center justify-between gap-2">
                   <h2 id="inspection-summary-title" className="label-uppercase">Resumo da inspeção</h2>
-                  <span className={`pill text-[10px] ${checklistProgress.remaining > 0 ? 'bg-gray-200 text-gray-600' : 'bg-green-100 text-success'}`}>
-                    {checklistProgress.remaining > 0 ? 'Inspeção incompleta' : 'Pronta para concluir'}
+                  <span className={`pill text-[10px] ${canFinalize ? 'bg-green-100 text-success' : checklistProgress.remaining > 0 ? 'bg-gray-200 text-gray-600' : 'bg-amber-100 text-pending'}`}>
+                    {canFinalize ? 'Pronta para concluir' : checklistProgress.remaining > 0 ? 'Inspeção incompleta' : 'Pendente'}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 text-xs">
@@ -1140,7 +1143,7 @@ export default function Inspecionar() {
           {/* Sticky submit */}
           {selectedEquipment && (
             <div className="sticky bottom-20 lg:bottom-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-neutralBg lg:bg-transparent lg:px-0 lg:py-0 lg:mx-0">
-              <button type="submit" className="btn-primary" disabled={isSaving || photoProcessing || !canFinalize}>
+              <button type="submit" className="btn-primary disabled:bg-gray-400 disabled:text-gray-100" disabled={!canFinalize}>
                 {isSaving ? (
                   <><Loader2 className="w-5 h-5 animate-spin" /> Salvando inspeção...</>
                 ) : photoProcessing ? (
