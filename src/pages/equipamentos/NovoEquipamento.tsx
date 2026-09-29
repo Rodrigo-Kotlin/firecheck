@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -15,7 +15,6 @@ import {
   Sparkles,
   Tag,
   Wrench,
-  type LucideIcon,
 } from 'lucide-react';
 import QrCodePrintCard from '../../components/QrCodePrintCard';
 import { canAttemptNetwork } from '../../services/networkState';
@@ -23,10 +22,9 @@ import {
   EQUIP_TYPES,
   EQUIP_STATUS,
   STATUS_LABEL,
-  FIELD_CONFIGS,
-  type FieldConfig,
-  type FieldSection,
 } from '../../constants/equipmentFormConfig';
+import { FieldRenderer, FormField, FormSection } from './EquipmentFormPrimitives';
+import { fieldsBySection } from './equipmentFormSections';
 import type { Equipment, EquipmentStatus } from '../../types';
 import { generateNextTag, isValidTagForType, TAG_PREFIXES, normalizeTag } from '../../utils/tagGenerator';
 import { db } from '../../db';
@@ -152,104 +150,6 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-/* ----- Local form primitives ----- */
-
-type FormSectionProps = {
-  title: string;
-  icon: LucideIcon;
-  children: ReactNode;
-};
-
-function FormSection({ title, icon: Icon, children }: FormSectionProps) {
-  return (
-    <div className="card-subtle bg-white">
-      <div className="flex items-center gap-2.5 border-b border-gray-50 pb-3 mb-5">
-        <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
-          <Icon className="w-4 h-4" />
-        </span>
-        <h2 className="label-uppercase">{title}</h2>
-      </div>
-      <div className="space-y-4">{children}</div>
-    </div>
-  );
-}
-
-type FormFieldProps = {
-  label: string;
-  required?: boolean;
-  error?: string;
-  hint?: string;
-  htmlFor?: string;
-  children: ReactNode;
-};
-
-function FormField({ label, required, error, hint, htmlFor, children }: FormFieldProps) {
-  return (
-    <div>
-      <label htmlFor={htmlFor} className="field-label flex items-baseline gap-1">
-        <span>{label}</span>
-        {required && (
-          <span className="text-critical text-xs font-black" aria-label="obrigatório">*</span>
-        )}
-      </label>
-      {children}
-      {error ? (
-        <span className="field-error flex items-center gap-1 mt-1.5">
-          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-          <span>{error}</span>
-        </span>
-      ) : hint ? (
-        <span className="field-hint">{hint}</span>
-      ) : null}
-    </div>
-  );
-}
-
-/* ----- Render a single field based on config ----- */
-
-type FieldRendererProps = {
-  field: FieldConfig;
-  register: ReturnType<typeof useForm<FormData>>['register'];
-  errors: Record<string, { message?: string }>;
-};
-
-function FieldRenderer({ field, register, errors }: FieldRendererProps) {
-  const error = errors[field.name]?.message;
-
-  if (field.type === 'select' && field.options) {
-    return (
-      <FormField key={field.name} label={field.label} error={error} htmlFor={field.name}>
-        <select id={field.name} {...register(field.name as keyof FormData)} className={`field-input ${error ? 'border-critical' : ''}`}>
-          <option value="">Selecione...</option>
-          {field.options.map((opt) => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-        </select>
-      </FormField>
-    );
-  }
-
-  if (field.type === 'date') {
-    return (
-      <FormField key={field.name} label={field.label} error={error} htmlFor={field.name}>
-        <input id={field.name} type="date" {...register(field.name as keyof FormData)} className={`field-input ${error ? 'border-critical' : ''}`} />
-      </FormField>
-    );
-  }
-
-  return (
-    <FormField key={field.name} label={field.label} error={error} htmlFor={field.name}>
-      <input
-        id={field.name}
-        type="text"
-        {...register(field.name as keyof FormData)}
-        placeholder={field.placeholder}
-        className={`field-input ${error ? 'border-critical' : ''}`}
-      />
-    </FormField>
-  );
-}
-
 /* ----- Page component ----- */
 
 export default function NovoEquipamento() {
@@ -313,13 +213,8 @@ export default function NovoEquipamento() {
   }, [idAtual, tipoSelecionado, tagEditadaManualmente]);
 
   const fieldsPorSecao = useMemo(() => {
-    if (!tipoSelecionado) return null as Record<string, FieldConfig[]> | null;
-    const secoes: FieldSection[] = ['identificacao', 'localizacao', 'dadosTecnicos', 'inspecaoManutencao'];
-    const map: Record<string, FieldConfig[]> = { identificacao: [], localizacao: [], dadosTecnicos: [], inspecaoManutencao: [] };
-    for (const sec of secoes) {
-      map[sec] = FIELD_CONFIGS.filter((f) => f.section === sec && f.tipos.includes(tipoSelecionado));
-    }
-    return map;
+    if (!tipoSelecionado) return null;
+    return fieldsBySection(tipoSelecionado);
   }, [tipoSelecionado]);
 
   const COMMON_FORM_FIELDS = new Set([

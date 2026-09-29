@@ -26,14 +26,14 @@ import {
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import QRCode from 'qrcode';
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import {
-  FIELD_CONFIGS,
   STATUS_LABEL,
 } from '../../constants/equipmentFormConfig';
+import { fieldsBySection } from './equipmentFormSections';
+import { generateEquipmentQr } from './equipmentQr';
 
 type FieldProps = {
   label: string;
@@ -111,12 +111,7 @@ export default function DetalhesEquipamento() {
     if (!qrModalOpen || !eq) return;
     const value = eq.id;
     let cancelled = false;
-    QRCode.toDataURL(value, {
-      errorCorrectionLevel: 'H',
-      margin: 1,
-      width: 512,
-      color: { dark: '#111111', light: '#FFFFFF' },
-    }).then((url) => {
+    generateEquipmentQr(value).then((url) => {
       if (!cancelled) setQrDataUrl(url);
     }).catch((err) => {
       console.error('[Detalhes] Erro ao gerar QR:', err);
@@ -128,12 +123,7 @@ export default function DetalhesEquipamento() {
     if (!eq) return;
     const value = eq.id;
     try {
-      const url = await QRCode.toDataURL(value, {
-        errorCorrectionLevel: 'H',
-        margin: 1,
-        width: 512,
-        color: { dark: '#111111', light: '#FFFFFF' },
-      });
+      const url = await generateEquipmentQr(value);
       const a = document.createElement('a');
       a.href = url;
       a.download = `QR-${eq.id}.png`;
@@ -159,13 +149,9 @@ export default function DetalhesEquipamento() {
     );
   }
 
-  const fieldsDadosTecnicos = FIELD_CONFIGS.filter(
-    (f) => f.section === 'dadosTecnicos' && f.tipos.includes(eq.tipo),
-  );
-
-  const fieldsInspecao = FIELD_CONFIGS.filter(
-    (f) => f.section === 'inspecaoManutencao' && f.tipos.includes(eq.tipo),
-  );
+  const fieldsPorSecao = fieldsBySection(eq.tipo);
+  const fieldsDadosTecnicos = fieldsPorSecao.dadosTecnicos;
+  const fieldsInspecao = fieldsPorSecao.inspecaoManutencao;
 
   const eqInspections = inspections.filter((i) => i.equipmentId === eq.id);
 

@@ -15,14 +15,13 @@ import {
   Tag,
   Wrench,
   ShieldAlert,
-  type LucideIcon,
 } from 'lucide-react';
 import {
   EQUIP_TYPES,
   STATUS_LABEL,
-  FIELD_CONFIGS,
-  type FieldConfig,
 } from '../../constants/equipmentFormConfig';
+import { FieldRenderer, FormField, FormSection } from './EquipmentFormPrimitives';
+import { fieldsBySection } from './equipmentFormSections';
 
 const schema = z.object({
   tipo: z.string().min(1, { message: 'Selecione o tipo do equipamento' }),
@@ -141,97 +140,6 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-type FormSectionProps = {
-  title: string;
-  icon: LucideIcon;
-  children: React.ReactNode;
-};
-
-function FormSection({ title, icon: Icon, children }: FormSectionProps) {
-  return (
-    <div className="card-subtle bg-white">
-      <div className="flex items-center gap-2.5 border-b border-gray-50 pb-3 mb-5">
-        <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
-          <Icon className="w-4 h-4" />
-        </span>
-        <h2 className="label-uppercase">{title}</h2>
-      </div>
-      <div className="space-y-4">{children}</div>
-    </div>
-  );
-}
-
-type FormFieldProps = {
-  label: string;
-  required?: boolean;
-  error?: string;
-  htmlFor?: string;
-  children: React.ReactNode;
-};
-
-function FormField({ label, required, error, htmlFor, children }: FormFieldProps) {
-  return (
-    <div>
-      <label htmlFor={htmlFor} className="field-label flex items-baseline gap-1">
-        <span>{label}</span>
-        {required && (
-          <span className="text-critical text-xs font-black" aria-label="obrigatório">*</span>
-        )}
-      </label>
-      {children}
-      {error ? (
-        <span className="field-error flex items-center gap-1 mt-1.5">
-          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-          <span>{error}</span>
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-type FieldRendererProps = {
-  field: FieldConfig;
-  register: ReturnType<typeof useForm<FormData>>['register'];
-  errors: Record<string, { message?: string }>;
-};
-
-function FieldRenderer({ field, register, errors }: FieldRendererProps) {
-  const error = errors[field.name]?.message;
-
-  if (field.type === 'select' && field.options) {
-    return (
-      <FormField key={field.name} label={field.label} error={error} htmlFor={field.name}>
-        <select id={field.name} {...register(field.name as keyof FormData)} className={`field-input ${error ? 'border-critical' : ''}`}>
-          <option value="">Selecione...</option>
-          {field.options.map((opt) => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-        </select>
-      </FormField>
-    );
-  }
-
-  if (field.type === 'date') {
-    return (
-      <FormField key={field.name} label={field.label} error={error} htmlFor={field.name}>
-        <input id={field.name} type="date" {...register(field.name as keyof FormData)} className={`field-input ${error ? 'border-critical' : ''}`} />
-      </FormField>
-    );
-  }
-
-  return (
-    <FormField key={field.name} label={field.label} error={error} htmlFor={field.name}>
-      <input
-        id={field.name}
-        type="text"
-        {...register(field.name as keyof FormData)}
-        placeholder={field.placeholder}
-        className={`field-input ${error ? 'border-critical' : ''}`}
-      />
-    </FormField>
-  );
-}
-
 const COMMON_FORM_FIELDS = new Set([
   'tipo', 'status', 'local', 'setor', 'pavimento', 'fabricante', 'numSerie',
   'capacidade', 'tipoCarga',
@@ -276,13 +184,8 @@ export default function EditarEquipamento() {
   const tipoSelecionado = watch('tipo');
 
   const fieldsPorSecao = useMemo(() => {
-    if (!tipoSelecionado) return null as Record<string, FieldConfig[]> | null;
-    const secoes = ['identificacao', 'localizacao', 'dadosTecnicos', 'inspecaoManutencao'] as const;
-    const map: Record<string, FieldConfig[]> = { identificacao: [], localizacao: [], dadosTecnicos: [], inspecaoManutencao: [] };
-    for (const sec of secoes) {
-      map[sec] = FIELD_CONFIGS.filter((f) => f.section === sec && f.tipos.includes(tipoSelecionado));
-    }
-    return map;
+    if (!tipoSelecionado) return null;
+    return fieldsBySection(tipoSelecionado);
   }, [tipoSelecionado]);
 
   if (!equipment) {
