@@ -16,7 +16,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
-  Minus,
   MapPin,
   MessageSquare,
   Plus,
@@ -29,8 +28,16 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
-
-type ChecklistValue = 'OK' | 'ATENCAO' | 'REPROVADO' | 'N.A.';
+import { buildInspectionPayload, deriveInspectionStatus, type ChecklistValue } from './inspectionWorkflow';
+import { InspectionChecklist } from './InspectionChecklist';
+import {
+  createPreviewUrl,
+  formatBytes,
+  PHOTO_ERROR_MSG,
+  PHOTO_MAX_BYTES,
+  revokePreviewUrl,
+  type PhotoDraft,
+} from './inspectionPhoto';
 
 // Checklists item text arrays
 const CHECKLIST_EXTINTOR = [
@@ -91,38 +98,6 @@ const CHECKLIST_ILUMINACAO = [
   'Sem fios expostos',
   'Sem obstrução visual'
 ];
-
-const CHECKLIST_VALUES: readonly ChecklistValue[] = ['OK', 'ATENCAO', 'REPROVADO', 'N.A.'];
-
-const STATUS_CONFIGS: Record<
-  ChecklistValue,
-  { label: string; pillClass: string; selectedClass: string; icon: LucideIcon }
-> = {
-  OK: {
-    label: 'OK',
-    pillClass: 'bg-green-100 text-success',
-    selectedClass: 'bg-green-100 text-success',
-    icon: CheckCircle2,
-  },
-  ATENCAO: {
-    label: 'Atenção',
-    pillClass: 'bg-amber-100 text-pending',
-    selectedClass: 'bg-amber-100 text-pending',
-    icon: AlertTriangle,
-  },
-  REPROVADO: {
-    label: 'Falha',
-    pillClass: 'bg-red-100 text-critical',
-    selectedClass: 'bg-red-100 text-critical',
-    icon: XCircle,
-  },
-  'N.A.': {
-    label: 'N.A.',
-    pillClass: 'bg-gray-100 text-gray-500',
-    selectedClass: 'bg-gray-200 text-gray-600',
-    icon: Minus,
-  },
-};
 
 const EQUIPMENT_STATUS_CONFIGS: Record<
   EquipmentStatus,
@@ -197,41 +172,6 @@ const EQUIPMENT_STATUS_CONFIGS: Record<
 
 /** Foto já processada, pronta para preview + persistência. O preview usa uma
  *  Object URL do Blob (`URL.createObjectURL`) — nunca uma string Base64. */
-interface PhotoDraft {
-  blob: Blob;
-  /** Object URL para o `<img>` de preview. É revogada quando a foto é
-   *  trocada/removida ou a tela desmonta. */
-  previewUrl: string;
-  mimeType: string;
-  width: number;
-  height: number;
-  size: number;
-}
-
-const PHOTO_MAX_BYTES = 10 * 1024 * 1024; // 10 MB upload limit
-const PHOTO_ERROR_MSG = 'Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.';
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/** Cria uma Object URL para o preview do Blob (sem representação em Base64). */
-function createPreviewUrl(blob: Blob): string {
-  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
-    throw new Error('Este navegador não suporta pré-visualização de imagem.');
-  }
-  return URL.createObjectURL(blob);
-}
-
-/** Revoga uma Object URL quando ela sai de uso (troca, remoção ou unmount). */
-function revokePreviewUrl(url: string | null | undefined): void {
-  if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
-    URL.revokeObjectURL(url);
-  }
-}
-
 type PhotoCaptureProps = {
   value: PhotoDraft | null;
   onChange: (draft: PhotoDraft | null) => void;
@@ -648,39 +588,20 @@ export default function Inspecionar() {
       console.log(`[inspection-submit] accepted ${submissionIdRef.current}`);
     }
 
-    // Determine status logic.
-    // REPROVADO > ATENCAO > date warnings > regular.
-    let finalStatus: EquipmentStatus = 'regular';
-    const hasReprovado = Object.values(checklist).some((val) => val === 'REPROVADO');
-    const hasAtencao = Object.values(checklist).some((val) => val === 'ATENCAO');
-
-    if (hasReprovado) {
-      finalStatus = 'vencido';
-    } else if (hasAtencao) {
-      finalStatus = 'pendente';
-    } else if (validadeDate) {
-      const today = new Date();
-      const expDate = new Date(validadeDate);
-      const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays <= 7) {
-        finalStatus = 'vencido';
-      } else if (diffDays <= 30) {
-        finalStatus = 'observacao';
-      }
-    }
+    const finalStatus: EquipmentStatus = deriveInspectionStatus(checklist, validadeDate);
 
     setIsSaving(true);
     setErrorMsg('');
 
     try {
       localStorage.setItem('firecheck_last_inspector_name', inspectorName);
-      const result = await addInspection({
+      const result = await addInspection(buildInspectionPayload({
         inspectionId,
         equipmentId: selectedEquipment.id,
-        data: new Date().toISOString().split('T')[0],
-        inspetor: inspectorName,
+        inspectionDate: new Date().toISOString().split('T')[0],
+        inspectorName,
         status: finalStatus,
-        observacoes,
+        notes: observacoes,
         userId: user?.id,
         photo: photoDraft
           ? {
@@ -691,8 +612,8 @@ export default function Inspecionar() {
               size: photoDraft.size,
             }
           : undefined,
-        dataProximaInspecao: validadeDate || undefined,
-      });
+        nextInspectionDate: validadeDate || undefined,
+      }));
 
       if (!result.ok) {
         setErrorMsg(result.error ?? 'Erro ao salvar inspeção. Tente novamente.');
@@ -872,74 +793,12 @@ export default function Inspecionar() {
 
           {/* Checklist */}
           {selectedEquipment && checklistItems.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-start justify-between gap-2 flex-wrap">
-                <div>
-                  <span className="label-uppercase">Checklist Técnico</span>
-                  <p className="text-[10px] text-gray-500 mt-0.5">
-                    {checklistItems.length} itens · toque em cada ponto para classificar
-                  </p>
-                </div>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {CHECKLIST_VALUES.map((value) => {
-                    const count = checklistCounts[value];
-                    if (count === 0) return null;
-                    const config = STATUS_CONFIGS[value];
-                    const Icon = config.icon;
-                    return (
-                      <span key={value} className={`pill ${config.pillClass}`}>
-                        <Icon className="w-3 h-3" />
-                        {count} {config.label}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {checklistItems.map((item, index) => {
-                  const val = checklist[item];
-                  return (
-                    <div key={item} className="card-subtle bg-white space-y-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="text-sm font-bold text-gray-800 leading-snug flex-1">
-                          {item}
-                        </span>
-                        <span className="text-[10px] font-bold text-gray-300 tabular-nums flex-shrink-0">
-                          {String(index + 1).padStart(2, '0')}/{String(checklistItems.length).padStart(2, '0')}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-4 gap-1 p-1 bg-gray-50 rounded-xl">
-                        {CHECKLIST_VALUES.map((value) => {
-                          const config = STATUS_CONFIGS[value];
-                          const Icon = config.icon;
-                          const isSelected = val === value;
-                          return (
-                            <button
-                              key={value}
-                              type="button"
-                              onClick={() => setChecklist((prev) => ({ ...prev, [item]: value }))}
-                              className={`flex flex-col items-center justify-center gap-0.5 h-12 rounded-lg transition-all ${
-                                isSelected
-                                  ? `${config.selectedClass} shadow-sm`
-                                  : 'text-gray-400 hover:text-gray-600 active:scale-95'
-                              }`}
-                              aria-pressed={isSelected}
-                              aria-label={config.label}
-                            >
-                              <Icon className="w-4 h-4" />
-                              <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-tight">
-                                {config.label}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            <InspectionChecklist
+              items={checklistItems}
+              values={checklist}
+              counts={checklistCounts}
+              onChange={(item, value) => setChecklist((prev) => ({ ...prev, [item]: value }))}
+            />
           )}
 
           {/* Date, photo and observations — only when equipment is selected */}
