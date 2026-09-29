@@ -14,9 +14,9 @@ import { getHistoryStatusFromQuery, HISTORY_STATUS_BADGE, type HistoryEntry, typ
 import { individualReportFilename, monthlyReportFilename } from './reportFileNames';
 
 const PDF_COLORS = {
-  primary: [220, 38, 38] as [number, number, number],
-  primaryDark: [185, 28, 28] as [number, number, number],
-  primaryLight: [254, 226, 226] as [number, number, number],
+  primary: [11, 107, 58] as [number, number, number],
+  primaryDark: [7, 82, 45] as [number, number, number],
+  primaryLight: [220, 252, 231] as [number, number, number],
   text: [17, 24, 39] as [number, number, number],
   textMuted: [75, 85, 99] as [number, number, number],
   textSubtle: [156, 163, 175] as [number, number, number],

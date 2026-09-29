@@ -4,7 +4,7 @@
   "description": "Gestão e inspeção de equipamentos de combate a incêndio.",
   "lang": "pt-BR",
   "id": "./",
-  "background_color": "#DC2626",
+  "background_color": "#F6F8F7",
   "handle_links": "preferred",
   "launch_handler": {
     "client_mode": "navigate-existing"
@@ -91,7 +91,7 @@
   ],
   "start_url": ".",
   "scope": ".",
-  "theme_color": "#DC2626",
+  "theme_color": "#0B6B3A",
   "display": "standalone",
   "shortcuts": [
     {

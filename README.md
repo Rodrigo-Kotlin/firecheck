@@ -106,7 +106,7 @@ firecheck/
 │   └── workflows/
 │       └── ci.yml          # testes, gates e build em PRs/main
 ├── public/
-│   ├── manifest.json       # PWA manifest (theme_color #DC2626)
+│   ├── manifest.json       # PWA manifest (theme_color #0B6B3A)
 │   ├── favicon.ico         # multi-size (16+32+48)
 │   ├── favicon-{16,32,48}.png
 │   ├── apple-touch-icon.png

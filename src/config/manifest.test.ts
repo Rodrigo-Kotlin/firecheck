@@ -16,6 +16,8 @@ const manifest = JSON.parse(
   scope: string;
   display: string;
   orientation?: string;
+  theme_color: string;
+  background_color: string;
   shortcuts?: Array<{ url: string; icons?: Array<{ src: string }> }>;
 };
 
@@ -28,6 +30,8 @@ describe('manifest PWA do EfetivaFire', () => {
     expect(manifest.start_url).toBe('.');
     expect(manifest.scope).toBe('.');
     expect(manifest.display).toBe('standalone');
+    expect(manifest.theme_color).toBe('#0B6B3A');
+    expect(manifest.background_color).toBe('#F6F8F7');
   });
 
   it('não força orientação fixa nem declara screenshot falsa', () => {

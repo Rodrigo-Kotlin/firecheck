@@ -251,7 +251,7 @@ export default function PlanoDeAcao() {
       </div>
 
       {/* Search */}
-      <div className="flex items-center gap-0 bg-white border border-gray-200 rounded-lg overflow-hidden has-[input:focus]:border-primary has-[input:focus]:shadow-[0_0_0_3px_rgba(220,38,38,0.12)] transition-all" role="search">
+      <div className="flex items-center gap-0 bg-white border border-gray-200 rounded-lg overflow-hidden has-[input:focus]:border-primary has-[input:focus]:shadow-[0_0_0_3px_rgba(11,107,58,0.12)] transition-all" role="search">
         <label htmlFor="plan-search" className="sr-only">
           Buscar planos de ação
         </label>

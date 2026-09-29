@@ -202,19 +202,19 @@ export default function ScanQr() {
                 <div className="relative w-64 h-64 sm:w-72 sm:h-72">
                   <div
                     className="absolute -top-1 -left-1 w-10 h-10 border-t-[5px] border-l-[5px] border-primary rounded-tl-xl"
-                    style={{ filter: 'drop-shadow(0 0 8px rgba(220,38,38,0.6))' }}
+                    style={{ filter: 'drop-shadow(0 0 8px rgba(11,107,58,0.6))' }}
                   />
                   <div
                     className="absolute -top-1 -right-1 w-10 h-10 border-t-[5px] border-r-[5px] border-primary rounded-tr-xl"
-                    style={{ filter: 'drop-shadow(0 0 8px rgba(220,38,38,0.6))' }}
+                    style={{ filter: 'drop-shadow(0 0 8px rgba(11,107,58,0.6))' }}
                   />
                   <div
                     className="absolute -bottom-1 -left-1 w-10 h-10 border-b-[5px] border-l-[5px] border-primary rounded-bl-xl"
-                    style={{ filter: 'drop-shadow(0 0 8px rgba(220,38,38,0.6))' }}
+                    style={{ filter: 'drop-shadow(0 0 8px rgba(11,107,58,0.6))' }}
                   />
                   <div
                     className="absolute -bottom-1 -right-1 w-10 h-10 border-b-[5px] border-r-[5px] border-primary rounded-br-xl"
-                    style={{ filter: 'drop-shadow(0 0 8px rgba(220,38,38,0.6))' }}
+                    style={{ filter: 'drop-shadow(0 0 8px rgba(11,107,58,0.6))' }}
                   />
                   {/* Animated scan line */}
                   <div
