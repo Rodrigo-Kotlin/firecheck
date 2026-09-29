@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, isChecklistComplete, validateInspectionResult } from './inspectionWorkflow';
+import { buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getInspectionResultPresentation, isChecklistComplete, validateInspectionResult } from './inspectionWorkflow';
 
 describe('inspection workflow status', () => {
   it('prioritizes failed checklist items', () => {
@@ -89,5 +89,23 @@ describe('inspection workflow status', () => {
     expect(isChecklistComplete(getChecklistProgress(['a'], {}))).toBe(false);
     expect(isChecklistComplete(getChecklistProgress(['a'], { a: 'N.A.' }))).toBe(true);
     expect(isChecklistComplete(getChecklistProgress([], {}))).toBe(false);
+  });
+
+  it('keeps zero responses waiting instead of selecting a final result', () => {
+    expect(getInspectionResultPresentation(getChecklistProgress(['a'], {}), 'regular')).toEqual({
+      label: 'Aguardando avaliação',
+      state: 'waiting',
+    });
+  });
+
+  it('marks partial conforming and observation results as provisional', () => {
+    const progress = getChecklistProgress(['a', 'b'], { a: 'OK' });
+    expect(getInspectionResultPresentation(progress, 'regular').label).toBe('Resultado parcial: Conforme');
+    expect(getInspectionResultPresentation(progress, 'observacao').label).toBe('Resultado parcial: Em observação');
+  });
+
+  it('uses final result labels only when the checklist is complete', () => {
+    const progress = getChecklistProgress(['a'], { a: 'REPROVADO' });
+    expect(getInspectionResultPresentation(progress, 'vencido')).toEqual({ label: 'Não conforme', state: 'final' });
   });
 });

@@ -28,7 +28,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
-import { buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, isChecklistComplete, validateInspectionResult, type ChecklistValue, type InspectionResult } from './inspectionWorkflow';
+import { buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getInspectionResultPresentation, isChecklistComplete, validateInspectionResult, type ChecklistValue, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
 import {
   createPreviewUrl,
@@ -595,8 +595,8 @@ export default function Inspecionar() {
   const blockingMessage = remainingMessage
     ?? (!inspectorName ? 'Selecione o inspetor responsável pela inspeção.' : resultValidationMessage)
     ?? (!validadeDate ? 'Informe a data da próxima inspeção.' : null);
-  const selectedResultLabel = INSPECTION_RESULT_OPTIONS.find(option => option.value === inspectionResult)?.label ?? '—';
   const canFinalize = isChecklistComplete(checklistProgress) && Boolean(inspectorName) && Boolean(validadeDate) && !resultValidationMessage;
+  const resultPresentation = getInspectionResultPresentation(checklistProgress, inspectionResult);
 
   const handleChecklistChange = (item: string, value: ChecklistValue) => {
     const nextChecklist = { ...checklist, [item]: value };
@@ -617,6 +617,11 @@ export default function Inspecionar() {
 
     if (!selectedEquipment) {
       setErrorMsg('Por favor, selecione um equipamento.');
+      return;
+    }
+
+    if (!isChecklistComplete(checklistProgress)) {
+      setErrorMsg(remainingMessage ?? 'Avalie o checklist técnico para concluir.');
       return;
     }
 
@@ -862,15 +867,18 @@ export default function Inspecionar() {
                   Resultado da inspeção
                 </legend>
                 <p id="inspection-result-help" className="text-xs text-gray-500">
-                  Resultado sugerido com base no checklist técnico. Você pode escolher Em observação para registrar uma observação técnica adicional.
+                  {resultPresentation.state === 'waiting'
+                    ? 'Avalie o checklist técnico para determinar o resultado.'
+                    : resultPresentation.state === 'partial'
+                      ? 'Resultado parcial/provisório, atualizado conforme as respostas.'
+                      : 'Resultado final definido com base no checklist técnico.'}
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {INSPECTION_RESULT_OPTIONS.map((option) => {
                     const Icon = option.icon;
-                    const isSelected = inspectionResult === option.value;
-                    const disabled = hasReprovado
-                      ? option.value !== 'vencido'
-                      : hasAtencao && option.value === 'regular';
+                    const isSelected = resultPresentation.state !== 'waiting' && inspectionResult === option.value;
+                    const disabled = resultPresentation.state === 'waiting'
+                      || (hasReprovado ? option.value !== 'vencido' : hasAtencao && option.value === 'regular');
                     return (
                       <label
                         key={option.value}
@@ -985,15 +993,15 @@ export default function Inspecionar() {
                     {checklistProgress.remaining > 0 ? 'Inspeção incompleta' : 'Pronta para concluir'}
                   </span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  <div><span className="block text-gray-500">Checklist</span><strong>{checklistProgress.answered}/{checklistProgress.total} avaliados</strong></div>
-                  <div><span className="block text-gray-500">Conforme</span><strong className="text-success">{checklistCounts.OK}</strong></div>
-                  <div><span className="block text-gray-500">Observação</span><strong className="text-pending">{checklistCounts.ATENCAO}</strong></div>
-                  <div><span className="block text-gray-500">Não conforme</span><strong className="text-critical">{checklistCounts.REPROVADO}</strong></div>
-                  <div><span className="block text-gray-500">N.A.</span><strong className="text-gray-600">{checklistCounts['N.A.']}</strong></div>
-                  <div><span className="block text-gray-500">Resultado</span><strong>{checklistProgress.remaining > 0 ? 'Resultado parcial' : selectedResultLabel}</strong></div>
-                  <div><span className="block text-gray-500">Próxima inspeção</span><strong>{formatInspectionDate(validadeDate)}</strong></div>
-                  <div><span className="block text-gray-500">Evidência</span><strong>{photoDraft ? 'Presente' : 'Não adicionada'}</strong></div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 text-xs">
+                  <div><span className="block text-gray-500">Checklist</span><strong className="block mt-0.5">{checklistProgress.answered}/{checklistProgress.total} avaliados</strong></div>
+                  <div><span className="block text-gray-500">Conforme</span><strong className="block mt-0.5 text-success">{checklistCounts.OK}</strong></div>
+                  <div><span className="block text-gray-500">Observação</span><strong className="block mt-0.5 text-pending">{checklistCounts.ATENCAO}</strong></div>
+                  <div><span className="block text-gray-500">Não conforme</span><strong className="block mt-0.5 text-critical">{checklistCounts.REPROVADO}</strong></div>
+                  <div><span className="block text-gray-500">N.A.</span><strong className="block mt-0.5 text-gray-600">{checklistCounts['N.A.']}</strong></div>
+                  <div><span className="block text-gray-500">Resultado</span><strong className="block mt-0.5">{resultPresentation.label}</strong></div>
+                  <div><span className="block text-gray-500">Próxima inspeção</span><strong className="block mt-0.5">{formatInspectionDate(validadeDate)}</strong></div>
+                  <div><span className="block text-gray-500">Evidência</span><strong className="block mt-0.5">{photoDraft ? 'Presente' : 'Não adicionada'}</strong></div>
                 </div>
                 {blockingMessage && (
                   <p className="text-xs font-semibold text-gray-600" role="status">{blockingMessage}</p>

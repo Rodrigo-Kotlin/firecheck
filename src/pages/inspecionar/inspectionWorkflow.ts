@@ -11,6 +11,11 @@ export interface ChecklistProgress {
   counts: Record<ChecklistValue, number>;
 }
 
+export interface InspectionResultPresentation {
+  label: string;
+  state: 'waiting' | 'partial' | 'final';
+}
+
 export interface InspectionPhotoPayload {
   blob: Blob;
   mimeType: string;
@@ -112,4 +117,19 @@ export function getChecklistRemainingMessage(remaining: number): string | null {
 
 export function isChecklistComplete(progress: ChecklistProgress): boolean {
   return progress.total > 0 && progress.remaining === 0;
+}
+
+export function getInspectionResultPresentation(
+  progress: ChecklistProgress,
+  result: InspectionResult,
+): InspectionResultPresentation {
+  const resultLabels: Record<InspectionResult, string> = {
+    regular: 'Conforme',
+    observacao: 'Em observação',
+    vencido: 'Não conforme',
+  };
+
+  if (progress.answered === 0) return { label: 'Aguardando avaliação', state: 'waiting' };
+  if (progress.remaining > 0) return { label: `Resultado parcial: ${resultLabels[result]}`, state: 'partial' };
+  return { label: resultLabels[result], state: 'final' };
 }
