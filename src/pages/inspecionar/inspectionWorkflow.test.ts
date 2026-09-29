@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildInspectionPayload, deriveInspectionStatus, validateInspectionResult } from './inspectionWorkflow';
+import { buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, isChecklistComplete, validateInspectionResult } from './inspectionWorkflow';
 
 describe('inspection workflow status', () => {
   it('prioritizes failed checklist items', () => {
@@ -53,5 +53,41 @@ describe('inspection workflow status', () => {
       photo: { blob, mimeType: 'image/jpeg', width: 100, height: 80, size: 1234 },
       dataProximaInspecao: '2026-10-28',
     });
+  });
+
+  it('calculates 0 of 15 checklist progress', () => {
+    const progress = getChecklistProgress(Array.from({ length: 15 }, (_, index) => `item-${index}`), {});
+    expect(progress.answered).toBe(0);
+    expect(progress.percentage).toBe(0);
+  });
+
+  it('calculates 1 of 15 checklist progress', () => {
+    const progress = getChecklistProgress(Array.from({ length: 15 }, (_, index) => `item-${index}`), { 'item-0': 'OK' });
+    expect(progress.answered).toBe(1);
+    expect(progress.percentage).toBe(7);
+  });
+
+  it('calculates complete checklist progress', () => {
+    const progress = getChecklistProgress(['a', 'b', 'c', 'd'], { a: 'OK', b: 'ATENCAO', c: 'REPROVADO', d: 'N.A.' });
+    expect(progress.answered).toBe(4);
+    expect(progress.percentage).toBe(100);
+  });
+
+  it('counts N.A. as answered and preserves semantic state counts', () => {
+    const progress = getChecklistProgress(['a', 'b', 'c', 'd'], { a: 'OK', b: 'ATENCAO', c: 'REPROVADO', d: 'N.A.' });
+    expect(progress.counts).toEqual({ OK: 1, ATENCAO: 1, REPROVADO: 1, 'N.A.': 1 });
+    expect(progress.remaining).toBe(0);
+  });
+
+  it('returns singular and plural incomplete-checklist messages', () => {
+    expect(getChecklistRemainingMessage(1)).toBe('Avalie o item restante para concluir.');
+    expect(getChecklistRemainingMessage(3)).toBe('Avalie os 3 itens restantes para concluir.');
+    expect(getChecklistRemainingMessage(0)).toBeNull();
+  });
+
+  it('only enables finalization for a complete non-empty checklist', () => {
+    expect(isChecklistComplete(getChecklistProgress(['a'], {}))).toBe(false);
+    expect(isChecklistComplete(getChecklistProgress(['a'], { a: 'N.A.' }))).toBe(true);
+    expect(isChecklistComplete(getChecklistProgress([], {}))).toBe(false);
   });
 });

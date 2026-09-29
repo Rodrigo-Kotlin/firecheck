@@ -28,7 +28,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
-import { buildInspectionPayload, deriveInspectionStatus, validateInspectionResult, type ChecklistValue, type InspectionResult } from './inspectionWorkflow';
+import { buildInspectionPayload, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, isChecklistComplete, validateInspectionResult, type ChecklistValue, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
 import {
   createPreviewUrl,
@@ -99,54 +99,60 @@ const CHECKLIST_ILUMINACAO = [
   'Sem obstrução visual'
 ];
 
+function formatInspectionDate(value: string): string {
+  if (!value) return '—';
+  const [year, month, day] = value.split('-');
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
 const EQUIPMENT_STATUS_CONFIGS: Record<
   EquipmentStatus,
   { label: string; pillClass: string; borderClass: string; icon: LucideIcon }
 > = {
   regular: {
-    label: 'EM DIA',
+    label: 'Em dia',
     pillClass: 'bg-green-100 text-success',
     borderClass: 'border-l-success',
     icon: CheckCircle2,
   },
   pendente: {
-    label: 'PENDENTE',
+    label: 'Pendente',
     pillClass: 'bg-amber-100 text-pending',
     borderClass: 'border-l-pending',
     icon: AlertTriangle,
   },
   vencido: {
-    label: 'VENCIDO',
+    label: 'Vencido',
     pillClass: 'bg-red-100 text-critical',
     borderClass: 'border-l-critical',
     icon: XCircle,
   },
   observacao: {
-    label: 'OBSERVAÇÃO',
+    label: 'Em observação',
     pillClass: 'bg-blue-100 text-blue-600',
     borderClass: 'border-l-blue-500',
     icon: Info,
   },
   em_manutencao: {
-    label: 'EM MANUTENÇÃO',
+    label: 'Em manutenção',
     pillClass: 'bg-blue-100 text-blue-600',
     borderClass: 'border-l-blue-500',
     icon: Info,
   },
   inativo: {
-    label: 'INATIVO',
+    label: 'Inativo',
     pillClass: 'bg-gray-200 text-gray-600',
     borderClass: 'border-l-gray-400',
     icon: XCircle,
   },
   substituido: {
-    label: 'SUBSTITUÍDO',
+    label: 'Substituído',
     pillClass: 'bg-purple-100 text-purple-600',
     borderClass: 'border-l-purple-500',
     icon: Info,
   },
   extraviado: {
-    label: 'EXTRAVIADO',
+    label: 'Extraviado',
     pillClass: 'bg-red-100 text-red-600',
     borderClass: 'border-l-red-500',
     icon: XCircle,
@@ -562,9 +568,7 @@ export default function Inspecionar() {
     if (checklistItems.length === 0) {
       setChecklist({});
     } else {
-      const initial: Record<string, ChecklistValue> = {};
-      checklistItems.forEach((item) => { initial[item] = 'OK'; });
-      setChecklist(initial);
+      setChecklist({});
     }
     setInspectionResult('regular');
   }
@@ -578,17 +582,21 @@ export default function Inspecionar() {
     setHasSetDefaultDate(true);
   }
 
-  // Aggregate checklist counts for the summary header.
-  const checklistCounts = useMemo(() => {
-    const counts: Record<ChecklistValue, number> = { OK: 0, ATENCAO: 0, REPROVADO: 0, 'N.A.': 0 };
-    Object.values(checklist).forEach((val) => {
-      counts[val] = (counts[val] || 0) + 1;
-    });
-    return counts;
-  }, [checklist]);
+  const checklistProgress = useMemo(
+    () => getChecklistProgress(checklistItems, checklist),
+    [checklistItems, checklist],
+  );
+  const checklistCounts = checklistProgress.counts;
 
   const hasReprovado = checklistCounts.REPROVADO > 0;
   const hasAtencao = checklistCounts.ATENCAO > 0;
+  const resultValidationMessage = validateInspectionResult(checklist, inspectionResult);
+  const remainingMessage = getChecklistRemainingMessage(checklistProgress.remaining);
+  const blockingMessage = remainingMessage
+    ?? (!inspectorName ? 'Selecione o inspetor responsável pela inspeção.' : resultValidationMessage)
+    ?? (!validadeDate ? 'Informe a data da próxima inspeção.' : null);
+  const selectedResultLabel = INSPECTION_RESULT_OPTIONS.find(option => option.value === inspectionResult)?.label ?? '—';
+  const canFinalize = isChecklistComplete(checklistProgress) && Boolean(inspectorName) && Boolean(validadeDate) && !resultValidationMessage;
 
   const handleChecklistChange = (item: string, value: ChecklistValue) => {
     const nextChecklist = { ...checklist, [item]: value };
@@ -617,9 +625,8 @@ export default function Inspecionar() {
       return;
     }
 
-    const resultValidationError = validateInspectionResult(checklist, inspectionResult);
-    if (resultValidationError) {
-      setErrorMsg(resultValidationError);
+    if (resultValidationMessage) {
+      setErrorMsg(resultValidationMessage);
       return;
     }
 
@@ -706,14 +713,8 @@ export default function Inspecionar() {
     futureDate.setDate(futureDate.getDate() + 30);
     setValidadeDate(futureDate.toISOString().split('T')[0]);
 
-    // Re-seed checklist with all "OK"
-    if (selectedEquipment && checklistItems.length > 0) {
-      const initial: Record<string, ChecklistValue> = {};
-      checklistItems.forEach((item) => { initial[item] = 'OK'; });
-      setChecklist(initial);
-    } else {
-      setChecklist({});
-    }
+    // A nova inspeção começa sem respostas para exigir avaliação explícita.
+    setChecklist({});
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -812,9 +813,12 @@ export default function Inspecionar() {
           {selectedEquipment && equipConfig && EquipStatusIcon && (
             <div className={`card-subtle border-l-[4px] ${equipConfig.borderClass} p-4 sm:p-5 space-y-3`}>
               <div className="flex items-start justify-between gap-3">
-                <span className="font-mono text-xs sm:text-sm font-extrabold text-gray-700 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded tracking-tight">
-                  {selectedEquipment.id}
-                </span>
+                <div>
+                  <span className="label-uppercase block mb-1">Situação atual</span>
+                  <span className="font-mono text-xs sm:text-sm font-extrabold text-gray-700 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded tracking-tight">
+                    {selectedEquipment.id}
+                  </span>
+                </div>
                 <span className={`pill ${equipConfig.pillClass} flex-shrink-0`}>
                   <EquipStatusIcon className="w-3 h-3" />
                   {equipConfig.label}
@@ -842,9 +846,9 @@ export default function Inspecionar() {
           {/* Checklist */}
           {selectedEquipment && checklistItems.length > 0 && (
             <InspectionChecklist
-              items={checklistItems}
-              values={checklist}
-              counts={checklistCounts}
+                items={checklistItems}
+                values={checklist}
+                progress={checklistProgress}
               onChange={handleChecklistChange}
             />
           )}
@@ -858,7 +862,7 @@ export default function Inspecionar() {
                   Resultado da inspeção
                 </legend>
                 <p id="inspection-result-help" className="text-xs text-gray-500">
-                  Sugestão baseada no checklist. Você pode escolher Em observação para registrar uma observação técnica adicional.
+                  Resultado sugerido com base no checklist técnico. Você pode escolher Em observação para registrar uma observação técnica adicional.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {INSPECTION_RESULT_OPTIONS.map((option) => {
@@ -918,7 +922,7 @@ export default function Inspecionar() {
               <div className="card-subtle bg-white space-y-2">
                 <label htmlFor="validadeDate" className="field-label flex items-center gap-1.5">
                   <Calendar className="w-4 h-4" />
-                  Data de Validade *
+                  Próxima inspeção *
                 </label>
                 <div className="relative">
                   <input
@@ -933,6 +937,7 @@ export default function Inspecionar() {
                     <Calendar className="w-5 h-5" />
                   </span>
                 </div>
+                <p className="text-[10px] text-gray-500">Data prevista para a próxima verificação.</p>
               </div>
 
               {/* Photo */}
@@ -972,13 +977,35 @@ export default function Inspecionar() {
                   className="field-textarea"
                 />
               </div>
+
+              <section className="card-subtle bg-gray-50 border border-gray-200 space-y-3" aria-labelledby="inspection-summary-title">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 id="inspection-summary-title" className="label-uppercase">Resumo da inspeção</h2>
+                  <span className={`pill text-[10px] ${checklistProgress.remaining > 0 ? 'bg-gray-200 text-gray-600' : 'bg-green-100 text-success'}`}>
+                    {checklistProgress.remaining > 0 ? 'Inspeção incompleta' : 'Pronta para concluir'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div><span className="block text-gray-500">Checklist</span><strong>{checklistProgress.answered}/{checklistProgress.total} avaliados</strong></div>
+                  <div><span className="block text-gray-500">Conforme</span><strong className="text-success">{checklistCounts.OK}</strong></div>
+                  <div><span className="block text-gray-500">Observação</span><strong className="text-pending">{checklistCounts.ATENCAO}</strong></div>
+                  <div><span className="block text-gray-500">Não conforme</span><strong className="text-critical">{checklistCounts.REPROVADO}</strong></div>
+                  <div><span className="block text-gray-500">N.A.</span><strong className="text-gray-600">{checklistCounts['N.A.']}</strong></div>
+                  <div><span className="block text-gray-500">Resultado</span><strong>{checklistProgress.remaining > 0 ? 'Resultado parcial' : selectedResultLabel}</strong></div>
+                  <div><span className="block text-gray-500">Próxima inspeção</span><strong>{formatInspectionDate(validadeDate)}</strong></div>
+                  <div><span className="block text-gray-500">Evidência</span><strong>{photoDraft ? 'Presente' : 'Não adicionada'}</strong></div>
+                </div>
+                {blockingMessage && (
+                  <p className="text-xs font-semibold text-gray-600" role="status">{blockingMessage}</p>
+                )}
+              </section>
             </>
           )}
 
           {/* Sticky submit */}
           {selectedEquipment && (
             <div className="sticky bottom-20 lg:bottom-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-neutralBg lg:bg-transparent lg:px-0 lg:py-0 lg:mx-0">
-              <button type="submit" className="btn-primary" disabled={isSaving || photoProcessing}>
+              <button type="submit" className="btn-primary" disabled={isSaving || photoProcessing || !canFinalize}>
                 {isSaving ? (
                   <><Loader2 className="w-5 h-5 animate-spin" /> Salvando inspeção...</>
                 ) : photoProcessing ? (

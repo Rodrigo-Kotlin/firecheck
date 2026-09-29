@@ -3,6 +3,14 @@ import type { EquipmentStatus } from '../../types';
 export type ChecklistValue = 'OK' | 'ATENCAO' | 'REPROVADO' | 'N.A.';
 export type InspectionResult = 'regular' | 'observacao' | 'vencido';
 
+export interface ChecklistProgress {
+  total: number;
+  answered: number;
+  remaining: number;
+  percentage: number;
+  counts: Record<ChecklistValue, number>;
+}
+
 export interface InspectionPhotoPayload {
   blob: Blob;
   mimeType: string;
@@ -71,4 +79,37 @@ export function validateInspectionResult(
     return 'Itens em atenção exigem o resultado Em observação ou Não conforme.';
   }
   return null;
+}
+
+export function getChecklistProgress(
+  items: string[],
+  values: Record<string, ChecklistValue>,
+): ChecklistProgress {
+  const counts: Record<ChecklistValue, number> = { OK: 0, ATENCAO: 0, REPROVADO: 0, 'N.A.': 0 };
+  const answered = items.reduce((count, item) => {
+    const value = values[item];
+    if (!value) return count;
+    counts[value]++;
+    return count + 1;
+  }, 0);
+  const total = items.length;
+
+  return {
+    total,
+    answered,
+    remaining: total - answered,
+    percentage: total === 0 ? 0 : Math.round((answered / total) * 100),
+    counts,
+  };
+}
+
+export function getChecklistRemainingMessage(remaining: number): string | null {
+  if (remaining <= 0) return null;
+  return remaining === 1
+    ? 'Avalie o item restante para concluir.'
+    : `Avalie os ${remaining} itens restantes para concluir.`;
+}
+
+export function isChecklistComplete(progress: ChecklistProgress): boolean {
+  return progress.total > 0 && progress.remaining === 0;
 }
