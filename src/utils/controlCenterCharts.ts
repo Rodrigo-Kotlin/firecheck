@@ -135,7 +135,8 @@ function formatPeriodLabel(date: Date, period: PeriodOption): string {
   if (period === '30d' || period === '90d') {
     return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
   }
-  return `${date.toLocaleDateString('pt-BR', { month: 'short' })}/${date.getFullYear()}`;
+  const month = date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+  return `${month}/${String(date.getFullYear()).slice(-2)}`;
 }
 
 function getPeriodKey(date: Date, period: PeriodOption): string {
@@ -221,7 +222,7 @@ export function getControlCenterCharts(
     em_dia: 'var(--color-success)',
     observacao: 'var(--color-pending)',
     nao_conforme: 'var(--color-critical)',
-    sem_inspecao: 'var(--color-info)',
+    sem_inspecao: 'var(--color-text-muted)',
     prazo_vencido: 'var(--color-critical)',
     sem_prazo: 'var(--color-text-muted)',
     fora_operacao: '#94A3B8',

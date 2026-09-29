@@ -533,6 +533,30 @@ input[type="checkbox"], input[type="radio"] {
 .bottom-nav-tab--active {
   color: var(--color-primary);
 }
+
+@media (max-width: 639px) {
+  .app-header-user-info {
+    display: none;
+  }
+}
+
+.chart-status-legend {
+  align-items: center;
+}
+
+@media (max-width: 479px) {
+  .chart-status-legend {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 0.75rem;
+    row-gap: 0.375rem;
+  }
+  .chart-status-legend button {
+    min-width: 0;
+    justify-content: flex-start;
+    white-space: nowrap;
+  }
+}
 .bottom-nav-tab__label {
   font-size: 0.625rem;
   font-weight: 700;

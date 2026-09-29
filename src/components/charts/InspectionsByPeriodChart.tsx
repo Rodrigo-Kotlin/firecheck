@@ -53,7 +53,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
             <XAxis
               dataKey="period"
-              interval={isDaily ? 'preserveStartEnd' : 0}
+              interval={isDaily || period === '12m' ? 'preserveStartEnd' : 0}
               tick={{ fontSize: 10, fill: 'var(--color-text-muted)' }}
               axisLine={false}
               tickLine={false}
@@ -116,7 +116,7 @@ export default function InspectionsByPeriodChart({ data, title, description, per
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[10px] font-medium">
+      <div className="chart-status-legend mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[10px] font-medium">
         {([
           ['regular', 'Regular', 'var(--color-success)'],
           ['observacao', 'Observação', 'var(--color-pending)'],

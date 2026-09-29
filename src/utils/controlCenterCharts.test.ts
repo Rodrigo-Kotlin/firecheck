@@ -147,8 +147,8 @@ describe('D04 control center chart aggregators', () => {
       ], [], { todayYmd: '2026-01-31', period: '12m' });
 
       expect(result.inspectionsByPeriod.reduce((sum, item) => sum + item.total, 0)).toBe(2);
-      expect(result.inspectionsByPeriod.map(item => item.period)).toContain('dez./2025');
-      expect(result.inspectionsByPeriod.map(item => item.period)).toContain('jan./2026');
+      expect(result.inspectionsByPeriod.map(item => item.period)).toContain('dez/25');
+      expect(result.inspectionsByPeriod.map(item => item.period)).toContain('jan/26');
     });
 
     it.each([

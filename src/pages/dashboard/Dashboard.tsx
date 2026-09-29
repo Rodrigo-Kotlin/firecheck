@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
-import { Plus, AlertTriangle, ShieldAlert, ClipboardList, CheckCircle2, Package, Clock, AlertOctagon, WifiOff, ShieldCheck, Eye, FileText } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, ClipboardList, CheckCircle2, Package, Clock, AlertOctagon, WifiOff, ShieldCheck, Eye, FileText } from 'lucide-react';
 import { getControlCenterIndicators, type ControlCenterIndicators } from '../../utils/controlCenterIndicators';
 import { getControlCenterCharts, getControlCenterPeriodRange, type ControlCenterChartsResult, type PeriodOption } from '../../utils/controlCenterCharts';
 import ControlCenterFilters from '../../components/dashboard/ControlCenterFilters';
@@ -497,9 +497,10 @@ export default function Dashboard() {
                         navigate(`/inspecionar?id=${item.equipmentId}`);
                       }}
                        className="btn-primary btn-sm btn-auto priority-action-primary"
-                       aria-label={`Inspecionar ${item.equipmentId}`}
+                        aria-label="Inspecionar equipamento"
+                        title="Inspecionar equipamento"
                     >
-                      <Plus className="w-3.5 h-3.5" />
+                       <ClipboardList className="w-3.5 h-3.5" />
                       <span className="hidden sm:inline">Inspecionar</span>
                     </button>
                   </div>

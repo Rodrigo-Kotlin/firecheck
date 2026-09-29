@@ -129,7 +129,7 @@ export default function AppLayout() {
             </button>
             <div className="min-w-0">
               <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{APP_NAME}</div>
-              <h1 className="text-sm sm:text-base font-black text-gray-900 uppercase tracking-wide truncate">{currentTitle}</h1>
+              <h1 className="text-sm sm:text-base font-black text-gray-900 normal-case sm:uppercase tracking-wide truncate">{currentTitle}</h1>
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0">
@@ -137,7 +137,7 @@ export default function AppLayout() {
               <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center text-[10px] font-black flex-shrink-0">
                 {initials}
               </div>
-              <div className="min-w-0 leading-tight">
+              <div className="app-header-user-info min-w-0 leading-tight">
                 <div className="text-[11px] font-bold text-gray-900 truncate">Olá, {user?.nome?.split(' ')[0] || 'Inspetor'}</div>
                 <div className="hidden sm:block text-[10px] text-gray-500 truncate">Perfil: {user?.cargo || 'Inspetor'}</div>
               </div>
@@ -173,9 +173,9 @@ export default function AppLayout() {
               </div>
             )}
             {(conflictCounts.equipments > 0 || conflictCounts.actionPlans > 0 || conflictCounts.inspections > 0) && (
-              <span className="pill bg-red-100 text-critical text-[10px] font-bold flex items-center gap-1" role="status">
+              <span className="pill bg-red-100 text-critical text-[10px] font-bold flex items-center gap-1" role="status" aria-label="Conflitos pendentes">
                 <AlertOctagon className="w-3 h-3" />
-                Conflitos pendentes
+                <span className="hidden sm:inline">Conflitos pendentes</span>
               </span>
             )}
             <button
