@@ -5,7 +5,6 @@
 > com dados offline e sessões existentes.
 
 [![Build & Lint](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/ci.yml/badge.svg)](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/ci.yml)
-[![Deploy Pages](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/deploy.yml/badge.svg)](https://github.com/Rodrigo-Kotlin/firecheck/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -16,7 +15,9 @@ Sistema **offline-first** para inspeção de equipamentos de combate a incêndio
 (extintores, hidrantes, iluminação de emergência, etc.) com sincronização
 automática para a nuvem via Supabase.
 
-🔗 **Demo online:** https://rodrigo-kotlin.github.io/firecheck/
+🔗 **Produção oficial:** `main` → Cloudflare Pages (`firecheck`) → `dist`
+
+🔗 **URL atual:** https://firecheck-9b5.pages.dev/
 
 ---
 
@@ -73,10 +74,10 @@ npm run dev
 npm run build
 ```
 
-**Login (requer rede):** cadastre-se com nome, e-mail, cargo e senha (≥ 8 caracteres,
-1 maiúscula, 1 dígito). A **primeira conta** do projeto Supabase vira **admin**
-automaticamente (trigger `handle_new_user`); contas subsequentes são **inspector**
-e podem ser promovidas na tela `Configurações → Gerenciar Usuários`.
+**Login (requer rede):** o cadastro público permanece desativado e as contas são
+criadas pela administração do projeto. A **primeira conta** do projeto Supabase
+vira **admin** automaticamente (trigger `handle_new_user`); contas subsequentes
+são **inspector** e podem ser promovidas na tela `Configurações → Usuários`.
 A senha é gerenciada pelo Supabase Auth (bcrypt, JWT, refresh tokens) e
 nunca é armazenada no dispositivo.
 
@@ -103,15 +104,14 @@ firecheck/
 ├── .github/
 │   ├── CODEOWNERS
 │   └── workflows/
-│       ├── ci.yml          # lint + build em PRs
-│       └── deploy.yml      # build + deploy para GitHub Pages
+│       └── ci.yml          # testes, gates e build em PRs/main
 ├── public/
 │   ├── manifest.json       # PWA manifest (theme_color #DC2626)
-│   ├── sw.js               # service worker (cache-first + background refresh)
 │   ├── favicon.ico         # multi-size (16+32+48)
 │   ├── favicon-{16,32,48}.png
 │   ├── apple-touch-icon.png
-│   └── icon-{192,512,maskable-512}.png
+│   ├── icon-{192,384,512}.png
+│   └── _headers            # headers de segurança do Cloudflare Pages
 ├── tools/
 │   ├── icon-source.svg     # SVG mestre do ícone
 │   └── generate-icons.mjs  # Node script para gerar PNGs/ICO
@@ -147,6 +147,8 @@ firecheck/
 | `npm run lint` | Roda o ESLint em todo o código |
 | `npm run build` | Faz build de produção em `dist/` |
 | `npm run preview` | Serve o build localmente para teste |
+| `npx vitest run` | Executa os testes unitários |
+| `npm audit --audit-level=high` | Verifica vulnerabilidades de dependências |
 
 ## 🗺 Roadmap
 
@@ -159,7 +161,8 @@ firecheck/
 - [ ] Conflict resolution (last-write-wins com campo `version`)
 - [ ] Sincronização periódica em background (Service Worker)
 - [ ] Supabase CLI para versionar migrations (`supabase db push`)
-- [ ] CI completo com preview deploy por PR
+- [x] CI com testes, auditoria, regressões determinísticas e build
+- [ ] Preview deploy por PR
 - [ ] Testes E2E com Playwright
 - [ ] Multi-tenant com `organization_id`
 

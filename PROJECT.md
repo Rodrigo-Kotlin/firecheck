@@ -12,7 +12,7 @@
 
 - **Público-alvo**: técnicos de manutenção, brigadistas e engenheiros de segurança.
 - **Modelo de uso**: local-first. Toda operação (cadastro, inspeção, plano de ação) acontece no navegador e persiste no IndexedDB (Dexie). O Supabase é usado apenas para sincronizar entre dispositivos.
-- **Hospedagem**: GitHub Pages (`https://rodrigo-kotlin.github.io/firecheck/`).
+- **Hospedagem oficial**: `main` → Cloudflare Pages (projeto `firecheck`) → `dist`.
 - **Idioma da UI, código e commits**: PT-BR.
 - **Licença**: MIT.
 
@@ -49,8 +49,8 @@
 | Forms | react-hook-form + zod |
 | PWA | `vite-plugin-pwa` (Workbox `generateSW`, autoUpdate, manifest próprio em `public/manifest.json`) |
 | Ícones | Lucide React |
-| CI/CD | GitHub Actions (`ci.yml` + `deploy.yml`) |
-| Deploy | GitHub Pages |
+| CI/CD | GitHub Actions (`ci.yml`) |
+| Deploy | Cloudflare Pages (integração oficial da branch `main`) |
 
 ---
 
@@ -265,7 +265,7 @@ ownership. A exclusão de inspeção permanece exclusiva de admin
 (`canDeleteInspection`). O write remoto ainda exige `updated_by`/`user_id`
 coerentes (RLS + trigger `inspecoes_audit`).
 
-**Nunca expor `.env`, tokens ou chaves.** `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` são configuradas via variáveis de ambiente GitHub Pages.
+**Nunca expor `.env`, tokens ou chaves.** `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` são configuradas no ambiente privado do Cloudflare Pages; o CI não depende de credenciais operacionais.
 
 ---
 
@@ -899,7 +899,7 @@ matchesEquipmentIdentity(eq, code): boolean    // compara com id, qrCode, qrcode
 Gerado via `vite-plugin-pwa` (Workbox, modo `generateSW`, `registerType: 'autoUpdate'`):
 
 1. `workbox.globPatterns`: `**/*.{js,css,html,ico,png,svg,json}`.
-2. `navigateFallback: 'index.html'` — relativo, resolve contra o scope do SW e funciona tanto para a base `/` (deploy normal) quanto para `/firecheck/` (GitHub Pages). Evita o erro `non-precached-url :: [{"url":"/"}]`.
+2. `navigateFallback: 'index.html'` — relativo e resolvido contra o scope raiz do Cloudflare Pages. Evita o erro `non-precached-url :: [{"url":"/"}]`.
 3. `cleanupOutdatedCaches: true` — remove caches de versões anteriores do precache.
 4. `runtimeCaching` Supabase → `NetworkOnly`: requisições à nuvem nunca leem cache.
 5. `manifest: false` — o manifesto fica em `public/manifest.json` e é referenciado por `index.html` com `%BASE_URL%`.

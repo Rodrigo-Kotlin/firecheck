@@ -9,9 +9,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  lint-and-build:
-    name: Lint + Build
+  validate:
+    name: Validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -28,16 +32,34 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Unit tests
+        run: npx vitest run
+
       - name: Type-check
-        run: npx tsc -b --noEmit
+        run: npx tsc -b
 
       - name: Lint
         run: npm run lint
 
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Deterministic regressions
+        run: |
+          node scripts/simulate-inspection-cas.mjs
+          node scripts/simulate-inspection-idempotency.mjs
+          node scripts/simulate-sync-ownership.mjs
+          node scripts/simulate-sync-pagination.mjs
+          node scripts/validate-preproduction-security.mjs
+
       - name: Build
-        env:
-          GITHUB_PAGES: 'true'
         run: npm run build
+
+      - name: Diff check
+        run: git diff --check
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

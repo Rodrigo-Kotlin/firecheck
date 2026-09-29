@@ -5,15 +5,6 @@
   "lang": "pt-BR",
   "id": "./",
   "background_color": "#DC2626",
-  "screenshots": [
-    {
-      "src": "icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "form_factor": "narrow",
-      "label": "Dashboard EfetivaFire"
-    }
-  ],
   "handle_links": "preferred",
   "launch_handler": {
     "client_mode": "navigate-existing"
@@ -102,7 +93,26 @@
   "scope": ".",
   "theme_color": "#DC2626",
   "display": "standalone",
-  "orientation": "portrait",
+  "shortcuts": [
+    {
+      "name": "Escanear QR",
+      "short_name": "QR",
+      "url": "./scan",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Inspecionar",
+      "short_name": "Inspecionar",
+      "url": "./inspecionar",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Equipamentos",
+      "short_name": "Equipamentos",
+      "url": "./equipamentos",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
   "categories": ["utilities", "productivity"],
   "prefer_related_applications": false
 }

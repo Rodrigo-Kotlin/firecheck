@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
-  base: process.env.GITHUB_PAGES ? '/firecheck/' : '/',
+  base: '/',
   plugins: [
     react(),
     VitePWA({
@@ -11,8 +11,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
         cacheId: 'firecheck-v1',
-        // Resolvida contra o scope do SW (trabalha para bases `/` e
-        // `/firecheck/`) — evita `non-precached-url` do precache com `/`.
+        // Resolvida contra o scope do SW para o deploy raiz do Cloudflare Pages.
         navigateFallback: 'index.html',
         cleanupOutdatedCaches: true,
         runtimeCaching: [
