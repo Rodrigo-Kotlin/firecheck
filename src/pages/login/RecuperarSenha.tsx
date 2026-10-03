@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Flame, Mail, ArrowLeft, KeyRound } from 'lucide-react';
+import { Mail, ArrowLeft, KeyRound } from 'lucide-react';
 import { showToast } from '../../hooks/useToasts';
 import { isAuthError, requestPasswordRecovery } from '../../services/authService';
 import { isSupabaseConfigured } from '../../lib/supabase';
@@ -60,7 +60,7 @@ export default function RecuperarSenha() {
     <div className="min-h-screen bg-neutralBg flex flex-col justify-center px-4 sm:px-6 py-8 sm:py-12">
       <div className="mx-auto w-full max-w-md flex flex-col items-center">
         <div className="w-16 h-16 sm:w-20 sm:h-20 bg-primary rounded-2xl flex items-center justify-center shadow-lg mb-4">
-          <Flame className="w-10 h-10 sm:w-12 sm:h-12 text-white" />
+          <img src="/source-transparent.png" alt="EfetivaFire" className="w-12 h-12 sm:w-16 sm:h-16 object-contain" />
         </div>
         <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-gray-900 mb-1">
            {APP_NAME}
