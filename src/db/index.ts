@@ -1,5 +1,6 @@
 import Dexie, { type Table } from 'dexie';
 import type { Equipment, Inspection, ActionPlan } from '../types';
+import type { InspectionDraft } from '../services/inspectionDraftService';
 
 // ---------------------------------------------------------------------------
 // Local storage layer. Mirrors the Supabase schema but is the source of truth
@@ -143,6 +144,7 @@ export class FireCheckDatabase extends Dexie {
   planosAcao!: Table<LocalActionPlan, string>;
   fotos!: Table<LocalInspectionPhoto, string>;
   acoes_pendentes!: Table<PendingAction, number>;
+  inspectionDrafts!: Table<InspectionDraft, string>;
 
   constructor() {
     // Legacy database name preserved to keep existing offline data across the EfetivaFire rebrand.
@@ -256,19 +258,31 @@ export class FireCheckDatabase extends Dexie {
       fotos: 'id, inspectionId, sincronizado, syncAction, storagePath, syncOwnerUserId',
       acoes_pendentes: '++id, type, timestamp',
     });
+
+    // v9 — rascunhos locais de inspeção. Nunca entram na fila de mutations,
+    // no sync ou em qualquer store que represente dados publicados.
+    this.version(9).stores({
+      equipamentos: 'id, tipo, status, sincronizado, syncOwnerUserId',
+      inspecoes: 'id, equipmentId, sincronizado, syncAction, syncConflict, updatedAt, syncOwnerUserId',
+      planosAcao: 'id, equipmentId, status, sincronizado, pendingDelete, syncAction, deletedAt, syncOwnerUserId',
+      fotos: 'id, inspectionId, sincronizado, syncAction, storagePath, syncOwnerUserId',
+      acoes_pendentes: '++id, type, timestamp',
+      inspectionDrafts: 'key, ownerUserId, equipmentId, updatedAt',
+    });
   }
 
   /** Purge all local data tables. Used when clearing stale cache or
    *  when the user requests "Limpar dados locais deste dispositivo". */
   async clearCache(): Promise<void> {
     await this.transaction('rw',
-      [this.equipamentos, this.inspecoes, this.planosAcao, this.fotos, this.acoes_pendentes],
+      [this.equipamentos, this.inspecoes, this.planosAcao, this.fotos, this.acoes_pendentes, this.inspectionDrafts],
       async () => {
         await this.equipamentos.clear();
         await this.inspecoes.clear();
         await this.planosAcao.clear();
         await this.fotos.clear();
         await this.acoes_pendentes.clear();
+        await this.inspectionDrafts.clear();
       },
     );
   }

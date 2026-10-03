@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
+import { deleteInspectionDraft, deleteInspectionDraftByKey, loadInspectionDraft, saveInspectionDraft, createInspectionDraft, getInspectionDraftKey, type InspectionDraft } from '../../services/inspectionDraftService';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
 import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionReadiness, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationDescriptionMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateInspectionResult, type ChecklistValue, type EvidenceRequirement, type InspectionDeviation, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
@@ -103,6 +104,12 @@ function formatInspectionDate(value: string): string {
   if (!value) return '—';
   const [year, month, day] = value.split('-');
   return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
+function getDefaultNextInspectionDate(): string {
+  const futureDate = new Date();
+  futureDate.setDate(futureDate.getDate() + 30);
+  return futureDate.toISOString().split('T')[0];
 }
 
 const EQUIPMENT_STATUS_CONFIGS: Record<
@@ -535,6 +542,13 @@ export default function Inspecionar() {
   const [errorMsg, setErrorMsg] = useState('');
   const [inspectorName, setInspectorName] = useState(() => localStorage.getItem('firecheck_last_inspector_name') || '');
   const [isSaving, setIsSaving] = useState(false);
+  const [draftStatus, setDraftStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [draftPrompt, setDraftPrompt] = useState<{ draft: InspectionDraft | null; invalid: boolean } | null>(null);
+  const [confirmDiscardDraft, setConfirmDiscardDraft] = useState(false);
+  const draftDirtyRef = useRef(false);
+  const draftCreatedAtRef = useRef<string | undefined>(undefined);
+  const draftUpdatedAtRef = useRef<string | undefined>(undefined);
+  const autosaveSequenceRef = useRef(0);
 
   // Idempotência de submissão: lock síncrono (imediato, sem depender do render)
   // + identidade estável da tentativa (submissionId → inspectionId). Retry da
@@ -566,6 +580,16 @@ export default function Inspecionar() {
       revokePreviewUrl(photoPreviewUrl);
     };
   }, [photoPreviewUrl]);
+
+  const resetDraftPrompt = () => {
+    setDraftPrompt(null);
+    setConfirmDiscardDraft(false);
+  };
+
+  const markDraftDirty = () => {
+    draftDirtyRef.current = true;
+    setDraftStatus('idle');
+  };
 
   const selectedEquipment = equipments.find((e) => e.id === eqId);
 
@@ -599,9 +623,7 @@ export default function Inspecionar() {
   // Set a default expiration date on first render only.
   const [hasSetDefaultDate, setHasSetDefaultDate] = useState(false);
   if (!hasSetDefaultDate && !validadeDate) {
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + 30);
-    setValidadeDate(futureDate.toISOString().split('T')[0]);
+    setValidadeDate(getDefaultNextInspectionDate());
     setHasSetDefaultDate(true);
   }
 
@@ -637,7 +659,70 @@ export default function Inspecionar() {
   const canFinalize = readiness.ready && !isSaving && !photoProcessing;
   const resultPresentation = getInspectionResultPresentation(checklistProgress, inspectionResult);
 
+  const saveCurrentDraft = async (force = false, photoOverride?: PhotoDraft | null): Promise<boolean> => {
+    if (!user?.id || !selectedEquipment || (!force && !draftDirtyRef.current)) return true;
+    const sequence = ++autosaveSequenceRef.current;
+    setDraftStatus('saving');
+    try {
+      const currentTime = Date.now();
+      const previousTime = draftUpdatedAtRef.current ? Date.parse(draftUpdatedAtRef.current) : 0;
+      const now = new Date(Math.max(currentTime, previousTime + 1)).toISOString();
+      const draft = createInspectionDraft({
+        ownerUserId: user.id,
+        equipmentId: selectedEquipment.id,
+        checklist,
+        deviationNotes,
+        inspectionResult,
+        inspectorName,
+        nextInspectionDate: validadeDate,
+        generalNotes: observacoes,
+        photo: (photoOverride === undefined ? photoDraft : photoOverride) ? {
+          blob: (photoOverride === undefined ? photoDraft : photoOverride)!.blob,
+          mimeType: (photoOverride === undefined ? photoDraft : photoOverride)!.mimeType,
+          width: (photoOverride === undefined ? photoDraft : photoOverride)!.width,
+          height: (photoOverride === undefined ? photoDraft : photoOverride)!.height,
+          sizeBytes: (photoOverride === undefined ? photoDraft : photoOverride)!.size,
+        } : undefined,
+        createdAt: draftCreatedAtRef.current,
+        updatedAt: now,
+      });
+      await saveInspectionDraft(draft);
+      if (sequence === autosaveSequenceRef.current) {
+        draftCreatedAtRef.current = draft.createdAt;
+        draftUpdatedAtRef.current = draft.updatedAt;
+        draftDirtyRef.current = false;
+        setDraftStatus('saved');
+      }
+      return true;
+    } catch (error) {
+      console.error('[inspection-draft] autosave failed', error instanceof Error ? error.message : 'unknown error');
+      if (sequence === autosaveSequenceRef.current) setDraftStatus('error');
+      return false;
+    }
+  };
+  // Text and checklist edits are coalesced; the repository rejects stale writes.
+  useEffect(() => {
+    if (!draftDirtyRef.current || !user?.id || !selectedEquipment || success) return;
+    const timer = window.setTimeout(() => { void saveCurrentDraft(); }, 450);
+    return () => window.clearTimeout(timer);
+    // saveCurrentDraft is intentionally the latest render's snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checklist, deviationNotes, inspectionResult, inspectorName, validadeDate, observacoes, photoDraft, eqId, user?.id, selectedEquipment, success]);
+
+  useEffect(() => {
+    if (!user?.id || !selectedEquipment || success) return;
+    let active = true;
+    void loadInspectionDraft(user.id, selectedEquipment.id).then((result) => {
+      if (!active) return;
+      if (result.draft || result.invalid) setDraftPrompt(result);
+    }).catch((error) => {
+      console.error('[inspection-draft] load failed', error instanceof Error ? error.message : 'unknown error');
+    });
+    return () => { active = false; };
+  }, [user?.id, selectedEquipment, success]);
+
   const handleChecklistChange = (item: string, value: ChecklistValue) => {
+    markDraftDirty();
     const nextChecklist = { ...checklist, [item]: value };
     setChecklist(nextChecklist);
     if (value === 'OK' || value === 'N.A.') {
@@ -655,6 +740,85 @@ export default function Inspecionar() {
       });
     }
     setInspectionResult(deriveInspectionStatus(nextChecklist, validadeDate));
+  };
+
+  const handleEquipmentChange = async (nextEquipmentId: string) => {
+    const saved = await saveCurrentDraft();
+    if (!saved) {
+      setErrorMsg('Não foi possível salvar o rascunho antes de trocar de equipamento.');
+      return;
+    }
+    setEqId(nextEquipmentId);
+    setChecklist({});
+    setDeviationNotes({});
+    setTouchedDeviationNotes({});
+    setInspectionResult('regular');
+    setInspectorName('');
+    setValidadeDate(getDefaultNextInspectionDate());
+    setObservacoes('');
+    setPhotoDraft(null);
+    setDraftStatus('idle');
+    draftDirtyRef.current = false;
+    draftCreatedAtRef.current = undefined;
+    draftUpdatedAtRef.current = undefined;
+  };
+
+  const continueDraft = () => {
+    const draft = draftPrompt?.draft;
+    if (!draft) return;
+    setChecklist(draft.checklist);
+    setDeviationNotes(draft.deviationNotes);
+    setTouchedDeviationNotes({});
+    setInspectionResult(validateInspectionResult(draft.checklist, draft.inspectionResult)
+      ? deriveInspectionStatus(draft.checklist)
+      : draft.inspectionResult);
+    setInspectorName(draft.inspectorName);
+    setValidadeDate(draft.nextInspectionDate);
+    setObservacoes(draft.generalNotes);
+    draftCreatedAtRef.current = draft.createdAt;
+    draftUpdatedAtRef.current = draft.updatedAt;
+    if (draft.photo) {
+      try {
+        setPhotoDraft({
+          blob: draft.photo.blob,
+          previewUrl: createPreviewUrl(draft.photo.blob),
+          mimeType: draft.photo.mimeType,
+          width: draft.photo.width,
+          height: draft.photo.height,
+          size: draft.photo.sizeBytes,
+        });
+      } catch {
+        setPhotoDraft(null);
+      }
+    } else {
+      setPhotoDraft(null);
+    }
+    draftDirtyRef.current = false;
+    setDraftStatus('saved');
+    resetDraftPrompt();
+  };
+
+  const discardDraft = async () => {
+    if (!user?.id || !selectedEquipment) return;
+    try {
+      const key = getInspectionDraftKey(user.id, selectedEquipment.id);
+      await (draftPrompt?.invalid ? deleteInspectionDraftByKey(key) : deleteInspectionDraft(user.id, selectedEquipment.id));
+      setChecklist({});
+      setDeviationNotes({});
+      setTouchedDeviationNotes({});
+      setInspectionResult('regular');
+      setInspectorName('');
+      setValidadeDate(getDefaultNextInspectionDate());
+      setObservacoes('');
+      setPhotoDraft(null);
+      draftDirtyRef.current = false;
+      draftCreatedAtRef.current = undefined;
+      draftUpdatedAtRef.current = undefined;
+      resetDraftPrompt();
+    } catch (error) {
+      console.error('[inspection-draft] discard failed', error instanceof Error ? error.message : 'unknown error');
+      setErrorMsg('Não foi possível descartar o rascunho neste dispositivo.');
+    }
   };
 
   const handleFinalize = async (e: FormEvent) => {
@@ -726,6 +890,15 @@ export default function Inspecionar() {
         return;
       }
 
+      // addInspection reports success only after its local transaction commits.
+      // The draft is therefore safe to remove even if remote sync is pending.
+      if (user?.id && selectedEquipment) {
+        await deleteInspectionDraft(user.id, selectedEquipment.id);
+        draftDirtyRef.current = false;
+        draftCreatedAtRef.current = undefined;
+        draftUpdatedAtRef.current = undefined;
+      }
+
       // C) sucesso → lock permanece fechado (mesmo formulário não aceita novo
       // submit). Apenas "Nova Inspeção" reseta lock + IDs.
       setSuccess(true);
@@ -757,11 +930,13 @@ export default function Inspecionar() {
     setObservacoes('');
     setPhotoDraft(null);
     setPhotoProcessing(false);
+    draftDirtyRef.current = false;
+    draftCreatedAtRef.current = undefined;
+    draftUpdatedAtRef.current = undefined;
+    setDraftStatus('idle');
 
     // Reset date to today + 30 days
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + 30);
-    setValidadeDate(futureDate.toISOString().split('T')[0]);
+    setValidadeDate(getDefaultNextInspectionDate());
 
     // A nova inspeção começa sem respostas para exigir avaliação explícita.
     setChecklist({});
@@ -793,7 +968,48 @@ export default function Inspecionar() {
             Nova Inspeção
           </h1>
         </div>
+        {selectedEquipment && draftStatus !== 'idle' && (
+          <span className="text-[10px] sm:text-xs font-bold text-gray-500 whitespace-nowrap" role="status" aria-live="polite">
+            {draftStatus === 'saving' ? 'Salvando rascunho...' : draftStatus === 'saved' ? 'Rascunho salvo' : 'Não foi possível salvar o rascunho neste dispositivo.'}
+          </span>
+        )}
       </header>
+
+      {draftPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" role="dialog" aria-modal="true" aria-labelledby="draft-dialog-title">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-5 sm:p-6 space-y-4">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-primary">Inspeção em andamento</p>
+              <h2 id="draft-dialog-title" className="text-lg sm:text-xl font-black text-gray-900 mt-1">Retomar inspeção?</h2>
+              <p className="text-sm text-gray-600 mt-2">Existe uma inspeção não concluída deste equipamento salva neste dispositivo.</p>
+            </div>
+            {draftPrompt.draft ? (
+              <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-sm space-y-1">
+                <p><strong>Equipamento:</strong> {selectedEquipment?.id}</p>
+                <p><strong>Progresso:</strong> {getChecklistProgress(checklistItems, draftPrompt.draft.checklist).percentage}%</p>
+                <p><strong>Salvo em:</strong> {new Date(draftPrompt.draft.updatedAt).toLocaleString('pt-BR')}</p>
+                <p><strong>Evidência:</strong> {draftPrompt.draft.photo ? 'foto disponível' : 'nenhuma foto'}</p>
+              </div>
+            ) : (
+              <p className="text-sm text-critical bg-red-50 rounded-lg p-3">Este rascunho não pôde ser recuperado.</p>
+            )}
+            {!confirmDiscardDraft ? (
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button type="button" className="btn-primary btn-auto flex-1" onClick={continueDraft} disabled={!draftPrompt.draft}>Continuar inspeção</button>
+                <button type="button" className="btn-ghost btn-auto flex-1 text-critical" onClick={() => setConfirmDiscardDraft(true)}>Descartar rascunho</button>
+              </div>
+            ) : (
+              <div className="space-y-3 border-t border-gray-100 pt-3">
+                <p className="text-sm text-gray-700">Este rascunho será removido apenas deste dispositivo. Nenhuma inspeção será excluída.</p>
+                <div className="flex gap-2">
+                  <button type="button" className="btn-ghost btn-auto flex-1" onClick={() => setConfirmDiscardDraft(false)}>Cancelar</button>
+                  <button type="button" className="btn-primary btn-auto flex-1" onClick={() => void discardDraft()}>Descartar rascunho</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {errorMsg && (
         <div className="p-3 bg-red-50 border border-red-100 rounded-lg text-sm font-bold text-critical flex items-center gap-2">
@@ -841,7 +1057,7 @@ export default function Inspecionar() {
                 <select
                   id="eqSelector"
                   value={eqId}
-                  onChange={(e) => setEqId(e.target.value)}
+                   onChange={(e) => void handleEquipmentChange(e.target.value)}
                   className="field-input pr-10"
                   aria-label="Selecionar equipamento"
                 >
@@ -945,7 +1161,8 @@ export default function Inspecionar() {
                             id={descriptionId}
                             value={deviation.description}
                             onChange={(e) => {
-                              setDeviationNotes((current) => ({ ...current, [deviation.item]: e.target.value }));
+                               markDraftDirty();
+                               setDeviationNotes((current) => ({ ...current, [deviation.item]: e.target.value }));
                               setTouchedDeviationNotes((current) => ({ ...current, [deviation.item]: true }));
                             }}
                             onBlur={() => setTouchedDeviationNotes((current) => ({ ...current, [deviation.item]: true }))}
@@ -1001,7 +1218,7 @@ export default function Inspecionar() {
                           value={option.value}
                           checked={isSelected}
                           disabled={disabled}
-                          onChange={() => setInspectionResult(option.value)}
+                           onChange={() => { markDraftDirty(); setInspectionResult(option.value); }}
                           className="sr-only"
                         />
                         <Icon className="w-4 h-4 mt-0.5 flex-shrink-0" aria-hidden="true" />
@@ -1025,7 +1242,7 @@ export default function Inspecionar() {
                   id="inspectorName"
                   required
                   value={inspectorName}
-                  onChange={(e) => setInspectorName(e.target.value)}
+                   onChange={(e) => { markDraftDirty(); setInspectorName(e.target.value); }}
                   className={`field-input appearance-none ${!inspectorName ? 'text-gray-400' : ''}`}
                 >
                   <option value="" disabled>Selecione o inspetor responsável</option>
@@ -1047,7 +1264,7 @@ export default function Inspecionar() {
                     type="date"
                     required
                     value={validadeDate}
-                    onChange={(e) => setValidadeDate(e.target.value)}
+                     onChange={(e) => { markDraftDirty(); setValidadeDate(e.target.value); }}
                     className="field-input pr-10"
                   />
                   <span className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 pointer-events-none">
@@ -1076,7 +1293,7 @@ export default function Inspecionar() {
                  </div>
                  <PhotoCapture
                    value={photoDraft}
-                   onChange={setPhotoDraft}
+                    onChange={(photo) => { markDraftDirty(); setPhotoDraft(photo); void saveCurrentDraft(false, photo); }}
                    requirement={evidenceRequirement}
                    disabled={isSaving}
                    online={online}
@@ -1097,7 +1314,7 @@ export default function Inspecionar() {
                 </div>
                 <textarea
                   value={observacoes}
-                  onChange={(e) => setObservacoes(e.target.value)}
+                   onChange={(e) => { markDraftDirty(); setObservacoes(e.target.value); }}
                   placeholder="Informações adicionais sobre a inspeção..."
                   rows={4}
                   className="field-textarea"
