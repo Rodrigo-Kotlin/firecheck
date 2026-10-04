@@ -2,6 +2,10 @@
 export class InspectionDraftSession {
   private readonly resolvedKeys = new Set<string>();
 
+  startVisit(): void {
+    this.resolvedKeys.clear();
+  }
+
   shouldCheck(key: string): boolean {
     if (this.resolvedKeys.has(key)) return false;
     this.resolvedKeys.add(key);

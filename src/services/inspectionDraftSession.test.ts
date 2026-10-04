@@ -23,6 +23,13 @@ describe('inspection draft resume session', () => {
     expect(session.shouldCheck('user-a::EXT-001')).toBe(true);
   });
 
+  it('clears all decisions when the router starts a new visit', () => {
+    const session = new InspectionDraftSession();
+    expect(session.shouldCheck('user-a::EXT-001')).toBe(true);
+    session.startVisit();
+    expect(session.shouldCheck('user-a::EXT-001')).toBe(true);
+  });
+
   it('isolates session decisions by owner and equipment', () => {
     const session = new InspectionDraftSession();
     expect(session.shouldCheck('user-a::EXT-001')).toBe(true);

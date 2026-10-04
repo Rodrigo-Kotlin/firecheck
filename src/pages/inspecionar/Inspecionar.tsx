@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, type FormEvent } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import {
   compressInspectionImage,
@@ -527,6 +527,7 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
 export default function Inspecionar() {
   const { equipments, addInspection, user } = useAppStore();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const preSelectedId = searchParams.get('id');
 
@@ -548,6 +549,7 @@ export default function Inspecionar() {
   const [draftPrompt, setDraftPrompt] = useState<{ draft: InspectionDraft | null; invalid: boolean } | null>(null);
   const [confirmDiscardDraft, setConfirmDiscardDraft] = useState(false);
   const draftSessionRef = useRef(new InspectionDraftSession());
+  const [visitKey, setVisitKey] = useState(location.key);
   const draftDirtyRef = useRef(false);
   const draftCreatedAtRef = useRef<string | undefined>(undefined);
   const draftUpdatedAtRef = useRef<string | undefined>(undefined);
@@ -588,6 +590,18 @@ export default function Inspecionar() {
     setDraftPrompt(null);
     setConfirmDiscardDraft(false);
   };
+
+  // A route transition is a new inspection visit even if the router keeps the
+  // outlet mounted. This clears only in-memory resume decisions, never Dexie.
+  if (visitKey !== location.key) {
+    setVisitKey(location.key);
+    setDraftPrompt(null);
+    setConfirmDiscardDraft(false);
+  }
+
+  useEffect(() => {
+    draftSessionRef.current.startVisit();
+  }, [location.key]);
 
   const markDraftDirty = () => {
     draftDirtyRef.current = true;
@@ -728,7 +742,7 @@ export default function Inspecionar() {
       console.error('[inspection-draft] load failed', error instanceof Error ? error.message : 'unknown error');
     });
     return () => { active = false; };
-  }, [user?.id, selectedEquipment?.id, success]);
+  }, [user?.id, selectedEquipment?.id, success, visitKey]);
 
   const handleChecklistChange = (item: string, value: ChecklistValue) => {
     markDraftDirty();
