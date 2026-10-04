@@ -27,9 +27,10 @@ import {
   History,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { EquipmentStatus } from '../../types';
+import type { EquipmentStatus, Criticidade } from '../../types';
 import { deleteInspectionDraft, deleteInspectionDraftByKey, loadInspectionDraft, saveInspectionDraft, createInspectionDraft, getInspectionDraftKey, type InspectionDraft } from '../../services/inspectionDraftService';
 import { InspectionDraftSession } from '../../services/inspectionDraftSession';
+import { buildActionPlanDescription, toActionPlanCandidate, type ActionPlanCandidate } from './inspectionActionPlanMapper';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
 import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionReadiness, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationDescriptionMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateInspectionResult, type ChecklistValue, type EvidenceRequirement, type InspectionDeviation, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
@@ -216,6 +217,8 @@ const EVIDENCE_REQUIREMENT_CONFIG: Record<EvidenceRequirement, {
   },
 };
 
+const ACTION_PLAN_CRITICIDADE_OPTIONS: Criticidade[] = ['Crítico', 'Alto', 'Médio', 'Baixo'];
+
 // ---------------------------------------------------------------------------
 // PhotoCapture — capture / preview / replace / remove flow for inspection
 // evidence photos. Mobile-first: a primary "Tirar foto" button uses
@@ -245,6 +248,12 @@ type PhotoCaptureProps = {
   /** Called while the photo is being compressed/resized (parent may gate the
    *  Finalizar button). */
   onProcessingChange?: (processing: boolean) => void;
+};
+
+type ActionPlanCandidateState = ActionPlanCandidate & {
+  planId?: string;
+  planError?: string;
+  creating?: boolean;
 };
 
 function PhotoCapture({ value, onChange, requirement, disabled = false, online, onProcessingChange }: PhotoCaptureProps) {
@@ -525,7 +534,7 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
 }
 
 export default function Inspecionar() {
-  const { equipments, addInspection, user } = useAppStore();
+  const { equipments, addInspection, addActionPlan, user } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -542,6 +551,8 @@ export default function Inspecionar() {
   const [photoProcessing, setPhotoProcessing] = useState(false);
 
   const [success, setSuccess] = useState(false);
+  const [actionPlanStage, setActionPlanStage] = useState<'none' | 'offer' | 'review' | 'dismissed'>('none');
+  const [actionPlanCandidates, setActionPlanCandidates] = useState<ActionPlanCandidateState[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [inspectorName, setInspectorName] = useState(() => localStorage.getItem('firecheck_last_inspector_name') || '');
   const [isSaving, setIsSaving] = useState(false);
@@ -549,6 +560,7 @@ export default function Inspecionar() {
   const [draftPrompt, setDraftPrompt] = useState<{ draft: InspectionDraft | null; invalid: boolean } | null>(null);
   const [confirmDiscardDraft, setConfirmDiscardDraft] = useState(false);
   const draftSessionRef = useRef(new InspectionDraftSession());
+  const actionPlanCreationLocksRef = useRef(new Set<string>());
   const [visitKey, setVisitKey] = useState(location.key);
   const draftDirtyRef = useRef(false);
   const draftCreatedAtRef = useRef<string | undefined>(undefined);
@@ -561,6 +573,7 @@ export default function Inspecionar() {
   const submitLockRef = useRef(false);
   const submissionIdRef = useRef<string | null>(null);
   const inspectionIdRef = useRef<string | null>(null);
+  const completedInspectionDateRef = useRef('');
 
   const [online, setOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
   useEffect(() => {
@@ -851,6 +864,45 @@ export default function Inspecionar() {
     }
   };
 
+  const openActionPlanReview = () => setActionPlanStage('review');
+  const dismissActionPlans = () => setActionPlanStage('dismissed');
+
+  const updateActionPlanCandidate = (item: string, updates: Partial<ActionPlanCandidateState>) => {
+    setActionPlanCandidates((current) => current.map((candidate) =>
+      candidate.item === item ? { ...candidate, ...updates } : candidate,
+    ));
+  };
+
+  const createDerivedActionPlan = async (candidate: ActionPlanCandidateState) => {
+    if (!selectedEquipment || !inspectionIdRef.current || candidate.creating || candidate.planId || actionPlanCreationLocksRef.current.has(candidate.item)) return;
+    actionPlanCreationLocksRef.current.add(candidate.item);
+    updateActionPlanCandidate(candidate.item, { creating: true, planError: undefined });
+    try {
+      const result = await addActionPlan({
+        equipmentId: selectedEquipment.id,
+        local: `${selectedEquipment.local} (${selectedEquipment.setor})`,
+        descricao: buildActionPlanDescription({
+          inspectionId: inspectionIdRef.current,
+          equipmentId: selectedEquipment.id,
+          inspectionDate: completedInspectionDateRef.current || new Date().toISOString().split('T')[0],
+          inspectionResult,
+          deviation: candidate,
+        }),
+        criticidade: candidate.criticidade,
+        responsavel: candidate.responsavel,
+        prazo: candidate.prazo,
+        status: 'Aberta',
+      });
+      if (result.ok) {
+        updateActionPlanCandidate(candidate.item, { creating: false, planId: result.id });
+      } else {
+        updateActionPlanCandidate(candidate.item, { creating: false, planError: result.error ?? 'Não foi possível criar a ação no dispositivo.' });
+      }
+    } finally {
+      actionPlanCreationLocksRef.current.delete(candidate.item);
+    }
+  };
+
   const handleFinalize = async (e: FormEvent) => {
     e.preventDefault();
 
@@ -885,6 +937,7 @@ export default function Inspecionar() {
     }
 
     const finalStatus: EquipmentStatus = inspectionResult;
+    const inspectionDate = new Date().toISOString().split('T')[0];
 
     setIsSaving(true);
     setErrorMsg('');
@@ -894,7 +947,7 @@ export default function Inspecionar() {
       const result = await addInspection(buildInspectionPayload({
         inspectionId,
         equipmentId: selectedEquipment.id,
-        inspectionDate: new Date().toISOString().split('T')[0],
+        inspectionDate,
         inspectorName,
         status: finalStatus,
         notes: buildInspectionNotes(inspectionDeviations, observacoes),
@@ -929,6 +982,13 @@ export default function Inspecionar() {
         draftUpdatedAtRef.current = undefined;
       }
 
+      const candidates = inspectionDeviations
+        .map(toActionPlanCandidate)
+        .filter((candidate): candidate is ActionPlanCandidate => candidate !== null);
+      setActionPlanCandidates(candidates);
+      setActionPlanStage(candidates.length > 0 ? 'offer' : 'none');
+      completedInspectionDateRef.current = inspectionDate;
+
       // C) sucesso → lock permanece fechado (mesmo formulário não aceita novo
       // submit). Apenas "Nova Inspeção" reseta lock + IDs.
       setSuccess(true);
@@ -950,6 +1010,7 @@ export default function Inspecionar() {
     submitLockRef.current = false;
     submissionIdRef.current = null;
     inspectionIdRef.current = null;
+    completedInspectionDateRef.current = '';
 
     setSuccess(false);
     setErrorMsg('');
@@ -960,6 +1021,8 @@ export default function Inspecionar() {
     setObservacoes('');
     setPhotoDraft(null);
     setPhotoProcessing(false);
+    setActionPlanStage('none');
+    setActionPlanCandidates([]);
     draftDirtyRef.current = false;
     draftCreatedAtRef.current = undefined;
     draftUpdatedAtRef.current = undefined;
@@ -1058,10 +1121,90 @@ export default function Inspecionar() {
           </div>
           <div>
             <h3 className="text-xl font-black text-gray-900">Inspeção Registrada!</h3>
-            <p className="text-xs text-gray-500 mt-1.5 font-bold uppercase tracking-wider">
-              {online ? '✓ Salvo · Sincronizando' : '⏳ Salvo offline · Pendente sincronização'}
-            </p>
+           <p className="text-xs text-gray-500 mt-1.5 font-bold uppercase tracking-wider">
+             {online ? '✓ Salvo · Sincronizando' : '⏳ Salvo offline · Pendente sincronização'}
+           </p>
           </div>
+          {actionPlanStage === 'offer' && (
+            <section className="w-full max-w-2xl card-subtle bg-white border-l-4 border-l-pending text-left space-y-4" aria-labelledby="action-plan-offer-title">
+              <div className="flex items-start gap-3">
+                <span className="w-9 h-9 rounded-lg bg-amber-100 text-pending flex items-center justify-center flex-shrink-0" aria-hidden="true">
+                  <AlertTriangle className="w-5 h-5" />
+                </span>
+                <div>
+                  <h2 id="action-plan-offer-title" className="text-base font-black text-gray-900">Plano de ação</h2>
+                  <p className="text-sm text-gray-600 mt-1">Esta inspeção registrou {actionPlanCandidates.length} {actionPlanCandidates.length === 1 ? 'desvio' : 'desvios'}. Deseja criar ações para tratar as condições identificadas?</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                <span className="rounded-lg bg-amber-50 text-pending px-3 py-2">Observações: {actionPlanCandidates.filter((candidate) => candidate.severity === 'warning').length}</span>
+                <span className="rounded-lg bg-red-50 text-critical px-3 py-2">Não conformidades: {actionPlanCandidates.filter((candidate) => candidate.severity === 'nonconformity').length}</span>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button type="button" className="btn-primary btn-auto flex-1" onClick={openActionPlanReview}>Criar planos de ação</button>
+                <button type="button" className="btn-ghost btn-auto flex-1" onClick={dismissActionPlans}>Agora não</button>
+              </div>
+            </section>
+          )}
+          {actionPlanStage === 'review' && (
+            <section className="w-full max-w-3xl card-subtle bg-gray-50 border border-gray-200 text-left space-y-4" aria-labelledby="action-plan-review-title">
+              <div>
+                <h2 id="action-plan-review-title" className="text-base font-black text-gray-900">Revisar planos de ação</h2>
+                <p className="text-sm text-gray-600 mt-1">Confirme cada ação individualmente. Nenhum plano é criado automaticamente.</p>
+              </div>
+              <div className="space-y-3">
+                {actionPlanCandidates.map((candidate) => {
+                  const created = Boolean(candidate.planId);
+                  return (
+                    <article key={candidate.item} className="rounded-xl bg-white border border-gray-200 p-4 space-y-3" aria-labelledby={`action-plan-${candidate.item}`}>
+                      <div className="flex items-start gap-2">
+                        {candidate.severity === 'warning' ? <AlertTriangle className="w-4 h-4 text-pending mt-0.5 flex-shrink-0" aria-hidden="true" /> : <XCircle className="w-4 h-4 text-critical mt-0.5 flex-shrink-0" aria-hidden="true" />}
+                        <div className="min-w-0">
+                          <span className={`text-[10px] font-black uppercase tracking-wider ${candidate.severity === 'warning' ? 'text-pending' : 'text-critical'}`}>
+                            {candidate.severity === 'warning' ? 'Observação' : 'Não conforme'}
+                          </span>
+                          <h3 id={`action-plan-${candidate.item}`} className="text-sm font-black text-gray-900">{candidate.item}</h3>
+                          <p className="text-xs text-gray-600 mt-1">{candidate.description}</p>
+                        </div>
+                      </div>
+                      {created ? (
+                        <div className="flex items-center gap-2 rounded-lg bg-green-50 text-success px-3 py-2 text-xs font-bold" role="status">
+                          <CheckCircle2 className="w-4 h-4" /> Plano criado{candidate.planId ? ` · ${candidate.planId}` : ''}
+                        </div>
+                      ) : (
+                        <>
+                          <div>
+                            <span className="field-label">Criticidade</span>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mt-1">
+                              {ACTION_PLAN_CRITICIDADE_OPTIONS.map((option) => (
+                                <button key={option} type="button" aria-pressed={candidate.criticidade === option} onClick={() => updateActionPlanCandidate(candidate.item, { criticidade: option })} className={`rounded-lg border px-2 py-2 text-[10px] font-black ${candidate.criticidade === option ? 'border-primary bg-primary/10 text-primary' : 'border-gray-200 bg-white text-gray-500'}`}>
+                                  {option}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label htmlFor={`action-responsavel-${candidate.item}`} className="field-label">Responsável</label>
+                              <input id={`action-responsavel-${candidate.item}`} value={candidate.responsavel} onChange={(event) => updateActionPlanCandidate(candidate.item, { responsavel: event.target.value })} className="field-input" placeholder="Nome do responsável" />
+                            </div>
+                            <div>
+                              <label htmlFor={`action-prazo-${candidate.item}`} className="field-label">Prazo</label>
+                              <input id={`action-prazo-${candidate.item}`} type="date" value={candidate.prazo} onChange={(event) => updateActionPlanCandidate(candidate.item, { prazo: event.target.value })} className="field-input" />
+                            </div>
+                          </div>
+                          {candidate.planError && <p className="text-xs font-semibold text-critical" role="alert">{candidate.planError}</p>}
+                          <button type="button" className="btn-primary btn-auto w-full" disabled={candidate.creating} onClick={() => void createDerivedActionPlan(candidate)}>
+                            {candidate.creating ? <><Loader2 className="w-4 h-4 animate-spin" /> Salvando ação...</> : 'Criar ação'}
+                          </button>
+                        </>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          )}
           <div className="flex flex-col sm:flex-row gap-2 w-full max-w-sm">
             <button
               type="button"

@@ -135,7 +135,7 @@ export interface AppState {
     id: string,
     updates: { data?: string; status: EquipmentStatus; observacoes?: string; updatedByName: string },
   ) => Promise<InspectionSaveResult>;
-  addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'> & { status?: ActionPlanStatus }) => void;
+  addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'> & { status?: ActionPlanStatus }) => Promise<{ ok: boolean; id?: string; error?: string }>;
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
   deleteActionPlan: (id: string) => void;
   deleteEquipment: (id: string) => void;
@@ -1182,7 +1182,7 @@ export const useAppStore = create<AppState>()(
           return { ok: true, inspectionSaved: true, photoSaved: true, inspectionId };
         },
 
-        addActionPlan: (plan) => {
+        addActionPlan: async (plan) => {
           const now = new Date().toISOString();
           const id = `PAC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           const newPlan: ActionPlan = {
@@ -1194,20 +1194,26 @@ export const useAppStore = create<AppState>()(
             updatedAt: now,
           };
 
-          void db.planosAcao.put({
-            ...newPlan,
-            sincronizado: false,
-            pendingDelete: false,
-            syncAction: 'create',
-            syncOwnerUserId: get().user?.id,
-            deletedAt: null,
-            deletedBy: null,
-          } as LocalActionPlan).then(() => {
-            set((state) => ({
-              actionPlans: [newPlan, ...state.actionPlans],
-            }));
-          });
+          try {
+            await db.planosAcao.put({
+              ...newPlan,
+              sincronizado: false,
+              pendingDelete: false,
+              syncAction: 'create',
+              syncOwnerUserId: get().user?.id,
+              deletedAt: null,
+              deletedBy: null,
+            } as LocalActionPlan);
+          } catch (error) {
+            console.error('[store.addActionPlan] erro ao persistir no Dexie:', error);
+            return { ok: false, error: 'Não foi possível salvar o plano no dispositivo.' };
+          }
+
+          set((state) => ({
+            actionPlans: [newPlan, ...state.actionPlans],
+          }));
           void runSync().then(() => get().refreshPendingCount());
+          return { ok: true, id };
         },
 
         updateActionPlan: (id, updates) => {
