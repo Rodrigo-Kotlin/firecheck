@@ -24,10 +24,12 @@ import {
   Loader2,
   User,
   WifiOff,
+  History,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus } from '../../types';
 import { deleteInspectionDraft, deleteInspectionDraftByKey, loadInspectionDraft, saveInspectionDraft, createInspectionDraft, getInspectionDraftKey, type InspectionDraft } from '../../services/inspectionDraftService';
+import { InspectionDraftSession } from '../../services/inspectionDraftSession';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
 import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionReadiness, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationDescriptionMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateInspectionResult, type ChecklistValue, type EvidenceRequirement, type InspectionDeviation, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
@@ -545,6 +547,7 @@ export default function Inspecionar() {
   const [draftStatus, setDraftStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [draftPrompt, setDraftPrompt] = useState<{ draft: InspectionDraft | null; invalid: boolean } | null>(null);
   const [confirmDiscardDraft, setConfirmDiscardDraft] = useState(false);
+  const draftSessionRef = useRef(new InspectionDraftSession());
   const draftDirtyRef = useRef(false);
   const draftCreatedAtRef = useRef<string | undefined>(undefined);
   const draftUpdatedAtRef = useRef<string | undefined>(undefined);
@@ -710,16 +713,22 @@ export default function Inspecionar() {
   }, [checklist, deviationNotes, inspectionResult, inspectorName, validadeDate, observacoes, photoDraft, eqId, user?.id, selectedEquipment, success]);
 
   useEffect(() => {
-    if (!user?.id || !selectedEquipment || success) return;
+    const equipmentId = selectedEquipment?.id;
+    if (!user?.id || !equipmentId || success) return;
+    const draftContextKey = getInspectionDraftKey(user.id, equipmentId);
+    if (!draftSessionRef.current.shouldCheck(draftContextKey)) return;
+    // Resolve once per equipment in this mounted session. Autosave may update
+    // the database, but it must not turn the current form into a resume prompt.
     let active = true;
-    void loadInspectionDraft(user.id, selectedEquipment.id).then((result) => {
+    void loadInspectionDraft(user.id, equipmentId).then((result) => {
       if (!active) return;
+      if (draftDirtyRef.current) return;
       if (result.draft || result.invalid) setDraftPrompt(result);
     }).catch((error) => {
       console.error('[inspection-draft] load failed', error instanceof Error ? error.message : 'unknown error');
     });
     return () => { active = false; };
-  }, [user?.id, selectedEquipment, success]);
+  }, [user?.id, selectedEquipment?.id, success]);
 
   const handleChecklistChange = (item: string, value: ChecklistValue) => {
     markDraftDirty();
@@ -748,6 +757,13 @@ export default function Inspecionar() {
       setErrorMsg('Não foi possível salvar o rascunho antes de trocar de equipamento.');
       return;
     }
+    if (user?.id && selectedEquipment) {
+      // Leaving an equipment ends its active form session. Returning later in
+      // this component must perform a fresh, explicit resume check.
+      draftSessionRef.current.leave(getInspectionDraftKey(user.id, selectedEquipment.id));
+    }
+    setDraftPrompt(null);
+    setConfirmDiscardDraft(false);
     setEqId(nextEquipmentId);
     setChecklist({});
     setDeviationNotes({});
@@ -975,47 +991,50 @@ export default function Inspecionar() {
         )}
       </header>
 
-      {draftPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" role="dialog" aria-modal="true" aria-labelledby="draft-dialog-title">
-          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-5 sm:p-6 space-y-4">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-primary">Inspeção em andamento</p>
-              <h2 id="draft-dialog-title" className="text-lg sm:text-xl font-black text-gray-900 mt-1">Retomar inspeção?</h2>
-              <p className="text-sm text-gray-600 mt-2">Existe uma inspeção não concluída deste equipamento salva neste dispositivo.</p>
-            </div>
-            {draftPrompt.draft ? (
-              <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-sm space-y-1">
-                <p><strong>Equipamento:</strong> {selectedEquipment?.id}</p>
-                <p><strong>Progresso:</strong> {getChecklistProgress(checklistItems, draftPrompt.draft.checklist).percentage}%</p>
-                <p><strong>Salvo em:</strong> {new Date(draftPrompt.draft.updatedAt).toLocaleString('pt-BR')}</p>
-                <p><strong>Evidência:</strong> {draftPrompt.draft.photo ? 'foto disponível' : 'nenhuma foto'}</p>
-              </div>
-            ) : (
-              <p className="text-sm text-critical bg-red-50 rounded-lg p-3">Este rascunho não pôde ser recuperado.</p>
-            )}
-            {!confirmDiscardDraft ? (
-              <div className="flex flex-col sm:flex-row gap-2">
-                <button type="button" className="btn-primary btn-auto flex-1" onClick={continueDraft} disabled={!draftPrompt.draft}>Continuar inspeção</button>
-                <button type="button" className="btn-ghost btn-auto flex-1 text-critical" onClick={() => setConfirmDiscardDraft(true)}>Descartar rascunho</button>
-              </div>
-            ) : (
-              <div className="space-y-3 border-t border-gray-100 pt-3">
-                <p className="text-sm text-gray-700">Este rascunho será removido apenas deste dispositivo. Nenhuma inspeção será excluída.</p>
-                <div className="flex gap-2">
-                  <button type="button" className="btn-ghost btn-auto flex-1" onClick={() => setConfirmDiscardDraft(false)}>Cancelar</button>
-                  <button type="button" className="btn-primary btn-auto flex-1" onClick={() => void discardDraft()}>Descartar rascunho</button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {errorMsg && (
         <div className="p-3 bg-red-50 border border-red-100 rounded-lg text-sm font-bold text-critical flex items-center gap-2">
           <XCircle className="w-4 h-4 flex-shrink-0" />
           <span>{errorMsg}</span>
         </div>
+      )}
+
+      {draftPrompt && (
+        <section className="card-subtle bg-white border-l-4 border-l-primary space-y-4" aria-labelledby="draft-card-title">
+          <div className="flex items-start gap-3">
+            <span className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center flex-shrink-0" aria-hidden="true">
+              <History className="w-5 h-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-widest text-primary">Inspeção em andamento</p>
+              <h2 id="draft-card-title" className="text-lg font-black text-gray-900 mt-0.5">Retomar inspeção</h2>
+              <p className="text-sm text-gray-600 mt-1">Existe uma inspeção não concluída deste equipamento salva neste dispositivo.</p>
+            </div>
+          </div>
+          {draftPrompt.draft ? (
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs sm:text-sm">
+              <p><span className="block text-gray-500">Equipamento</span><strong>{selectedEquipment?.id}</strong></p>
+              <p><span className="block text-gray-500">Progresso</span><strong>{getChecklistProgress(checklistItems, draftPrompt.draft.checklist).percentage}%</strong></p>
+              <p><span className="block text-gray-500">Salvo em</span><strong>{new Date(draftPrompt.draft.updatedAt).toLocaleString('pt-BR')}</strong></p>
+              <p><span className="block text-gray-500">Evidência</span><strong>{draftPrompt.draft.photo ? 'Foto disponível' : 'Nenhuma foto'}</strong></p>
+            </div>
+          ) : (
+            <p className="text-sm text-critical bg-red-50 rounded-lg p-3">Este rascunho não pôde ser recuperado.</p>
+          )}
+          {!confirmDiscardDraft ? (
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button type="button" className="btn-primary btn-auto flex-1" onClick={continueDraft} disabled={!draftPrompt.draft}>Continuar inspeção</button>
+              <button type="button" className="btn-ghost btn-auto flex-1 text-critical" onClick={() => setConfirmDiscardDraft(true)}>Descartar rascunho</button>
+            </div>
+          ) : (
+            <div className="space-y-3 border-t border-gray-100 pt-3">
+              <p className="text-sm text-gray-700">Descartar este rascunho? Ele será removido apenas deste dispositivo. Nenhuma inspeção concluída será excluída.</p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button type="button" className="btn-ghost btn-auto flex-1" onClick={() => setConfirmDiscardDraft(false)}>Cancelar</button>
+                <button type="button" className="btn-primary btn-auto flex-1" onClick={() => void discardDraft()}>Descartar</button>
+              </div>
+            </div>
+          )}
+        </section>
       )}
 
       {success ? (
@@ -1047,7 +1066,7 @@ export default function Inspecionar() {
             </button>
           </div>
         </div>
-      ) : (
+      ) : draftPrompt ? null : (
         <form onSubmit={handleFinalize} className="space-y-4 sm:space-y-6">
           {/* Equipment selector — only when not pre-selected and nothing picked yet */}
           {!preSelectedId && !selectedEquipment && (
