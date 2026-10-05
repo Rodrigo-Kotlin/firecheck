@@ -51,6 +51,11 @@ function formatReason(reason: string): { label: string; icon: LucideIcon; classN
       return { label: reason, icon: AlertTriangle, className: 'bg-gray-50 text-gray-600' };
   }
 }
+
+function quantityLabel(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function formatDeadlineStatus(status: string): { label: string; className: string } {
   switch (status) {
     case 'vencido':
@@ -232,6 +237,7 @@ export default function Dashboard() {
     {
       label: 'Cadastrados',
       value: indicators.equipment.registered.count,
+      description: 'Equipamentos ativos',
       icon: Package,
       iconBg: 'bg-gray-100 text-gray-500',
       color: 'text-gray-700',
@@ -242,6 +248,7 @@ export default function Dashboard() {
       label: 'Cobertura',
       value: `${indicators.equipment.coverage.inspectedIds.length} / ${indicators.equipment.coverage.eligibleIds.length}`,
       percent: `${indicators.equipment.coverage.percentage}%`,
+      description: `${indicators.equipment.coverage.inspectedIds.length} de ${indicators.equipment.coverage.eligibleIds.length} inspecionados · ${indicators.equipment.noInspection.count} sem inspeção`,
       icon: ClipboardList,
       iconBg: 'bg-blue-50 text-blue-600',
       color: 'text-blue-600',
@@ -249,7 +256,7 @@ export default function Dashboard() {
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'inspected' }),
     },
     {
-       label: 'Em dia',
+      label: 'Em dia',
       description: 'Conformes na última inspeção',
       value: indicators.equipment.upToDate.count,
       icon: CheckCircle2,
@@ -259,66 +266,14 @@ export default function Dashboard() {
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'up-to-date' }),
     },
     {
-       label: 'Requer atenção',
-      description: 'Observação ou não conformidade',
+      label: 'Requer atenção',
+      description: `${quantityLabel(indicators.equipment.inObservation.count, 'observação', 'observações')} · ${quantityLabel(indicators.equipment.lastInspectionNonConformity.count, 'não conformidade', 'não conformidades')}`,
       value: indicators.equipment.requiresAttention.count,
       icon: AlertOctagon,
       iconBg: 'bg-amber-50 text-pending',
       color: 'text-pending',
       accent: 'border-l-pending',
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'attention' }),
-    },
-  ];
-
-  const secondaryIndicators = [
-    {
-      label: 'Sem inspeção',
-      count: indicators.equipment.noInspection.count,
-      icon: FileText,
-      iconBg: 'bg-blue-50 text-blue-600',
-      color: 'text-blue-600',
-       href: withControlCenterParams('/equipamentos', filters, { ccView: 'no-inspection' }),
-    },
-    {
-      label: 'Em observação',
-      count: indicators.equipment.inObservation.count,
-      icon: AlertTriangle,
-      iconBg: 'bg-gray-50 text-gray-500',
-      color: 'text-gray-600',
-       href: withControlCenterParams('/equipamentos', filters, { ccView: 'observation' }),
-    },
-    {
-       label: 'Vencidos',
-      count: indicators.equipment.inspectionsOverdue.count,
-      icon: ShieldAlert,
-      iconBg: 'bg-red-50 text-critical',
-      color: 'text-critical',
-       href: withControlCenterParams('/equipamentos', filters, { ccView: 'inspection-overdue' }),
-    },
-    {
-      label: 'Planos de ação',
-      count: indicators.actionPlans.open.count,
-      detail: `${indicators.actionPlans.pendingItems.count} pendências abertas`,
-      icon: ClipboardList,
-      iconBg: 'bg-red-50 text-critical',
-      color: 'text-primary',
-       href: withControlCenterParams('/planodeacao', filters),
-    },
-    {
-      label: 'Próximos vencimentos',
-      count: indicators.equipment.inspectionsNearDeadline.count,
-      icon: Clock,
-      iconBg: 'bg-amber-50 text-pending',
-      color: 'text-pending',
-       href: withControlCenterParams('/equipamentos', filters, { ccView: 'near-deadline' }),
-    },
-    {
-      label: 'NC sem plano',
-      count: indicators.specialCategories.nonConformitiesWithoutPlan.count,
-      icon: AlertOctagon,
-      iconBg: 'bg-orange-50 text-orange-600',
-      color: 'text-orange-600',
-       href: withControlCenterParams('/equipamentos', filters, { ccView: 'no-conformity-plan' }),
     },
   ];
 
@@ -379,28 +334,60 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* Secondary Indicators */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
-        {secondaryIndicators.map(indicator => {
-          const Icon = indicator.icon;
-          return (
-            <Link
-              key={indicator.label}
-              to={indicator.href}
-              className="card-subtle bg-white p-2 sm:p-2.5 flex flex-col gap-1 hover:border-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-            >
-              <div className="flex items-center gap-2">
-                <span className={`kpi-card__icon ${indicator.iconBg}`}>
-                  <Icon className="w-4 h-4" />
-                </span>
-                <span className="label-uppercase text-[10px] flex-1 leading-tight min-h-[2.25rem]">{indicator.label}</span>
-              </div>
-               <span className={`text-xl font-black ${indicator.color}`}>{indicator.count}</span>
-               {'detail' in indicator && indicator.detail && <span className="text-[10px] text-gray-500 leading-tight">{indicator.detail}</span>}
-            </Link>
-          );
-        })}
-      </div>
+       {/* Management indicators */}
+       <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 sm:gap-3.5">
+         <Link
+           to={withControlCenterParams('/planodeacao', filters)}
+           className="card-subtle bg-white p-3 sm:p-4 flex items-start gap-3 border-l-[3px] border-l-primary hover:border-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+           aria-label={`Ver ${quantityLabel(indicators.actionPlans.open.count, 'plano aberto', 'planos abertos')} e ${quantityLabel(indicators.actionPlans.pendingItems.count, 'pendência aberta', 'pendências abertas')}`}
+         >
+           <span className="kpi-card__icon bg-blue-50 text-blue-600">
+             <ClipboardList className="w-4 h-4" />
+           </span>
+           <span className="min-w-0 flex-1">
+             <span className="label-uppercase block">Planos de ação</span>
+             <span className="mt-1 block text-2xl font-black text-primary tabular-nums">
+               {indicators.actionPlans.open.count}
+             </span>
+             <span className="text-xs text-gray-500">
+               {quantityLabel(indicators.actionPlans.open.count, 'aberto', 'abertos')} · {quantityLabel(indicators.actionPlans.pendingItems.count, 'pendência aberta', 'pendências abertas')}
+             </span>
+           </span>
+         </Link>
+
+         <div className="card-subtle bg-white p-3 sm:p-4 border-l-[3px] border-l-gray-300">
+           <div className="flex items-start gap-3">
+             <span className="kpi-card__icon bg-gray-100 text-gray-600">
+               <Clock className="w-4 h-4" />
+             </span>
+             <div className="min-w-0 flex-1">
+               <span className="label-uppercase block">Prazos de inspeção</span>
+               <div className="mt-2 grid grid-cols-2 divide-x divide-gray-100">
+                 <Link
+                   to={withControlCenterParams('/equipamentos', filters, { ccView: 'inspection-overdue' })}
+                   className="pr-3 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                   aria-label={`Ver ${quantityLabel(indicators.equipment.inspectionsOverdue.count, 'equipamento vencido', 'equipamentos vencidos')}`}
+                 >
+                   <span className={`block text-2xl font-black tabular-nums ${indicators.equipment.inspectionsOverdue.count > 0 ? 'text-critical' : 'text-gray-700'}`}>
+                     {indicators.equipment.inspectionsOverdue.count}
+                   </span>
+                   <span className="text-xs font-semibold text-gray-500">Vencidos</span>
+                 </Link>
+                 <Link
+                   to={withControlCenterParams('/equipamentos', filters, { ccView: 'near-deadline' })}
+                   className="pl-3 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                   aria-label={`Ver ${quantityLabel(indicators.equipment.inspectionsNearDeadline.count, 'próximo vencimento', 'próximos vencimentos')}`}
+                 >
+                   <span className={`block text-2xl font-black tabular-nums ${indicators.equipment.inspectionsNearDeadline.count > 0 ? 'text-pending' : 'text-gray-700'}`}>
+                     {indicators.equipment.inspectionsNearDeadline.count}
+                   </span>
+                   <span className="text-xs font-semibold text-gray-500">Próximos 3 dias</span>
+                 </Link>
+               </div>
+             </div>
+           </div>
+         </div>
+       </div>
 
       {/* Priority Queue */}
       <section className="space-y-3">
