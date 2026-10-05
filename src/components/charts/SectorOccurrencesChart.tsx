@@ -9,7 +9,7 @@ interface SectorOccurrencesChartProps {
 }
 
 export default function SectorOccurrencesChart({ data, title, description, onSelectSector }: SectorOccurrencesChartProps) {
-  const total = data.reduce((sum, item) => sum + item.count, 0);
+  const total = data.reduce((sum, item) => sum + item.total, 0);
 
   if (total === 0) {
     return (
@@ -64,20 +64,15 @@ export default function SectorOccurrencesChart({ data, title, description, onSel
               }}
               labelFormatter={(label) => label}
             />
-            <Bar
-              dataKey="count"
-              name="Não conformidades"
-              fill="var(--color-critical)"
-              radius={[0, 4, 4, 0]}
-              maxBarSize={28}
-              isAnimationActive={false}
-            />
+            <Bar dataKey="conforme" name="Conforme" stackId="result" fill="var(--color-success)" maxBarSize={28} isAnimationActive={false} />
+            <Bar dataKey="observacao" name="Observação" stackId="result" fill="var(--color-pending)" maxBarSize={28} isAnimationActive={false} />
+            <Bar dataKey="naoConforme" name="Não conforme" stackId="result" fill="var(--color-critical)" radius={[0, 4, 4, 0]} maxBarSize={28} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>
       </div>
        <div className="mt-3 pt-2 border-t border-gray-100 flex items-center gap-2 text-xs font-medium">
-        <span className="text-gray-500 flex-1">Total de equipamentos com NC</span>
-        <span className="font-bold text-gray-900 tabular-nums">{total}</span>
+         <span className="text-gray-500 flex-1">Total de equipamentos inspecionados</span>
+         <span className="font-bold text-gray-900 tabular-nums">{total}</span>
        </div>
        {onSelectSector && (
          <div className="mt-2 flex flex-wrap gap-1">

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getControlCenterIndicators } from './controlCenterIndicators';
-import type { ControlCenterIndicators, Equipment, Inspection, ActionPlan } from './controlCenterIndicators';
+import type { ControlCenterIndicators, Equipment, Inspection, ActionPlan, ActionPlanItem } from './controlCenterIndicators';
 
 function makeEquipment(overrides: Partial<Equipment> = {}): Equipment {
   return {
@@ -45,6 +45,24 @@ function makeActionPlan(overrides: Partial<ActionPlan> = {}): ActionPlan {
   };
 }
 
+function makeActionPlanItem(overrides: Partial<ActionPlanItem> = {}): ActionPlanItem {
+  return {
+    id: 'PAI-001',
+    planId: 'PLAN-001',
+    deviationKey: 'item-1',
+    checklistItemKey: 'item-1',
+    tipoDesvio: 'nonconformity',
+    descricaoDesvio: 'Corrigir',
+    acaoCorretiva: '',
+    solucaoAdotada: '',
+    responsavel: '',
+    prazo: '',
+    status: 'Aberta',
+    createdAt: '2026-06-20',
+    ...overrides,
+  };
+}
+
 const today = '2026-06-20';
 
 function runIndicators(
@@ -57,6 +75,95 @@ function runIndicators(
 }
 
 describe('Control Center Indicators Engine', () => {
+  describe('Contrato D02B: dimensões independentes', () => {
+    it('mantém equipamento conforme em dia mesmo com prazo próximo ou vencido', () => {
+      const inspection = makeInspection({ status: 'regular' });
+      const near = runIndicators([makeEquipment({ dataProximaInspecao: '2026-06-23' })], [inspection], []);
+      const overdue = runIndicators([makeEquipment({ dataProximaInspecao: '2026-06-19' })], [inspection], []);
+      expect(near.equipment.upToDate.count).toBe(1);
+      expect(near.equipment.requiresAttention.count).toBe(0);
+      expect(near.equipment.inspectionsNearDeadline.count).toBe(1);
+      expect(overdue.equipment.upToDate.count).toBe(1);
+      expect(overdue.equipment.inspectionsOverdue.count).toBe(1);
+    });
+
+    it('não inclui sem inspeção em em dia ou requer atenção', () => {
+      const result = runIndicators([makeEquipment()], [], []);
+      expect(result.equipment.upToDate.count).toBe(0);
+      expect(result.equipment.requiresAttention.count).toBe(0);
+      expect(result.equipment.noInspection.count).toBe(1);
+    });
+
+    it('classifica observação e não conformidade somente pelo resultado técnico', () => {
+      const result = runIndicators([
+        makeEquipment({ id: 'obs', dataProximaInspecao: '2026-06-22' }),
+        makeEquipment({ id: 'nc', dataProximaInspecao: '2026-06-21' }),
+      ], [
+        makeInspection({ id: 'i-obs', equipmentId: 'obs', status: 'observacao' }),
+        makeInspection({ id: 'i-nc', equipmentId: 'nc', status: 'vencido' }),
+      ], []);
+      expect(result.equipment.requiresAttention.ids).toEqual(['obs', 'nc']);
+      expect(result.equipment.inspectionsNearDeadline.ids).toEqual(['obs', 'nc']);
+      expect(result.equipment.inspectionsOverdue.count).toBe(0);
+    });
+
+    it('separa status legacy vencido de prazo temporal', () => {
+      const result = runIndicators([makeEquipment({ dataProximaInspecao: '2026-12-31' })], [makeInspection({ status: 'vencido' })], []);
+      expect(result.equipment.lastInspectionNonConformity.count).toBe(1);
+      expect(result.equipment.inspectionsOverdue.count).toBe(0);
+      expect(result.deadlineClassification.vencido.count).toBe(0);
+    });
+
+    it('usa exatamente a janela inclusiva de três dias', () => {
+      const dates = ['2026-06-19', '2026-06-20', '2026-06-21', '2026-06-22', '2026-06-23', '2026-06-24'];
+      const equipments = dates.map((date, index) => makeEquipment({ id: `EQ-${index}`, dataProximaInspecao: date }));
+      const inspections = equipments.map(eq => makeInspection({ id: `I-${eq.id}`, equipmentId: eq.id }));
+      const result = runIndicators(equipments, inspections, []);
+      expect(result.equipment.inspectionsOverdue.ids).toEqual(['EQ-0']);
+      expect(result.equipment.inspectionsNearDeadline.ids).toEqual(['EQ-1', 'EQ-2', 'EQ-3', 'EQ-4']);
+    });
+  });
+
+  describe('Planos D02B', () => {
+    it('conta planos abertos e itens v2 ativos sem duplicar o pai', () => {
+      const plans = [
+        makeActionPlan({ id: 'PLAN-A', modelVersion: 2 }),
+        makeActionPlan({ id: 'PLAN-B', modelVersion: 2 }),
+        makeActionPlan({ id: 'PLAN-C', modelVersion: 1, status: 'Aberta' }),
+      ];
+      const items = [
+        makeActionPlanItem({ id: 'A-1', planId: 'PLAN-A', status: 'Concluída' }),
+        makeActionPlanItem({ id: 'A-2', planId: 'PLAN-A', status: 'Aberta' }),
+        makeActionPlanItem({ id: 'A-3', planId: 'PLAN-A', status: 'Aberta' }),
+        makeActionPlanItem({ id: 'B-1', planId: 'PLAN-B', status: 'Concluída' }),
+      ];
+      const result = runIndicators([makeEquipment()], [], plans, { actionPlanItems: items });
+      expect(result.actionPlans.open.count).toBe(2);
+      expect(result.actionPlans.pendingItems.count).toBe(2);
+    });
+
+    it('aplica filtro real pelo equipamento do plano', () => {
+      const equipments = [
+        makeEquipment({ id: 'A', setor: 'Administrativo' }),
+        makeEquipment({ id: 'B', setor: 'Operacional' }),
+      ];
+      const plans = [
+        makeActionPlan({ id: 'PLAN-A', equipmentId: 'A' }),
+        makeActionPlan({ id: 'PLAN-B', equipmentId: 'B' }),
+      ];
+      const result = runIndicators(equipments, [], plans, { filters: { setor: 'Administrativo' } });
+      expect(result.actionPlans.open.ids).toEqual(['PLAN-A']);
+    });
+
+    it('reconhece plano consolidado por inspectionId e fallback legacy', () => {
+      const equipment = makeEquipment({ status: 'pendente' });
+      const inspection = makeInspection({ status: 'pendente' });
+      const withCanonical = runIndicators([equipment], [inspection], [makeActionPlan({ id: 'OTHER', inspectionId: inspection.id, originType: 'inspection' })]);
+      const withLegacy = runIndicators([equipment], [inspection], [makeActionPlan({ id: `PAC-${inspection.id}-item-1` })]);
+      expect(withCanonical.specialCategories.nonConformitiesWithoutPlan.count).toBe(0);
+      expect(withLegacy.specialCategories.nonConformitiesWithoutPlan.count).toBe(0);
+    });
+  });
   describe('Inventário vazio', () => {
     it('deve retornar zeros em todos os indicadores', () => {
       const result = runIndicators([], [], []);
@@ -91,8 +198,7 @@ describe('Control Center Indicators Engine', () => {
       expect(result.equipment.upToDate.count).toBe(0);
       expect(result.equipment.noInspection.count).toBe(1);
       expect(result.equipment.noInspection.ids).toContain('EQ-001');
-      expect(result.equipment.requiresAttention.count).toBe(1);
-      expect(result.equipment.requiresAttention.ids).toContain('EQ-001');
+      expect(result.equipment.requiresAttention.count).toBe(0);
     });
   });
 
@@ -125,7 +231,7 @@ describe('Control Center Indicators Engine', () => {
       const eq = makeEquipment({ id: 'EQ-001', status: 'regular', dataProximaInspecao: undefined });
       const insp = makeInspection({ id: 'INSP-001', equipmentId: 'EQ-001', status: 'regular' });
       const result = runIndicators([eq], [insp], []);
-      expect(result.equipment.upToDate.count).toBe(0);
+      expect(result.equipment.upToDate.count).toBe(1);
       expect(result.deadlineClassification.semPrazo.count).toBe(1);
       expect(result.deadlineClassification.semPrazo.ids).toContain('EQ-001');
     });
@@ -141,18 +247,18 @@ describe('Control Center Indicators Engine', () => {
 
   describe('Janela de próximos vencimentos', () => {
     it('usa a janela padrão de 30 dias para prazo válido', () => {
-      const eq = makeEquipment({ id: 'EQ-001', dataProximaInspecao: '2026-07-19' });
+      const eq = makeEquipment({ id: 'EQ-001', dataProximaInspecao: '2026-06-23' });
       const insp = makeInspection({ id: 'INSP-001', equipmentId: 'EQ-001', status: 'regular' });
       const result = runIndicators([eq], [insp], []);
       expect(result.equipment.inspectionsNearDeadline.ids).toContain('EQ-001');
     });
 
     it('não inclui equipamento sem inspeção no indicador de inspeções próximas', () => {
-      const eq = makeEquipment({ id: 'EQ-001', dataProximaInspecao: '2026-07-19' });
+      const eq = makeEquipment({ id: 'EQ-001', dataProximaInspecao: '2026-06-23' });
       const result = runIndicators([eq], [], []);
       expect(result.equipment.noInspection.ids).toContain('EQ-001');
       expect(result.equipment.inspectionsNearDeadline.ids).not.toContain('EQ-001');
-      expect(result.deadlineClassification.proximoVencimento.ids).toContain('EQ-001');
+       expect(result.deadlineClassification.proximoVencimento.ids).toContain('EQ-001');
     });
   });
 
@@ -161,10 +267,10 @@ describe('Control Center Indicators Engine', () => {
       const eq = makeEquipment({ id: 'EQ-001', status: 'regular', dataProximaInspecao: '2026-06-10' });
       const insp = makeInspection({ id: 'INSP-001', equipmentId: 'EQ-001', status: 'regular' });
       const result = runIndicators([eq], [insp], []);
-      expect(result.equipment.upToDate.count).toBe(0);
+      expect(result.equipment.upToDate.count).toBe(1);
       expect(result.deadlineClassification.vencido.count).toBe(1);
       expect(result.equipment.inspectionsOverdue.count).toBe(1);
-      expect(result.equipment.requiresAttention.count).toBe(1);
+      expect(result.equipment.requiresAttention.count).toBe(0);
     });
   });
 
@@ -425,7 +531,7 @@ describe('Control Center Indicators Engine', () => {
       const eq = makeEquipment({ id: 'EQ-001', status: 'regular', dataProximaInspecao: '2026-12-31' });
       const insp = makeInspection({ id: 'INSP-001', equipmentId: 'EQ-001', status: 'regular', data: 'invalid' });
       const result = runIndicators([eq], [insp], []);
-      expect(result.equipment.coverage.count).toBe(1);
+      expect(result.equipment.coverage.count).toBe(0);
     });
   });
 
@@ -435,7 +541,7 @@ describe('Control Center Indicators Engine', () => {
       const insp = makeInspection({ id: 'INSP-001', equipmentId: 'EQ-001', status: 'regular' });
       const result = runIndicators([eq], [insp], [], { todayYmd: '2026-06-20' });
       expect(result.deadlineClassification.vencido.count).toBe(0);
-      expect(result.deadlineClassification.emDia.count).toBe(1);
+      expect(result.deadlineClassification.proximoVencimento.count).toBe(1);
     });
 
     it('prazo anterior a hoje é vencido', () => {

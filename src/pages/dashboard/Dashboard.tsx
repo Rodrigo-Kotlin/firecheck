@@ -35,6 +35,8 @@ function formatReason(reason: string): { label: string; icon: LucideIcon; classN
   switch (reason) {
     case 'nao_conformidade':
       return { label: 'Não conformidade', icon: AlertTriangle, className: 'bg-amber-50 text-pending' };
+    case 'nao_conformidade_sem_plano':
+      return { label: 'NC sem plano', icon: AlertOctagon, className: 'bg-orange-50 text-orange-600' };
     case 'observacao':
       return { label: 'Observação', icon: AlertTriangle, className: 'bg-gray-50 text-gray-600' };
     case 'prazo':
@@ -49,7 +51,6 @@ function formatReason(reason: string): { label: string; icon: LucideIcon; classN
       return { label: reason, icon: AlertTriangle, className: 'bg-gray-50 text-gray-600' };
   }
 }
-
 function formatDeadlineStatus(status: string): { label: string; className: string } {
   switch (status) {
     case 'vencido':
@@ -70,6 +71,7 @@ export default function Dashboard() {
     equipments,
     inspections,
     actionPlans,
+    actionPlanItems,
     networkUnavailable,
     setCurrentTab,
   } = useAppStore();
@@ -132,21 +134,32 @@ export default function Dashboard() {
   };
 
   const indicators = useMemo<ControlCenterIndicators>(
-    () => getControlCenterIndicators(filteredData.equipments, filteredData.inspections, filteredData.actionPlans, { todayYmd }),
-    [filteredData, todayYmd]
+    () => getControlCenterIndicators(filteredData.equipments, filteredData.inspections, filteredData.actionPlans, {
+      todayYmd,
+      source: networkUnavailable ? 'local_pending_sync' : 'local_snapshot',
+      actionPlanItems,
+    }),
+    [filteredData, todayYmd, networkUnavailable, actionPlanItems]
   );
 
   const priorityItems = useMemo<PriorityItem[]>(() => {
     const itemsMap = new Map<string, PriorityItem>();
 
-    for (const eqId of indicators.equipment.requiresAttention.ids) {
+     const queueIds = new Set([
+       ...indicators.equipment.requiresAttention.ids,
+       ...indicators.equipment.noInspection.ids,
+       ...indicators.equipment.inspectionsOverdue.ids,
+       ...indicators.equipment.inspectionsNearDeadline.ids,
+     ]);
+     for (const eqId of queueIds) {
        const eq = filteredData.equipments.find(e => e.id === eqId);
       if (!eq) continue;
 
       const reasons = new Set<string>();
       if (indicators.equipment.noInspection.ids.includes(eqId)) reasons.add('sem_inspecao');
       if (indicators.equipment.inObservation.ids.includes(eqId)) reasons.add('observacao');
-      if (indicators.equipment.lastInspectionNonConformity.ids.includes(eqId)) reasons.add('nao_conformidade');
+       if (indicators.equipment.lastInspectionNonConformity.ids.includes(eqId)) reasons.add('nao_conformidade');
+       if (indicators.specialCategories.nonConformitiesWithoutPlan.ids.includes(eqId)) reasons.add('nao_conformidade_sem_plano');
       if (indicators.equipment.inspectionsOverdue.ids.includes(eqId)) reasons.add('prazo');
       if (indicators.equipment.inspectionsNearDeadline.ids.includes(eqId)) reasons.add('proximo_prazo');
 
@@ -168,7 +181,7 @@ export default function Dashboard() {
         planoPrazo = plan.prazo;
         planoResponsavel = plan.responsavel;
         planoCriticidade = plan.criticidade;
-        if (plan.status === 'Vencida' || (plan.prazo && normalizeYmdPlan(plan.prazo) && isBeforeToday(normalizeYmdPlan(plan.prazo)!))) {
+        if (plan.status === 'Vencida' || (plan.prazo && normalizeYmdPlan(plan.prazo) && normalizeYmdPlan(plan.prazo)! < todayYmd)) {
           reasons.add('plano_atrasado');
         }
       }
@@ -191,25 +204,29 @@ export default function Dashboard() {
       });
     }
 
-    const items = Array.from(itemsMap.values());
+     const reasonPriority = (reasons: string[]) => {
+       if (reasons.includes('nao_conformidade_sem_plano')) return 0;
+       if (reasons.includes('nao_conformidade') || reasons.includes('plano_atrasado')) return 1;
+       if (reasons.includes('prazo')) return 2;
+       if (reasons.includes('observacao')) return 3;
+       if (reasons.includes('sem_inspecao')) return 4;
+       if (reasons.includes('proximo_prazo')) return 5;
+       return 6;
+     };
+     const items = Array.from(itemsMap.values()).map(item => ({
+       ...item,
+       reasons: [...item.reasons].sort((a, b) => reasonPriority([a]) - reasonPriority([b])),
+     }));
 
-    items.sort((a, b) => {
-      const reasonPriority = (reasons: string[]) => {
-        if (reasons.includes('nao_conformidade') || reasons.includes('plano_atrasado')) return 0;
-        if (reasons.includes('prazo')) return 1;
-        if (reasons.includes('proximo_prazo')) return 2;
-        if (reasons.includes('observacao')) return 3;
-        if (reasons.includes('sem_inspecao')) return 4;
-        return 5;
-      };
-      const pa = reasonPriority(a.reasons);
+     items.sort((a, b) => {
+       const pa = reasonPriority(a.reasons);
       const pb = reasonPriority(b.reasons);
       if (pa !== pb) return pa - pb;
       return a.equipmentId.localeCompare(b.equipmentId);
     });
 
     return items.slice(0, 5);
-  }, [indicators, filteredData.equipments, filteredData.actionPlans]);
+   }, [indicators, filteredData.equipments, filteredData.actionPlans, todayYmd]);
 
   const mainIndicators = [
     {
@@ -232,7 +249,8 @@ export default function Dashboard() {
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'inspected' }),
     },
     {
-      label: 'Em dia',
+       label: 'Em dia',
+      description: 'Conformes na última inspeção',
       value: indicators.equipment.upToDate.count,
       icon: CheckCircle2,
       iconBg: 'bg-green-50 text-success',
@@ -241,7 +259,8 @@ export default function Dashboard() {
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'up-to-date' }),
     },
     {
-      label: 'Requer atenção',
+       label: 'Requer atenção',
+      description: 'Observação ou não conformidade',
       value: indicators.equipment.requiresAttention.count,
       icon: AlertOctagon,
       iconBg: 'bg-amber-50 text-pending',
@@ -269,7 +288,7 @@ export default function Dashboard() {
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'observation' }),
     },
     {
-      label: 'Inspeções atrasadas',
+       label: 'Vencidos',
       count: indicators.equipment.inspectionsOverdue.count,
       icon: ShieldAlert,
       iconBg: 'bg-red-50 text-critical',
@@ -277,12 +296,13 @@ export default function Dashboard() {
        href: withControlCenterParams('/equipamentos', filters, { ccView: 'inspection-overdue' }),
     },
     {
-      label: 'Planos atrasados',
-      count: indicators.actionPlans.overdue.count,
+      label: 'Planos de ação',
+      count: indicators.actionPlans.open.count,
+      detail: `${indicators.actionPlans.pendingItems.count} pendências abertas`,
       icon: ClipboardList,
       iconBg: 'bg-red-50 text-critical',
-      color: 'text-critical',
-       href: withControlCenterParams('/planodeacao', filters, { overdue: '1' }),
+      color: 'text-primary',
+       href: withControlCenterParams('/planodeacao', filters),
     },
     {
       label: 'Próximos vencimentos',
@@ -303,8 +323,13 @@ export default function Dashboard() {
   ];
 
   const charts = useMemo<ControlCenterChartsResult>(
-    () => getControlCenterCharts(filteredData.equipments, filteredData.inspections, filteredData.actionPlans, { todayYmd, period: chartPeriod }),
-    [filteredData, todayYmd, chartPeriod]
+    () => getControlCenterCharts(filteredData.equipments, filteredData.inspections, filteredData.actionPlans, {
+      todayYmd,
+      period: chartPeriod,
+      source: networkUnavailable ? 'local_pending_sync' : 'local_snapshot',
+      actionPlanItems,
+    }),
+    [filteredData, todayYmd, chartPeriod, networkUnavailable, actionPlanItems]
   );
 
   const navigateEquipmentView = (ccView: string, extra: Record<string, string | null | undefined> = {}) =>
@@ -346,7 +371,8 @@ export default function Dashboard() {
                   <Icon className="w-4 h-4" />
                 </span>
               </div>
-              <span className={`kpi-card__value ${indicator.color}`}>{isCoverage ? indicator.percent : indicator.value}</span>
+               <span className={`kpi-card__value ${indicator.color}`}>{isCoverage ? indicator.percent : indicator.value}</span>
+               {'description' in indicator && indicator.description && <span className="text-[10px] text-gray-500 leading-tight">{indicator.description}</span>}
               {isCoverage && <span className="sr-only">{indicator.value} equipamentos elegíveis com inspeção</span>}
             </Link>
           );
@@ -369,7 +395,8 @@ export default function Dashboard() {
                 </span>
                 <span className="label-uppercase text-[10px] flex-1 leading-tight min-h-[2.25rem]">{indicator.label}</span>
               </div>
-              <span className={`text-xl font-black ${indicator.color}`}>{indicator.count}</span>
+               <span className={`text-xl font-black ${indicator.color}`}>{indicator.count}</span>
+               {'detail' in indicator && indicator.detail && <span className="text-[10px] text-gray-500 leading-tight">{indicator.detail}</span>}
             </Link>
           );
         })}
@@ -521,7 +548,7 @@ export default function Dashboard() {
             <EquipmentSituationChart
               data={charts.equipmentSituation}
               title="Situação dos Equipamentos"
-              description="Distribuição operacional baseada na última inspeção e prazos vigentes"
+               description="Resultado técnico da última inspeção; prazos são uma dimensão independente"
               onSelectCategory={category => navigateEquipmentView(`situation:${category}`)}
             />
             <InspectionsByPeriodChart
@@ -544,8 +571,8 @@ export default function Dashboard() {
             />
             <SectorOccurrencesChart
               data={charts.sectorOccurrences}
-              title="Não Conformidades por Setor"
-              description="Equipamentos com última inspeção pendente ou vencida, agrupados por setor"
+               title="Resultados das Inspeções por Setor"
+               description="Resultados da última inspeção por setor"
               onSelectSector={sector => navigateEquipmentView('sector', { sector })}
             />
           </div>
@@ -565,10 +592,4 @@ function normalizeYmdPlan(value: string | null | undefined): string | null {
   const d = Number(day);
   if (y < 1 || y > 9999 || m < 1 || m > 12 || d < 1 || d > 31) return null;
   return `${year}-${month}-${day}`;
-}
-
-function isBeforeToday(ymd: string): boolean {
-  const today = new Date();
-  const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  return ymd < todayYmd;
 }

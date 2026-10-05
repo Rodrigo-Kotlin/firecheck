@@ -1,4 +1,4 @@
-import type { Equipment, Inspection, ActionPlan, EquipmentStatus, ActionPlanStatus } from '../types';
+import type { Equipment, Inspection, ActionPlan, ActionPlanItem, EquipmentStatus, ActionPlanStatus } from '../types';
 import {
   normalizeYmd,
   getTodayYmd,
@@ -6,6 +6,7 @@ import {
   getLatestInspectionForEquipment,
   isEquipmentActive,
 } from './equipmentFilters';
+import { deriveActionPlanStatus } from '../services/actionPlanItems';
 
 export type PeriodOption = '30d' | '90d' | '6m' | '12m';
 export type EquipmentSituationCategory =
@@ -51,6 +52,10 @@ export interface OverduePlansChartData {
 export interface SectorOccurrencesChartData {
   setor: string;
   count: number;
+  conforme: number;
+  observacao: number;
+  naoConforme: number;
+  total: number;
 }
 
 export interface ControlCenterChartsResult {
@@ -69,6 +74,8 @@ export interface ControlCenterChartsResult {
 export interface ControlCenterChartsOptions {
   todayYmd?: string;
   period?: PeriodOption;
+  source?: 'local_snapshot' | 'cloud_synced' | 'local_pending_sync';
+  actionPlanItems?: ActionPlanItem[];
 }
 
 export interface ControlCenterPeriodRange {
@@ -96,6 +103,7 @@ function compareInspectionsLatest(a: Inspection, b: Inspection): number {
 function buildLatestInspectionIndex(inspections: Inspection[]): Map<string, Inspection> {
   const index = new Map<string, Inspection>();
   for (const insp of inspections) {
+    if (!normalizeYmd(insp.data) || (insp as Inspection & { pendingDelete?: boolean }).pendingDelete) continue;
     const existing = index.get(insp.equipmentId);
     if (!existing || compareInspectionsLatest(insp, existing) > 0) {
       index.set(insp.equipmentId, insp);
@@ -159,7 +167,7 @@ export function getControlCenterCharts(
   const today = options.todayYmd ?? getTodayYmd();
   const period = options.period ?? '6m';
 
-  const activeEquipments = equipments.filter(isEquipmentActive);
+  const activeEquipments = [...new Map(equipments.filter(isEquipmentActive).map(eq => [eq.id, eq])).values()];
   const latestInspectionIndex = buildLatestInspectionIndex(inspections);
 
   // ============================================
@@ -181,7 +189,6 @@ export function getControlCenterCharts(
   for (const eq of activeEquipments) {
     const status = eq.status;
     const lastInspection = latestInspectionIndex.get(eq.id);
-    const nextDate = normalizeYmd(eq.dataProximaInspecao);
 
     if (status === 'em_manutencao' || status === 'inativo' || status === 'substituido' || status === 'extraviado') {
       situationCounts.fora_operacao++;
@@ -198,16 +205,8 @@ export function getControlCenterCharts(
     const lastStatus = lastInspection.status;
 
     if (lastStatus === 'regular') {
-      if (nextDate && !isYmdBefore(nextDate, today)) {
-        situationCounts.em_dia++;
-        equipmentSituationIds.em_dia.push(eq.id);
-      } else if (nextDate && isYmdBefore(nextDate, today)) {
-        situationCounts.prazo_vencido++;
-        equipmentSituationIds.prazo_vencido.push(eq.id);
-      } else {
-        situationCounts.sem_prazo++;
-        equipmentSituationIds.sem_prazo.push(eq.id);
-      }
+      situationCounts.em_dia++;
+      equipmentSituationIds.em_dia.push(eq.id);
     } else if (lastStatus === 'observacao') {
       situationCounts.observacao++;
       equipmentSituationIds.observacao.push(eq.id);
@@ -329,20 +328,27 @@ export function getControlCenterCharts(
   let overduePlansCount = 0;
   const overduePlanIds: string[] = [];
 
+  const planItems = options.actionPlanItems ?? [];
   for (const plan of actionPlans) {
     if (plan.deletedAt) continue;
     const equipment = activeEquipments.find(e => e.id === plan.equipmentId);
-    if (!equipment) continue;
+    if (!equipment && plan.equipmentId) continue;
 
-    if (plan.status === 'Concluída') {
+    const effectiveStatus = plan.modelVersion === 2
+      ? deriveActionPlanStatus(planItems.filter(item => item.planId === plan.id && !item.deletedAt))
+      : plan.status;
+
+    if (effectiveStatus === 'Concluída') {
       planStatusCounts.Concluída++;
       actionPlanIds.Concluída.push(plan.id);
     } else {
-      planStatusCounts[plan.status as keyof typeof planStatusCounts]++;
-      actionPlanIds[plan.status].push(plan.id);
+      planStatusCounts[effectiveStatus as keyof typeof planStatusCounts]++;
+      actionPlanIds[effectiveStatus].push(plan.id);
 
-      const planDate = normalizeYmd(plan.prazo);
-      if (plan.status === 'Vencida' || (planDate !== null && isYmdBefore(planDate, today))) {
+      const planDate = normalizeYmd(plan.modelVersion === 2
+        ? planItems.filter(item => item.planId === plan.id && !item.deletedAt && item.status !== 'Concluída').map(item => item.prazo).filter(Boolean).sort()[0]
+        : plan.prazo);
+      if (effectiveStatus === 'Vencida' || (planDate !== null && isYmdBefore(planDate, today))) {
         overduePlansCount++;
         overduePlanIds.push(plan.id);
       }
@@ -372,7 +378,8 @@ export function getControlCenterCharts(
   // ============================================
   // GRÁFICO 4: Ocorrências por Setor
   // ============================================
-  const sectorMap = new Map<string, number>();
+  const sectorMap = new Map<string, { conforme: number; observacao: number; naoConforme: number }>();
+  const sectorLabels = new Map<string, string>();
   const sectorEquipmentIdMap = new Map<string, string[]>();
 
   for (const eq of activeEquipments) {
@@ -380,28 +387,41 @@ export function getControlCenterCharts(
     if (!lastInspection) continue;
 
     const lastStatus = lastInspection.status;
-    if (lastStatus !== 'pendente' && lastStatus !== 'vencido') continue;
+    if (eq.status === 'em_manutencao' || eq.status === 'inativo' || eq.status === 'substituido' || eq.status === 'extraviado') continue;
 
     const setor = normalizeSetor(eq.setor);
-    sectorMap.set(setor, (sectorMap.get(setor) || 0) + 1);
-    const ids = sectorEquipmentIdMap.get(setor) ?? [];
+    const sectorKey = setor.toLocaleLowerCase('pt-BR');
+    if (!sectorLabels.has(sectorKey)) sectorLabels.set(sectorKey, setor);
+    const counts = sectorMap.get(sectorKey) ?? { conforme: 0, observacao: 0, naoConforme: 0 };
+    if (lastStatus === 'regular') counts.conforme++;
+    else if (lastStatus === 'observacao') counts.observacao++;
+    else counts.naoConforme++;
+    sectorMap.set(sectorKey, counts);
+    const ids = sectorEquipmentIdMap.get(sectorKey) ?? [];
     ids.push(eq.id);
-    sectorEquipmentIdMap.set(setor, ids);
+    sectorEquipmentIdMap.set(sectorKey, ids);
   }
 
   const sortedSectors = Array.from(sectorMap.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    .sort((a, b) => (b[1].conforme + b[1].observacao + b[1].naoConforme) - (a[1].conforme + a[1].observacao + a[1].naoConforme) || a[0].localeCompare(b[0]));
 
   const topSectors = sortedSectors.slice(0, 8);
-  const othersCount = sortedSectors.slice(8).reduce((sum, [, count]) => sum + count, 0);
+  const othersCount = sortedSectors.slice(8).reduce((sum, [, counts]) => sum + counts.conforme + counts.observacao + counts.naoConforme, 0);
 
-  const sectorOccurrences: SectorOccurrencesChartData[] = topSectors.map(([setor, count]) => ({
-    setor,
-    count,
+  const sectorOccurrences: SectorOccurrencesChartData[] = topSectors.map(([sectorKey, counts]) => ({
+    setor: sectorLabels.get(sectorKey) ?? sectorKey,
+    ...counts,
+    count: counts.conforme + counts.observacao + counts.naoConforme,
+    total: counts.conforme + counts.observacao + counts.naoConforme,
   }));
 
   if (othersCount > 0) {
-    sectorOccurrences.push({ setor: 'Outros setores', count: othersCount });
+    const others = sortedSectors.slice(8).reduce((result, [, counts]) => ({
+      conforme: result.conforme + counts.conforme,
+      observacao: result.observacao + counts.observacao,
+      naoConforme: result.naoConforme + counts.naoConforme,
+    }), { conforme: 0, observacao: 0, naoConforme: 0 });
+    sectorOccurrences.push({ setor: 'Outros setores', ...others, count: othersCount, total: othersCount });
   }
 
   return {
@@ -415,9 +435,9 @@ export function getControlCenterCharts(
     overduePlanIds,
     sectorOccurrences,
     sectorEquipmentIds: Object.fromEntries(
-      [...topSectors].map(([setor]) => [setor, sectorEquipmentIdMap.get(setor) ?? []]).concat(
-        othersCount > 0
-          ? [['Outros setores', sortedSectors.slice(8).flatMap(([setor]) => sectorEquipmentIdMap.get(setor) ?? [])] as [string, string[]]]
+       [...topSectors].map(([sectorKey]) => [sectorLabels.get(sectorKey) ?? sectorKey, sectorEquipmentIdMap.get(sectorKey) ?? []]).concat(
+         othersCount > 0
+           ? [['Outros setores', sortedSectors.slice(8).flatMap(([sectorKey]) => sectorEquipmentIdMap.get(sectorKey) ?? [])] as [string, string[]]]
           : [],
       ),
     ),

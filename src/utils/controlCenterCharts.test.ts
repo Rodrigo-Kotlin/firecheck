@@ -81,12 +81,12 @@ describe('D04 control center chart aggregators', () => {
       ]);
 
       expect(charts([]).equipmentSituation).toEqual([]);
-      expect(valueOf(result.equipmentSituation, 'Em dia')).toBe(1);
+      expect(valueOf(result.equipmentSituation, 'Em dia')).toBe(3);
       expect(valueOf(result.equipmentSituation, 'Em observação')).toBe(1);
       expect(valueOf(result.equipmentSituation, 'Não conformes')).toBe(2);
       expect(valueOf(result.equipmentSituation, 'Sem inspeção')).toBe(1);
-      expect(valueOf(result.equipmentSituation, 'Prazo vencido')).toBe(1);
-      expect(valueOf(result.equipmentSituation, 'Sem prazo')).toBe(1);
+      expect(valueOf(result.equipmentSituation, 'Prazo vencido')).toBe(0);
+      expect(valueOf(result.equipmentSituation, 'Sem prazo')).toBe(0);
     });
 
     it('excludes tombstones and classifies non-operational status before inspection status', () => {
@@ -189,6 +189,21 @@ describe('D04 control center chart aggregators', () => {
   });
 
   describe('sector occurrences', () => {
+    it('merges sector labels that differ only by whitespace or case', () => {
+      const result = charts([
+        equipment({ id: 'a', setor: 'Administrativo' }),
+        equipment({ id: 'b', setor: ' administrativo ' }),
+        equipment({ id: 'c', setor: 'ADMINISTRATIVO' }),
+      ], [
+        inspection({ id: 'a-1', equipmentId: 'a', status: 'regular' }),
+        inspection({ id: 'b-1', equipmentId: 'b', status: 'observacao' }),
+        inspection({ id: 'c-1', equipmentId: 'c', status: 'pendente' }),
+      ]);
+      expect(result.sectorOccurrences).toEqual([
+        { setor: 'Administrativo', conforme: 1, observacao: 1, naoConforme: 1, count: 3, total: 3 },
+      ]);
+    });
+
     it('counts distinct equipment by latest non-conformity and normalizes sectors', () => {
       const result = charts([
         equipment({ id: 'a', setor: '  Operação   Norte ' }),
@@ -204,8 +219,9 @@ describe('D04 control center chart aggregators', () => {
       ]);
 
       expect(result.sectorOccurrences).toEqual([
-        { setor: 'Não informado', count: 1 },
-        { setor: 'Operação Norte', count: 1 },
+        { setor: 'Operação Norte', conforme: 1, observacao: 0, naoConforme: 1, count: 2, total: 2 },
+        { setor: 'Não informado', conforme: 0, observacao: 0, naoConforme: 1, count: 1, total: 1 },
+        { setor: 'Sem NC', conforme: 1, observacao: 0, naoConforme: 0, count: 1, total: 1 },
       ]);
     });
 
@@ -222,7 +238,7 @@ describe('D04 control center chart aggregators', () => {
       const result = charts(equipments, inspections);
 
       expect(result.sectorOccurrences).toHaveLength(9);
-      expect(result.sectorOccurrences.at(-1)).toEqual({ setor: 'Outros setores', count: 2 });
+       expect(result.sectorOccurrences.at(-1)).toEqual({ setor: 'Outros setores', conforme: 0, observacao: 0, naoConforme: 2, count: 2, total: 2 });
       expect(result.sectorOccurrences.slice(0, 8).every(item => item.count === 1)).toBe(true);
     });
 
@@ -252,7 +268,7 @@ describe('D04 control center chart aggregators', () => {
     expect(valueOf(d04.equipmentSituation, 'Em dia')).toBe(d02.equipment.upToDate.count);
     expect(valueOf(d04.equipmentSituation, 'Não conformes')).toBe(d02.equipment.lastInspectionNonConformity.count);
     expect(valueOf(d04.actionPlans, 'Aberta')).toBe(d02.actionPlans.open.count);
-    expect(d04.sectorOccurrences.reduce((sum, item) => sum + item.count, 0)).toBe(d02.equipment.lastInspectionNonConformity.count);
+    expect(d04.sectorOccurrences.reduce((sum, item) => sum + item.count, 0)).toBe(2);
   });
 
   it('records deterministic D02/D04 benchmark samples', () => {

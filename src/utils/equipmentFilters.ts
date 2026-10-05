@@ -52,7 +52,8 @@ export function normalizeYmd(value: string | null | undefined): string | null {
   const y = Number(year);
   const m = Number(month);
   const d = Number(day);
-  if (y < 1 || y > 9999 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  if (y < 1 || y > 9999 || m < 1 || m > 12 || d < 1 || d > daysInMonth) return null;
   return `${year}-${month}-${day}`;
 }
 

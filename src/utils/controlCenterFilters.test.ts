@@ -76,7 +76,7 @@ describe('D05 global filters and drill-down contracts', () => {
     const dataPlans = [plan('A-P', 'A', { status: 'Vencida', prazo: '2026-06-19' })];
     const result = getControlCenterIndicators(data, dataInspections, dataPlans, { todayYmd: '2026-06-20' });
     expect(new Set(result.equipment.requiresAttention.ids).size).toBe(result.equipment.requiresAttention.count);
-    expect(result.equipment.requiresAttention.ids).toEqual(['A', 'B']);
+    expect(result.equipment.requiresAttention.ids).toEqual(['A']);
   });
 
   it('reproduces chart category IDs and sector grouping', () => {

@@ -74,10 +74,11 @@ export function filterControlCenterData(
 ) {
   const filteredEquipments = equipments.filter(eq => matchesControlCenterFilters(eq, filters));
   const ids = new Set(filteredEquipments.map(eq => eq.id));
+  const hasEquipmentFilter = hasControlCenterFilters(filters);
   return {
     equipments: filteredEquipments,
     inspections: inspections.filter(insp => ids.has(insp.equipmentId)),
-    actionPlans: actionPlans.filter(plan => ids.has(plan.equipmentId)),
+    actionPlans: actionPlans.filter(plan => plan.equipmentId ? ids.has(plan.equipmentId) : !hasEquipmentFilter),
   };
 }
 
