@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
+import { formatDateTimeBR } from '../../utils/date';
 import { ChevronLeft, Shield, User, Search, Trash2, AlertTriangle } from 'lucide-react';
 import { isAdmin } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
@@ -160,7 +161,7 @@ export default function AdminUsuarios() {
                     </div>
                     <p className="text-xs text-gray-500 truncate">{u.email}</p>
                     <p className="text-[10px] sm:text-[11px] text-gray-400 font-bold uppercase tracking-wider mt-0.5 truncate">
-                      {u.cargo} · desde {new Date(u.createdAt).toLocaleDateString('pt-BR')}
+                      {u.cargo} · desde {formatDateTimeBR(u.createdAt)}
                     </p>
                   </div>
                 </div>

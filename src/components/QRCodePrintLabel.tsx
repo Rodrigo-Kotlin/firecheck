@@ -1,13 +1,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import type { Equipment } from '../types';
-
-function formatDateBr(iso?: string): string {
-  if (!iso) return '';
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-  if (!m) return iso;
-  return `${m[3]}/${m[2]}/${m[1]}`;
-}
+import { formatDateBR, getLocalDateISO } from '../utils/date';
 
 export default function QRCodePrintLabel({ equipment }: { equipment: Equipment }) {
   const [qrUrl, setQrUrl] = useState('');
@@ -60,7 +54,7 @@ export default function QRCodePrintLabel({ equipment }: { equipment: Equipment }
         )}
       </div>
       <div className="qr-print-footer">
-        Emitido em {formatDateBr(new Date().toISOString())}
+        Emitido em {formatDateBR(getLocalDateISO())}
       </div>
     </div>
   );

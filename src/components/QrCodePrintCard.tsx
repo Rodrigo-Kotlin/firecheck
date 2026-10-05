@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { Printer, X, ShieldCheck, Download, Eye } from 'lucide-react';
 import type { Equipment } from '../types';
+import { formatDateBR, getLocalDateISO } from '../utils/date';
 import { APP_NAME } from '../config/brand';
 
 const QR_PER_PAGE = 6;
@@ -27,13 +28,6 @@ interface BatchProps {
 }
 
 type QrCodePrintCardProps = SingleProps | BatchProps;
-
-function formatDateBr(iso?: string): string {
-  if (!iso) return '';
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-  if (!m) return iso;
-  return `${m[3]}/${m[2]}/${m[1]}`;
-}
 
 function useQrDataUrl(value: string, width: number = 512): string {
   const [url, setUrl] = useState('');
@@ -93,7 +87,7 @@ function QrCodeLabel({ equipment, qrSize = 180 }: { equipment: Equipment; qrSize
         </div>
       </div>
       <div className="ql-footer">
-        <span>Emitido em {formatDateBr(new Date().toISOString())}</span>
+        <span>Emitido em {formatDateBR(getLocalDateISO())}</span>
         <span>Escaneie para inspecionar</span>
       </div>
     </div>

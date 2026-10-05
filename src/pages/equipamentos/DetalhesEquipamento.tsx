@@ -34,6 +34,7 @@ import {
 } from '../../constants/equipmentFormConfig';
 import { fieldsBySection } from './equipmentFormSections';
 import { generateEquipmentQr } from './equipmentQr';
+import { formatDateBR, formatDateTimeBR, getLocalDateISO, parseDateOnlyLocal } from '../../utils/date';
 
 type FieldProps = {
   label: string;
@@ -159,10 +160,11 @@ export default function DetalhesEquipamento() {
     if (!eq.dataProximaInspecao) {
       return { subLabel: 'Sem data', subColor: 'text-gray-400' };
     }
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const nextInsp = new Date(eq.dataProximaInspecao);
-    nextInsp.setHours(0, 0, 0, 0);
+    const today = parseDateOnlyLocal(getLocalDateISO());
+    const nextInsp = parseDateOnlyLocal(eq.dataProximaInspecao);
+    if (!today || !nextInsp) return { subLabel: 'Sem data', subColor: 'text-gray-400' };
+    today.setHours(12, 0, 0, 0);
+    nextInsp.setHours(12, 0, 0, 0);
 
     const diffTime = nextInsp.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -220,9 +222,9 @@ export default function DetalhesEquipamento() {
 
   const fieldValue = (name: string): ReactNode => {
     const direct = (eq as unknown as Record<string, unknown>)[name];
-    if (direct != null && direct !== '') return String(direct);
+    if (direct != null && direct !== '') return name.startsWith('data') ? formatDateBR(String(direct)) : String(direct);
     const dt = eq.dadosTecnicos?.[name];
-    if (dt != null && dt !== '') return String(dt);
+    if (dt != null && dt !== '') return name.startsWith('data') ? formatDateBR(String(dt)) : String(dt);
     return undefined;
   };
 
@@ -311,7 +313,7 @@ export default function DetalhesEquipamento() {
               <div><span className="font-bold uppercase text-[10px] text-red-500">Remoto: </span>{eq.remoteUpdatedAtAtConflict}</div>
             )}
             {eq.updatedAt && (
-              <div><span className="font-bold uppercase text-[10px] text-red-500">Local atual: </span>{eq.updatedAt}</div>
+              <div><span className="font-bold uppercase text-[10px] text-red-500">Local atual: </span>{formatDateTimeBR(eq.updatedAt)}</div>
             )}
           </div>
           <p className="text-[11px] text-red-600 font-semibold">
@@ -430,14 +432,14 @@ export default function DetalhesEquipamento() {
 
       {/* Cronograma (comum) */}
       <DetailSection title="Cronograma" icon={Calendar} cols={4}>
-        <Field label="Última Inspeção" value={eq.dataUltimaInspecao} />
+        <Field label="Última Inspeção" value={formatDateBR(eq.dataUltimaInspecao)} />
         <Field
           label="Próxima Inspeção"
           icon={Calendar}
           value={
             eq.dataProximaInspecao ? (
               <div className="space-y-0.5">
-                <div className="text-sm font-bold text-gray-800">{eq.dataProximaInspecao}</div>
+                <div className="text-sm font-bold text-gray-800">{formatDateBR(eq.dataProximaInspecao)}</div>
                 <div className={`text-[10px] font-bold uppercase tracking-wider ${expStatus.subColor}`}>
                   {expStatus.subLabel}
                 </div>

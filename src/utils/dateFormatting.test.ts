@@ -6,8 +6,8 @@ describe('formatCivilDate', () => {
     expect(formatCivilDate('2026-10-13')).toBe('13/10/2026');
   });
 
-  it('preserva valores ausentes ou não reconhecidos', () => {
-    expect(formatCivilDate(undefined)).toBe('');
-    expect(formatCivilDate('sem data')).toBe('sem data');
+  it('uses the standard empty marker for absent or invalid values', () => {
+    expect(formatCivilDate(undefined)).toBe('—');
+    expect(formatCivilDate('sem data')).toBe('—');
   });
 });

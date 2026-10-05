@@ -28,6 +28,7 @@ import { canEditActionPlan, canDeleteActionPlan } from '../../services/permissio
 import { filterControlCenterData, getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
 import { getTodayYmd, normalizeYmd } from '../../utils/equipmentFilters';
 import { deriveActionPlanStatus, getActionPlanProgress, nextActionPlanDeadline } from '../../services/actionPlanItems';
+import { formatDateTimeBR, getLocalDateISO, parseDateOnlyLocal } from '../../utils/date';
 
 const CRITICIDADE_STYLES: Record<Criticidade, string> = {
   'Crítico': 'bg-red-100 text-critical border-red-200',
@@ -82,10 +83,11 @@ type PrazoWarning = {
 
 function getPrazoWarning(prazo: string, status: ActionPlanStatus): PrazoWarning | null {
   if (!prazo || status === 'Concluída') return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const prazoDate = new Date(prazo);
-  prazoDate.setHours(0, 0, 0, 0);
+  const today = parseDateOnlyLocal(getLocalDateISO());
+  const prazoDate = parseDateOnlyLocal(prazo);
+  if (!today || !prazoDate) return null;
+  today.setHours(12, 0, 0, 0);
+  prazoDate.setHours(12, 0, 0, 0);
   const diffDays = Math.ceil((prazoDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
   if (diffDays < 0) {
@@ -490,7 +492,7 @@ export default function PlanoDeAcao() {
               {/* Footer */}
               <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] sm:text-[11px] text-gray-400 font-bold uppercase tracking-wider pt-3 border-t border-gray-50">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 flex-1">
-                  <span className="truncate">{plan.createdAt}</span>
+                   <span className="truncate">{formatDateTimeBR(plan.createdAt)}</span>
                   <span className="font-mono truncate max-w-full text-gray-300" title={plan.id}>
                     {plan.id}
                   </span>

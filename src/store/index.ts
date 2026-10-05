@@ -19,6 +19,7 @@ import { loadPlansFromDexie, loadPlanItemsFromDexie } from './loaders';
 import { shouldCreateLegacyInspectionPlan } from '../services/actionPlanIdentity';
 import { buildActionPlanItemId, buildConsolidatedActionPlanId, deriveActionPlanStatus, nextActionPlanDeadline } from '../services/actionPlanItems';
 import { canStartOperationalSync } from '../services/syncPolicy';
+import { getLocalDateISO } from '../utils/date';
 import {
   loginUser,
   resolveSession,
@@ -1010,7 +1011,7 @@ export const useAppStore = create<AppState>()(
                     responsavel: '',
                     prazo: '',
                     status: 'Aberta',
-                    createdAt: now.split('T')[0],
+                    createdAt: getLocalDateISO(),
                     userId,
                     updatedAt: now,
                     sincronizado: false,
@@ -1085,7 +1086,7 @@ export const useAppStore = create<AppState>()(
                 local: eq?.local || 'Local não especificado',
                 descricao: `[ORIGEM DA INSPEÇÃO]\nInspeção: ${inspectionId}\n${deviations.length} pendência(s) identificada(s)`,
                 criticidade: inferCriticidade(deviations.map((d) => d.description).join(' '), eq?.tipo || ''),
-                responsavel: '', prazo: '', status: 'Aberta', createdAt: now.split('T')[0], userId,
+                responsavel: '', prazo: '', status: 'Aberta', createdAt: getLocalDateISO(), userId,
                 updatedAt: now, sincronizado: false, pendingDelete: false, syncAction: 'create',
                 syncOwnerUserId: userId, deletedAt: null, deletedBy: null,
               }
@@ -1097,7 +1098,7 @@ export const useAppStore = create<AppState>()(
                   id: `PAC-${inspectionId}`, equipmentId: data.equipmentId, local: eq?.local || 'Local não especificado',
                   descricao: data.observacoes || 'Não conformidade identificada durante inspeção',
                   criticidade: inferCriticidade(data.observacoes || '', eq?.tipo || ''), responsavel: '', prazo: '',
-                  status: 'Aberta', createdAt: now.split('T')[0], userId, updatedAt: now, sincronizado: false,
+                  status: 'Aberta', createdAt: getLocalDateISO(), userId, updatedAt: now, sincronizado: false,
                   pendingDelete: false, syncAction: 'create', syncOwnerUserId: userId, deletedAt: null, deletedBy: null,
                 }]
               : [];
@@ -1220,7 +1221,7 @@ export const useAppStore = create<AppState>()(
             ...plan,
             id,
             status: plan.status ?? 'Aberta',
-            createdAt: now.split('T')[0],
+            createdAt: getLocalDateISO(),
             userId: plan.userId ?? get().user?.id,
             updatedAt: now,
           };

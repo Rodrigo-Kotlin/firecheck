@@ -12,6 +12,7 @@ import { APP_NAME } from '../../config/brand';
 import { buildHistoryEntries, filterHistoryEntries, scopeReportData } from './reportData';
 import { getHistoryStatusFromQuery, HISTORY_STATUS_BADGE, type HistoryEntry, type HistoryStatus } from './reportTypes';
 import { individualReportFilename, monthlyReportFilename } from './reportFileNames';
+import { formatDateBR, getLocalDateISO } from '../../utils/date';
 
 const PDF_COLORS = {
   primary: [11, 107, 58] as [number, number, number],
@@ -101,7 +102,7 @@ function drawFooter(ctx: DrawCtx) {
   ctx.doc.setFontSize(7);
   ctx.doc.setTextColor(...PDF_COLORS.textSubtle);
   ctx.doc.text(
-     `${APP_NAME} — Documento técnico — Gerado em ${new Date().toLocaleDateString('pt-BR')}`,
+     `${APP_NAME} — Documento técnico — Gerado em ${formatDateBR(getLocalDateISO())}`,
     PDF_MARGIN,
     PDF_FOOTER_Y,
   );
@@ -166,7 +167,7 @@ function drawCover(ctx: DrawCtx, opts: {
   const colW = PDF_CONTENT_W / 3;
   const infoCols = [
     ['Nº DO RELATÓRIO', opts.reportNumber],
-    ['DATA DE EMISSÃO', new Date().toLocaleDateString('pt-BR')],
+    ['DATA DE EMISSÃO', formatDateBR(getLocalDateISO())],
     ['VERSÃO', '1.0'],
   ];
   infoCols.forEach(([label, value], i) => {
@@ -519,7 +520,7 @@ function generateMonthlyPDF(
   unit: string,
 ) {
   const doc = new jsPDF();
-  const ctx = makeCtx(doc, `MENSAL-${new Date().toISOString().slice(0, 7)}`, company, unit);
+  const ctx = makeCtx(doc, `MENSAL-${getLocalDateISO().slice(0, 7)}`, company, unit);
   const now = new Date();
   const mes = now.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 
@@ -535,7 +536,7 @@ function generateMonthlyPDF(
   drawSectionHeader(ctx, 1, 'Dados do Relatório');
   drawKVGrid(ctx, [
     ['Período de Referência', mes.charAt(0).toUpperCase() + mes.slice(1)],
-    ['Data de Emissão', now.toLocaleDateString('pt-BR')],
+      ['Data de Emissão', formatDateBR(getLocalDateISO(now))],
     ['Total de Inspeções no Período', String(inspections.length)],
     ['Emitido por', `${APP_NAME} — Sistema de Inspeção`],
   ], 2);
@@ -946,7 +947,7 @@ export default function Relatorios() {
                         </span>
                       )}
                     </div>
-                    <div className="text-xs text-gray-500 font-semibold">{h.data} · {h.inspetor}</div>
+                    <div className="text-xs text-gray-500 font-semibold">{formatDateBR(h.data)} · {h.inspetor}</div>
                   </div>
                   <button
                     onClick={() => handleIndividualPDF(h)}

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
+import { formatDateBR } from '../../utils/date';
 import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight, Trash2, AlertOctagon } from 'lucide-react';
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
@@ -314,7 +315,7 @@ export default function Equipamentos() {
                 {isExpiring && eq.dataProximaInspecao && (
                   <div className="flex items-center gap-1.5 text-[11px] text-critical font-bold uppercase tracking-wider">
                     <AlertCircle className="w-3.5 h-3.5" />
-                    <span>Próx: {eq.dataProximaInspecao}</span>
+                    <span>Próx: {formatDateBR(eq.dataProximaInspecao)}</span>
                   </div>
                 )}
               </div>

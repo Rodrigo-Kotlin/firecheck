@@ -43,6 +43,7 @@ import {
 } from './inspectionPhoto';
 import { CHECKLIST_ALARME, CHECKLIST_EXTINTOR, CHECKLIST_HIDRANTE, CHECKLIST_ILUMINACAO, type ChecklistItemDefinition } from './inspectionChecklistDefinitions';
 import { buildConsolidatedActionPlanId } from '../../services/actionPlanItems';
+import { formatDateTimeBR, getLocalDateISO } from '../../utils/date';
 
 function formatInspectionDate(value: string): string {
   if (!value) return '—';
@@ -53,7 +54,7 @@ function formatInspectionDate(value: string): string {
 function getDefaultNextInspectionDate(): string {
   const futureDate = new Date();
   futureDate.setDate(futureDate.getDate() + 30);
-  return futureDate.toISOString().split('T')[0];
+  return getLocalDateISO(futureDate);
 }
 
 const EQUIPMENT_STATUS_CONFIGS: Record<
@@ -900,7 +901,7 @@ export default function Inspecionar() {
     }
 
     const finalStatus: EquipmentStatus = inspectionResult;
-    const inspectionDate = new Date().toISOString().split('T')[0];
+    const inspectionDate = getLocalDateISO();
 
     setIsSaving(true);
     setErrorMsg('');
@@ -1059,7 +1060,7 @@ export default function Inspecionar() {
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs sm:text-sm">
               <p><span className="block text-gray-500">Equipamento</span><strong>{selectedEquipment?.id}</strong></p>
               <p><span className="block text-gray-500">Progresso</span><strong>{getChecklistProgress(checklistItems, draftPrompt.draft.checklist).percentage}%</strong></p>
-              <p><span className="block text-gray-500">Salvo em</span><strong>{new Date(draftPrompt.draft.updatedAt).toLocaleString('pt-BR')}</strong></p>
+              <p><span className="block text-gray-500">Salvo em</span><strong>{formatDateTimeBR(draftPrompt.draft.updatedAt)}</strong></p>
               <p><span className="block text-gray-500">Evidência</span><strong>{draftPrompt.draft.photo ? 'Foto disponível' : 'Nenhuma foto'}</strong></p>
             </div>
           ) : (

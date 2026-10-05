@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
+import { formatDateBR, formatDateTimeBR, getLocalDateISO } from '../../utils/date';
 import {
   ChevronLeft,
   LogOut,
@@ -146,7 +147,7 @@ type SyncBadge = {
 function formatRelative(timestamp: number | null): string {
   if (!timestamp) return 'Nunca sincronizado';
   const diff = Date.now() - timestamp;
-  if (diff < 0) return new Date(timestamp).toLocaleString('pt-BR');
+  if (diff < 0) return formatDateTimeBR(timestamp);
   const sec = Math.floor(diff / 1000);
   if (sec < 60) return 'agora mesmo';
   const min = Math.floor(sec / 60);
@@ -155,7 +156,7 @@ function formatRelative(timestamp: number | null): string {
   if (hr < 24) return `há ${hr} h`;
   const day = Math.floor(hr / 24);
   if (day < 7) return `há ${day} ${day === 1 ? 'dia' : 'dias'}`;
-  return new Date(timestamp).toLocaleDateString('pt-BR');
+  return formatDateBR(getLocalDateISO(new Date(timestamp)));
 }
 
 function getSyncBadge(args: {

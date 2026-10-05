@@ -4,6 +4,7 @@ import { useAppStore } from '../../store';
 import { canEditInspection } from '../../services/permissions';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
 import { showToast } from '../../hooks/useToasts';
+import { formatDateBR } from '../../utils/date';
 import { STATUS_LABEL } from '../../constants/equipmentFormConfig';
 import type { Equipment, EquipmentStatus, Inspection } from '../../types';
 import {
@@ -23,10 +24,6 @@ import {
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const INSPECTION_STATUS_OPTIONS = ['regular', 'pendente', 'vencido', 'observacao'] as const;
-
-function formatData(value: string | undefined | null): string {
-  return value ? value.slice(0, 10) : '—';
-}
 
 interface InspectionFormProps {
   inspection: Inspection;
@@ -204,7 +201,7 @@ function InspectionForm({ inspection, equipment, updatedByName, onUpdatedByNameC
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
                 <div className="flex items-center gap-1.5 text-amber-700 font-bold">
                   <Calendar className="w-3.5 h-3.5" />
-                  Data original: <span className="font-black">{formatData(inspection.data)}</span>
+                  Data original: <span className="font-black">{formatDateBR(inspection.data)}</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-amber-700 font-bold">
                   <User className="w-3.5 h-3.5" />

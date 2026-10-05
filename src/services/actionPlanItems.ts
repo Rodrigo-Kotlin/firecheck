@@ -1,4 +1,5 @@
 import type { ActionPlanItem, ActionPlanItemStatus } from '../types';
+import { getLocalDateISO } from '../utils/date';
 
 export function buildConsolidatedActionPlanId(inspectionId: string): string {
   return `PAC-${inspectionId}`;
@@ -17,7 +18,7 @@ export interface ActionPlanProgress {
   percentual: number;
 }
 
-export function isActionPlanItemOverdue(item: Pick<ActionPlanItem, 'prazo' | 'status'>, today = new Date().toISOString().slice(0, 10)): boolean {
+export function isActionPlanItemOverdue(item: Pick<ActionPlanItem, 'prazo' | 'status'>, today = getLocalDateISO()): boolean {
   return item.status !== 'Concluída' && Boolean(item.prazo) && item.prazo < today;
 }
 

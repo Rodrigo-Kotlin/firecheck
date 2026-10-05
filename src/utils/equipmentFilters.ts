@@ -1,4 +1,5 @@
 import type { Equipment, Inspection } from '../types';
+import { getLocalDateISO } from './date';
 
 // ---------------------------------------------------------------------------
 // Fonte única de verdade para os KPIs do Dashboard e os filtros da listagem
@@ -57,11 +58,7 @@ export function normalizeYmd(value: string | null | undefined): string | null {
 
 /** Data de hoje em `YYYY-MM-DD` no fuso LOCAL. */
 export function getTodayYmd(now?: Date): string {
-  const base = now ?? new Date();
-  const y = base.getFullYear();
-  const m = String(base.getMonth() + 1).padStart(2, '0');
-  const d = String(base.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return getLocalDateISO(now);
 }
 
 /** `a` é anterior a `b`? Comparação lexical segura para `YYYY-MM-DD`. */

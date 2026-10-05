@@ -5,6 +5,7 @@ import { canViewInspection, canEditInspection } from '../../services/permissions
 import { db, type LocalInspectionPhoto } from '../../db';
 import { downloadInspectionPhoto } from '../../services/photoService';
 import { showToast } from '../../hooks/useToasts';
+import { formatDateBR, formatDateTimeBR } from '../../utils/date';
 import { STATUS_LABEL } from '../../constants/equipmentFormConfig';
 import {
   AlertOctagon,
@@ -20,24 +21,6 @@ import {
   User,
   X,
 } from 'lucide-react';
-
-function formatData(value: string | undefined | null): string {
-  if (!value) return '—';
-  return value.slice(0, 10);
-}
-
-function formatHorario(value: string | undefined | null): string {
-  if (!value) return '—';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value.slice(0, 19).replace('T', ' ');
-  return d.toLocaleString('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
 function statusPillClass(status: string): string {
   if (status === 'regular') return 'bg-green-100 text-success';
@@ -310,7 +293,7 @@ export default function DetalheInspecao() {
           <Field label="Data">
             <span className="inline-flex items-center gap-1">
               <Calendar className="w-3.5 h-3.5 text-gray-400" />
-              {formatData(inspection.data)}
+              {formatDateBR(inspection.data)}
             </span>
           </Field>
           <Field label="Status">
@@ -353,11 +336,11 @@ export default function DetalheInspecao() {
               {inspection.inspetor}
             </span>
           </Field>
-          <Field label="Registrada em">{formatData(inspection.createdAt)}</Field>
+          <Field label="Registrada em">{formatDateTimeBR(inspection.createdAt)}</Field>
           <Field label="Última alteração">
             {inspection.updatedByName ? (
               <span className="text-violet-700">
-                {inspection.updatedByName} · {formatHorario(inspection.updatedAt)}
+                {inspection.updatedByName} · {formatDateTimeBR(inspection.updatedAt)}
               </span>
             ) : (
               <span className="text-gray-400">Sem alterações posteriores</span>
