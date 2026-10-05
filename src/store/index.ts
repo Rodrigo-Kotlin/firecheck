@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus } from '../types';
+import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus, InspectionDeviationInput } from '../types';
 import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan, type LocalInspectionPhoto } from '../db';
 import { syncAll, pendingSyncCount, conflictCount, isSyncInProgress } from '../services/sync';
 import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById } from '../services/equipmentService';
@@ -16,6 +16,7 @@ import { normalizePersistedConfig, partializeAppState } from './persistence';
 import { inferCriticidade, recomputeStats } from './derived';
 import { migratePersistedActionPlansToDexie } from './actionPlanMigration';
 import { loadPlansFromDexie } from './loaders';
+import { buildCanonicalActionPlanId, shouldCreateLegacyInspectionPlan } from '../services/actionPlanIdentity';
 import { canStartOperationalSync } from '../services/syncPolicy';
 import {
   loginUser,
@@ -128,6 +129,7 @@ export interface AppState {
     /** Foto comprimida (Blob) a anexar — opcional. */
     photo?: InspectionPhotoInput | null;
     dataProximaInspecao?: string;
+    deviations?: InspectionDeviationInput[];
   }) => Promise<SaveInspectionResult>;
   addEquipment: (eq: Equipment) => Promise<EquipmentResult>;
   updateEquipment: (id: string, updates: Partial<Equipment>) => Promise<EquipmentResult>;
@@ -1059,34 +1061,35 @@ export const useAppStore = create<AppState>()(
           // (FOTO-<inspectionId>) — no máximo 1 registro de foto por tentativa.
           const photoId = data.photo ? `FOTO-${inspectionId}` : undefined;
 
-          // Plano automático (quando aplicável) construído ANTES da transação,
-          // com base no equipamento atual — será persistido DENTRO da mesma
-          // transação atômica (§5/§6/§7). ID obrigatório: PAC-<inspectionId>.
-          let newPlan: LocalActionPlan | null = null;
-          if (data.status === 'pendente' || data.status === 'vencido') {
-            const eq = get().equipments.find((e) => e.id === data.equipmentId);
-            const descObs = data.observacoes || 'Não conformidade identificada durante inspeção';
-            const now = new Date().toISOString();
-            newPlan = {
-              id: `PAC-${inspectionId}`,
-              equipmentId: data.equipmentId,
-              local: eq?.local || 'Local não especificado',
-              descricao: descObs,
-              criticidade: inferCriticidade(descObs, eq?.tipo || ''),
-              responsavel: '',
-              prazo: '',
-              status: 'Aberta',
-              createdAt: now.split('T')[0],
-              userId,
-              updatedAt: now,
-              sincronizado: false,
-              pendingDelete: false,
-              syncAction: 'create',
-              syncOwnerUserId: userId,
-              deletedAt: null,
-              deletedBy: null,
-            };
-          }
+          // Build canonical plans before the transaction. Structured deviations
+          // get one stable record each; the legacy aggregate remains only for
+          // callers that do not provide structured deviations.
+          const eq = get().equipments.find((e) => e.id === data.equipmentId);
+          const now = new Date().toISOString();
+          const deviations = data.deviations?.filter((deviation) => deviation.key && deviation.description.trim()) ?? [];
+          const plans: LocalActionPlan[] = deviations.length > 0
+            ? deviations.map((deviation) => ({
+                id: buildCanonicalActionPlanId(inspectionId, deviation.key!),
+                inspectionId,
+                deviationKey: deviation.key,
+                originType: 'inspection',
+                equipmentId: data.equipmentId,
+                local: eq?.local || 'Local não especificado',
+                descricao: `[ORIGEM DA INSPEÇÃO]\nInspeção: ${inspectionId}\nItem: ${deviation.item}\nTipo: ${deviation.severity === 'warning' ? 'Observação' : 'Não conforme'}\nDescrição: ${deviation.description.trim()}`,
+                criticidade: inferCriticidade(deviation.description, eq?.tipo || ''),
+                responsavel: '', prazo: '', status: 'Aberta', createdAt: now.split('T')[0], userId,
+                updatedAt: now, sincronizado: false, pendingDelete: false, syncAction: 'create',
+                syncOwnerUserId: userId, deletedAt: null, deletedBy: null,
+              }))
+            : shouldCreateLegacyInspectionPlan(data.deviations, data.status)
+              ? [{
+                  id: `PAC-${inspectionId}`, equipmentId: data.equipmentId, local: eq?.local || 'Local não especificado',
+                  descricao: data.observacoes || 'Não conformidade identificada durante inspeção',
+                  criticidade: inferCriticidade(data.observacoes || '', eq?.tipo || ''), responsavel: '', prazo: '',
+                  status: 'Aberta', createdAt: now.split('T')[0], userId, updatedAt: now, sincronizado: false,
+                  pendingDelete: false, syncAction: 'create', syncOwnerUserId: userId, deletedAt: null, deletedBy: null,
+                }]
+              : [];
 
           const stamped: Inspection = {
             id: inspectionId,
@@ -1145,9 +1148,7 @@ export const useAppStore = create<AppState>()(
 
               // Plano DENTRO da transação (nunca fire-and-forget): se este put
               // falhar a transação inteira faz rollback.
-              if (newPlan) {
-                await db.planosAcao.put(newPlan);
-              }
+              for (const plan of plans) await db.planosAcao.put(plan);
             });
           } catch (err) {
             console.error('[store.addInspection] erro ao persistir inspeção no Dexie:', err);
@@ -1172,7 +1173,7 @@ export const useAppStore = create<AppState>()(
               inspections: [stamped, ...state.inspections],
               equipments: updatedEquipments,
               stats: recomputeStats(updatedEquipments),
-              actionPlans: newPlan ? [stripActionPlanSyncMeta(newPlan), ...state.actionPlans] : state.actionPlans,
+              actionPlans: plans.length > 0 ? [...plans.map(stripActionPlanSyncMeta), ...state.actionPlans] : state.actionPlans,
             };
           });
 

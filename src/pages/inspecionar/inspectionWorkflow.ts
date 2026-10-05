@@ -34,6 +34,7 @@ export interface InspectionResultPresentation {
 }
 
 export interface InspectionDeviation {
+  key?: string;
   item: string;
   severity: DeviationSeverity;
   description: string;
@@ -95,6 +96,7 @@ export interface InspectionPayloadInput {
   userId?: string;
   photo?: InspectionPhotoPayload;
   nextInspectionDate?: string;
+  deviations?: InspectionDeviation[];
 }
 
 export function buildInspectionPayload(input: InspectionPayloadInput) {
@@ -108,6 +110,7 @@ export function buildInspectionPayload(input: InspectionPayloadInput) {
     userId: input.userId,
     photo: input.photo,
     dataProximaInspecao: input.nextInspectionDate,
+    ...(input.deviations ? { deviations: input.deviations } : {}),
   };
 }
 
@@ -115,11 +118,13 @@ export function getInspectionDeviations(
   items: string[],
   checklist: Record<string, ChecklistValue>,
   descriptions: Record<string, string> = {},
+  keys: Record<string, string> = {},
 ): InspectionDeviation[] {
   return items.flatMap((item) => {
     const value = checklist[item];
     if (value !== 'ATENCAO' && value !== 'REPROVADO') return [];
     return [{
+      key: keys[item],
       item,
       severity: value === 'ATENCAO' ? 'warning' : 'nonconformity',
       description: descriptions[item] ?? '',

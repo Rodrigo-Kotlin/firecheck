@@ -1,6 +1,14 @@
 export type EquipmentStatus = 'regular' | 'pendente' | 'vencido' | 'observacao' | 'em_manutencao' | 'inativo' | 'substituido' | 'extraviado';
 export type ActionPlanStatus = 'Aberta' | 'Em andamento' | 'Concluída' | 'Vencida';
 export type Criticidade = 'Crítico' | 'Alto' | 'Médio' | 'Baixo';
+export type ActionPlanOriginType = 'manual' | 'inspection';
+
+export interface InspectionDeviationInput {
+  key?: string;
+  item: string;
+  severity: 'warning' | 'nonconformity';
+  description: string;
+}
 
 export interface ActionPlan {
   id: string;
@@ -20,6 +28,9 @@ export interface ActionPlan {
   deletedAt?: string | null;
   /** ID of the user who deleted this action plan. */
   deletedBy?: string | null;
+  inspectionId?: string;
+  deviationKey?: string;
+  originType?: ActionPlanOriginType;
   /** Erro persistente da última tentativa de sync. */
   syncError?: string;
   /** Registro em conflito — push bloqueado até revisão. */

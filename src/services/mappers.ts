@@ -90,6 +90,9 @@ export interface DbPlanoAcao {
   updated_at: string;
   deleted_at: string | null;
   deleted_by: string | null;
+  inspection_id?: string | null;
+  deviation_key?: string | null;
+  origin_type?: ActionPlan['originType'] | null;
 }
 
 /** Linha da tabela `public.fotos_inspecao` (metadados de evidência). */
@@ -254,6 +257,9 @@ export function dbToActionPlan(row: DbPlanoAcao): ActionPlan {
     updatedAt: emptyToUndef(row.updated_at),
     deletedAt: row.deleted_at ?? undefined,
     deletedBy: row.deleted_by ?? undefined,
+    inspectionId: row.inspection_id ?? undefined,
+    deviationKey: row.deviation_key ?? undefined,
+    originType: row.origin_type ?? undefined,
   };
 }
 
@@ -271,6 +277,9 @@ export function actionPlanToDb(plan: Partial<ActionPlan>): Record<string, unknow
   if (plan.updatedAt !== undefined) row.updated_at = plan.updatedAt || null;
   if (plan.deletedAt !== undefined) row.deleted_at = plan.deletedAt || null;
   if (plan.deletedBy !== undefined) row.deleted_by = plan.deletedBy || null;
+  if (plan.inspectionId !== undefined) row.inspection_id = plan.inspectionId || null;
+  if (plan.deviationKey !== undefined) row.deviation_key = plan.deviationKey || null;
+  if (plan.originType !== undefined) row.origin_type = plan.originType || null;
   return row;
 }
 

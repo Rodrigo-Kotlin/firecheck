@@ -42,66 +42,8 @@ import {
   revokePreviewUrl,
   type PhotoDraft,
 } from './inspectionPhoto';
-
-// Checklists item text arrays
-const CHECKLIST_EXTINTOR = [
-  'Acesso livre e desobstruído',
-  'Fixado no suporte correto',
-  'Sinalização visível',
-  'Lacre íntegro',
-  'Pino de segurança presente',
-  'Manômetro na faixa verde',
-  'Mangueira sem danos',
-  'Difusor/esguicho íntegro',
-  'Cilindro sem corrosão',
-  'Rótulo legível',
-  'Carga na validade',
-  'Teste hidrostático válido',
-  'Compatível com risco do local',
-  'Instalação adequada',
-  'Sem sinais de uso'
-];
-
-const CHECKLIST_HIDRANTE = [
-  'Acesso livre',
-  'Abrigo em ordem',
-  'Porta abre normalmente',
-  'Sinalização visível',
-  'Mangueira presente e íntegra',
-  'Mangueira acondicionada corretamente',
-  'Esguicho presente',
-  'Chave storz presente',
-  'Registro sem vazamento',
-  'Volante íntegro',
-  'Conexões ok',
-  'Sem corrosão crítica',
-  'Lacre presente',
-  'Validade da mangueira ok',
-  'Local limpo'
-];
-
-const CHECKLIST_ALARME = [
-  'Acesso livre',
-  'Sinalização visível',
-  'Equipamento íntegro',
-  'Identificação legível',
-  'Altura adequada',
-  'Funcionamento testado',
-  'Comunicação com central',
-  'Alarme operacional',
-  'Sem obstrução'
-];
-
-const CHECKLIST_ILUMINACAO = [
-  'Instalação correta',
-  'Estrutura íntegra',
-  'Lente sem danos',
-  'Aciona em falta de energia',
-  'Autonomia verificada',
-  'Bateria ok',
-  'Sem fios expostos',
-  'Sem obstrução visual'
-];
+import { CHECKLIST_ALARME, CHECKLIST_EXTINTOR, CHECKLIST_HIDRANTE, CHECKLIST_ILUMINACAO, type ChecklistItemDefinition } from './inspectionChecklistDefinitions';
+import { buildCanonicalActionPlanId } from '../../services/actionPlanIdentity';
 
 function formatInspectionDate(value: string): string {
   if (!value) return '—';
@@ -624,7 +566,7 @@ export default function Inspecionar() {
   const selectedEquipment = equipments.find((e) => e.id === eqId);
 
   // Build checklist item list based on the selected equipment type.
-  const checklistItems = useMemo<string[]>(() => {
+  const checklistDefinitions = useMemo<readonly ChecklistItemDefinition[]>(() => {
     if (!selectedEquipment) return [];
     const tipoLower = selectedEquipment.tipo.toLowerCase();
     if (tipoLower.includes('extintor')) return CHECKLIST_EXTINTOR;
@@ -632,6 +574,11 @@ export default function Inspecionar() {
     if (tipoLower.includes('alarme') || tipoLower.includes('acionador')) return CHECKLIST_ALARME;
     return CHECKLIST_ILUMINACAO;
   }, [selectedEquipment]);
+  const checklistItems = useMemo(() => checklistDefinitions.map((definition) => definition.label), [checklistDefinitions]);
+  const checklistItemKeys = useMemo(
+    () => Object.fromEntries(checklistDefinitions.map((definition) => [definition.label, definition.key])),
+    [checklistDefinitions],
+  );
 
   const checklistKey = checklistItems.join('|');
 
@@ -667,8 +614,8 @@ export default function Inspecionar() {
   const evidenceInstruction = getEvidenceInstruction(evidenceRequirement, checklistCounts.REPROVADO);
   const evidenceValidationMessage = getEvidenceValidationMessage(evidenceRequirement, Boolean(photoDraft));
   const inspectionDeviations = useMemo<InspectionDeviation[]>(
-    () => getInspectionDeviations(checklistItems, checklist, deviationNotes),
-    [checklistItems, checklist, deviationNotes],
+    () => getInspectionDeviations(checklistItems, checklist, deviationNotes, checklistItemKeys),
+    [checklistItems, checklist, deviationNotes, checklistItemKeys],
   );
   const deviationValidationMessage = getDeviationValidationMessage(inspectionDeviations);
 
@@ -962,6 +909,7 @@ export default function Inspecionar() {
             }
           : undefined,
         nextInspectionDate: validadeDate || undefined,
+        deviations: inspectionDeviations,
       }));
 
       if (!result.ok) {
@@ -984,9 +932,13 @@ export default function Inspecionar() {
 
       const candidates = inspectionDeviations
         .map(toActionPlanCandidate)
-        .filter((candidate): candidate is ActionPlanCandidate => candidate !== null);
+        .filter((candidate): candidate is ActionPlanCandidate => candidate !== null)
+        .map((candidate) => ({
+          ...candidate,
+          planId: candidate.key ? buildCanonicalActionPlanId(inspectionId, candidate.key) : undefined,
+        }));
       setActionPlanCandidates(candidates);
-      setActionPlanStage(candidates.length > 0 ? 'offer' : 'none');
+      setActionPlanStage(candidates.length > 0 ? 'review' : 'none');
       completedInspectionDateRef.current = inspectionDate;
 
       // C) sucesso → lock permanece fechado (mesmo formulário não aceita novo
@@ -1150,7 +1102,7 @@ export default function Inspecionar() {
             <section className="w-full max-w-3xl card-subtle bg-gray-50 border border-gray-200 text-left space-y-4" aria-labelledby="action-plan-review-title">
               <div>
                 <h2 id="action-plan-review-title" className="text-base font-black text-gray-900">Revisar planos de ação</h2>
-                <p className="text-sm text-gray-600 mt-1">Confirme cada ação individualmente. Nenhum plano é criado automaticamente.</p>
+                <p className="text-sm text-gray-600 mt-1">Os planos canônicos foram criados junto com a inspeção e podem ser completados na central de planos.</p>
               </div>
               <div className="space-y-3">
                 {actionPlanCandidates.map((candidate) => {
