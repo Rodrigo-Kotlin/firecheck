@@ -22,6 +22,7 @@ const ScanQr = lazy(() => import('./pages/scan/ScanQr'));
 const QrCodes = lazy(() => import('./pages/qrcodes/QrCodes'));
 const QrCodesImprimir = lazy(() => import('./pages/qrcodes/QrCodesImprimir'));
 const PlanoDeAcao = lazy(() => import('./pages/planodeacao/PlanoDeAcao'));
+const PlanoDeAcaoDetalhe = lazy(() => import('./pages/planodeacao/PlanoDeAcaoDetalhe'));
 const Configuracoes = lazy(() => import('./pages/configuracoes/Configuracoes'));
 const AdminUsuarios = lazy(() => import('./pages/admin/AdminUsuarios'));
 const Relatorios = lazy(() => import('./pages/relatorios/Relatorios'));
@@ -109,6 +110,7 @@ export default function App() {
             />
             <Route path="qrcodes" element={<QrCodes />} />
             <Route path="planodeacao" element={<PlanoDeAcao />} />
+            <Route path="planodeacao/:id" element={<PlanoDeAcaoDetalhe />} />
             <Route path="configuracoes" element={<Configuracoes />} />
             <Route
               path="admin/usuarios"

@@ -1,5 +1,5 @@
-import type { Equipment, Inspection, ActionPlan } from '../types';
-import type { LocalActionPlan } from '../db';
+import type { Equipment, Inspection, ActionPlan, ActionPlanItem } from '../types';
+import type { LocalActionPlan, LocalActionPlanItem } from '../db';
 
 // Campos que NUNCA devem ir para dados_tecnicos
 const SYNC_META_FIELDS = new Set([
@@ -93,6 +93,27 @@ export interface DbPlanoAcao {
   inspection_id?: string | null;
   deviation_key?: string | null;
   origin_type?: ActionPlan['originType'] | null;
+  model_version?: ActionPlan['modelVersion'] | null;
+}
+
+export interface DbPlanoAcaoItem {
+  id: string;
+  plan_id: string;
+  deviation_key: string;
+  checklist_item_key: string;
+  tipo_desvio: ActionPlanItem['tipoDesvio'];
+  descricao_desvio: string;
+  acao_corretiva: string;
+  solucao_adotada: string;
+  responsavel: string;
+  prazo: string | null;
+  status: ActionPlanItem['status'];
+  concluido_em: string | null;
+  user_id: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  deleted_by: string | null;
 }
 
 /** Linha da tabela `public.fotos_inspecao` (metadados de evidência). */
@@ -260,6 +281,7 @@ export function dbToActionPlan(row: DbPlanoAcao): ActionPlan {
     inspectionId: row.inspection_id ?? undefined,
     deviationKey: row.deviation_key ?? undefined,
     originType: row.origin_type ?? undefined,
+    modelVersion: row.model_version === 2 ? 2 : 1,
   };
 }
 
@@ -280,7 +302,61 @@ export function actionPlanToDb(plan: Partial<ActionPlan>): Record<string, unknow
   if (plan.inspectionId !== undefined) row.inspection_id = plan.inspectionId || null;
   if (plan.deviationKey !== undefined) row.deviation_key = plan.deviationKey || null;
   if (plan.originType !== undefined) row.origin_type = plan.originType || null;
+  if (plan.modelVersion !== undefined) row.model_version = plan.modelVersion;
   return row;
+}
+
+export function dbToActionPlanItem(row: DbPlanoAcaoItem): ActionPlanItem {
+  return {
+    id: row.id,
+    planId: row.plan_id,
+    deviationKey: row.deviation_key,
+    checklistItemKey: row.checklist_item_key,
+    tipoDesvio: row.tipo_desvio,
+    descricaoDesvio: row.descricao_desvio,
+    acaoCorretiva: row.acao_corretiva,
+    solucaoAdotada: row.solucao_adotada,
+    responsavel: row.responsavel,
+    prazo: row.prazo ?? '',
+    status: row.status,
+    concluidoEm: row.concluido_em,
+    userId: row.user_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at,
+    deletedBy: row.deleted_by,
+  };
+}
+
+export function actionPlanItemToDb(item: Partial<ActionPlanItem>): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
+  if (item.id !== undefined) row.id = item.id;
+  if (item.planId !== undefined) row.plan_id = item.planId;
+  if (item.deviationKey !== undefined) row.deviation_key = item.deviationKey;
+  if (item.checklistItemKey !== undefined) row.checklist_item_key = item.checklistItemKey;
+  if (item.tipoDesvio !== undefined) row.tipo_desvio = item.tipoDesvio;
+  if (item.descricaoDesvio !== undefined) row.descricao_desvio = item.descricaoDesvio;
+  if (item.acaoCorretiva !== undefined) row.acao_corretiva = item.acaoCorretiva;
+  if (item.solucaoAdotada !== undefined) row.solucao_adotada = item.solucaoAdotada;
+  if (item.responsavel !== undefined) row.responsavel = item.responsavel;
+  if (item.prazo !== undefined) row.prazo = item.prazo || null;
+  if (item.status !== undefined) row.status = item.status;
+  if (item.concluidoEm !== undefined) row.concluido_em = item.concluidoEm || null;
+  if (item.userId !== undefined) row.user_id = item.userId || null;
+  if (item.updatedAt !== undefined) row.updated_at = item.updatedAt || null;
+  if (item.deletedAt !== undefined) row.deleted_at = item.deletedAt || null;
+  if (item.deletedBy !== undefined) row.deleted_by = item.deletedBy || null;
+  return row;
+}
+
+export function stripActionPlanItemSyncMeta(row: Partial<LocalActionPlanItem>): ActionPlanItem {
+  const {
+    sincronizado: _s, pendingDelete: _p, syncAction: _a, syncError: _e,
+    syncBaseUpdatedAt: _b, syncConflict: _c, syncConflictReason: _r,
+    remoteUpdatedAtAtConflict: _u, syncOwnerUserId: _o, ...item
+  } = row;
+  void _s; void _p; void _a; void _e; void _b; void _c; void _r; void _u; void _o;
+  return item as ActionPlanItem;
 }
 
 /** Strip local-only sync metadata from an action plan row before returning

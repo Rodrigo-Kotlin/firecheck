@@ -33,6 +33,9 @@ import {
   createActionPlanRemote,
   updateActionPlanRemote,
   softDeleteActionPlanRemote,
+  fetchActionPlanItems,
+  upsertActionPlanItemRemote,
+  softDeleteActionPlanItemRemote,
 } from './actionPlanService';
 import {
   dbToEquipment,
@@ -40,6 +43,7 @@ import {
   equipmentToDb,
   inspectionToDb,
   type DbFotoInspecao,
+  stripActionPlanItemSyncMeta,
 } from './mappers';
 import { getInspectionPhotoBlob, mimeToExtension, uploadInspectionPhotoBlob, removeInspectionPhotoObject } from './photoService';
 import type { Equipment } from '../types';
@@ -897,6 +901,37 @@ async function pushActionPlans(userId?: string): Promise<{ ok: number; errors: n
 }
 
 // ---------------------------------------------------------------------------
+// CONSOLIDATED ACTION PLAN ITEMS (push)
+// ---------------------------------------------------------------------------
+
+async function pushActionPlanItems(userId?: string): Promise<{ ok: number; errors: number; network?: boolean }> {
+  const pending = await db.planosAcaoItens.filter((item) => !item.sincronizado || !!item.pendingDelete).toArray();
+  let ok = 0;
+  let errors = 0;
+  let network = false;
+  for (const item of pending) {
+    if (userId && item.userId && item.userId !== userId) continue;
+    // Never send a child before its consolidated parent is confirmed synced.
+    const parent = await db.planosAcao.get(item.planId);
+    if (!parent || !parent.sincronizado || ((parent.pendingDelete || parent.deletedAt) && !item.pendingDelete)) continue;
+    const result = item.pendingDelete
+      ? await softDeleteActionPlanItemRemote(stripActionPlanItemSyncMeta(item), userId)
+      : await upsertActionPlanItemRemote(stripActionPlanItemSyncMeta(item));
+    if (result.ok) {
+      await db.planosAcaoItens.update(item.id, { sincronizado: true, syncAction: undefined, syncError: undefined });
+      ok++;
+    } else if (result.network) {
+      network = true;
+      break;
+    } else {
+      await db.planosAcaoItens.update(item.id, { syncError: result.message });
+      errors++;
+    }
+  }
+  return { ok, errors, network };
+}
+
+// ---------------------------------------------------------------------------
 // PHOTOS (push)
 // ---------------------------------------------------------------------------
 
@@ -1248,6 +1283,29 @@ async function pullInspections(): Promise<PullResult> {
   return { imported, reconciled, error: !result.complete, empty: cloud.length === 0, complete: result.complete };
 }
 
+async function pullActionPlanItems(): Promise<PullResult> {
+  const result = await fetchActionPlanItems();
+  if (!result.ok) return { imported: 0, reconciled: 0, error: true, empty: false, complete: false, network: result.network ?? false };
+  const cloud = result.data ?? [];
+  let imported = 0;
+  await db.transaction('rw', db.planosAcaoItens, async () => {
+    for (const item of cloud) {
+      const local = await db.planosAcaoItens.get(item.id);
+      if (!local) {
+        if (!item.deletedAt) {
+          await db.planosAcaoItens.put({ ...item, sincronizado: true, syncBaseUpdatedAt: item.updatedAt ?? null });
+          imported++;
+        }
+        continue;
+      }
+      if (!local.sincronizado || local.pendingDelete || local.syncAction || local.syncError || local.syncConflict) continue;
+      await db.planosAcaoItens.put({ ...item, sincronizado: true, syncBaseUpdatedAt: item.updatedAt ?? null });
+      imported++;
+    }
+  });
+  return { imported, reconciled: 0, error: !result.complete, empty: cloud.length === 0, complete: result.complete };
+}
+
 async function pullActionPlans(): Promise<PullResult> {
   if (import.meta.env.DEV) console.log('[sync] pullActionPlans...');
   const result = await fetchActionPlans();
@@ -1516,6 +1574,14 @@ export async function syncAll(
         networkUnavailable = !!apR.network;
       }
 
+      // Parent plans must exist remotely before their child items are pushed.
+      if (!networkUnavailable) {
+        const itemR = await pushActionPlanItems(options.userId);
+        pushApOk += itemR.ok;
+        pushApErrors += itemR.errors;
+        networkUnavailable = !!itemR.network;
+      }
+
       pushed = pushEqOk + pushInsOk + pushPhotoOk + pushApOk;
       errors += pushErrors;
     }
@@ -1561,6 +1627,14 @@ export async function syncAll(
         pulled += apP.imported;
         if (apP.error) errors++;
         networkUnavailable = !!apP.network;
+      }
+
+      // Pull the parent snapshot first; child rows reference the consolidated plan.
+      if (!networkUnavailable) {
+        const itemP = await pullActionPlanItems();
+        pulled += itemP.imported;
+        if (itemP.error) errors++;
+        networkUnavailable = !!itemP.network;
       }
     }
   } catch (err) {

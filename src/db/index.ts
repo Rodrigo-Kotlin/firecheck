@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Equipment, Inspection, ActionPlan } from '../types';
+import type { Equipment, Inspection, ActionPlan, ActionPlanItem } from '../types';
 import type { InspectionDraft } from '../services/inspectionDraftService';
 
 // ---------------------------------------------------------------------------
@@ -111,6 +111,18 @@ export type LocalActionPlan = ActionPlan & {
   syncOwnerUserId?: string;
 };
 
+export type LocalActionPlanItem = ActionPlanItem & {
+  sincronizado: boolean;
+  pendingDelete?: boolean;
+  syncAction?: 'create' | 'update' | 'delete';
+  syncError?: string;
+  syncBaseUpdatedAt?: string | null;
+  syncConflict?: boolean;
+  syncConflictReason?: string;
+  remoteUpdatedAtAtConflict?: string | null;
+  syncOwnerUserId?: string;
+};
+
 /** Inspection row as stored in Dexie (adds sync metadata + audit fields). */
 export type LocalInspection = Inspection & {
   sincronizado: boolean;
@@ -142,6 +154,7 @@ export class FireCheckDatabase extends Dexie {
   equipamentos!: Table<LocalEquipment, string>;
   inspecoes!: Table<LocalInspection, string>;
   planosAcao!: Table<LocalActionPlan, string>;
+  planosAcaoItens!: Table<LocalActionPlanItem, string>;
   fotos!: Table<LocalInspectionPhoto, string>;
   acoes_pendentes!: Table<PendingAction, number>;
   inspectionDrafts!: Table<InspectionDraft, string>;
@@ -269,17 +282,30 @@ export class FireCheckDatabase extends Dexie {
       acoes_pendentes: '++id, type, timestamp',
       inspectionDrafts: 'key, ownerUserId, equipmentId, updatedAt',
     });
+
+    // v10 — action plans generated from inspections are consolidated into one
+    // parent plan with independently editable deviation items.
+    this.version(10).stores({
+      equipamentos: 'id, tipo, status, sincronizado, syncOwnerUserId',
+      inspecoes: 'id, equipmentId, sincronizado, syncAction, syncConflict, updatedAt, syncOwnerUserId',
+      planosAcao: 'id, equipmentId, status, sincronizado, pendingDelete, syncAction, deletedAt, syncOwnerUserId, modelVersion',
+      planosAcaoItens: 'id, planId, deviationKey, status, sincronizado, pendingDelete, syncAction, deletedAt, syncOwnerUserId',
+      fotos: 'id, inspectionId, sincronizado, syncAction, storagePath, syncOwnerUserId',
+      acoes_pendentes: '++id, type, timestamp',
+      inspectionDrafts: 'key, ownerUserId, equipmentId, updatedAt',
+    });
   }
 
   /** Purge all local data tables. Used when clearing stale cache or
    *  when the user requests "Limpar dados locais deste dispositivo". */
   async clearCache(): Promise<void> {
     await this.transaction('rw',
-      [this.equipamentos, this.inspecoes, this.planosAcao, this.fotos, this.acoes_pendentes, this.inspectionDrafts],
+      [this.equipamentos, this.inspecoes, this.planosAcao, this.planosAcaoItens, this.fotos, this.acoes_pendentes, this.inspectionDrafts],
       async () => {
         await this.equipamentos.clear();
         await this.inspecoes.clear();
         await this.planosAcao.clear();
+        await this.planosAcaoItens.clear();
         await this.fotos.clear();
         await this.acoes_pendentes.clear();
         await this.inspectionDrafts.clear();

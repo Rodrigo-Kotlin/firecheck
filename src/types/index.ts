@@ -2,6 +2,8 @@ export type EquipmentStatus = 'regular' | 'pendente' | 'vencido' | 'observacao' 
 export type ActionPlanStatus = 'Aberta' | 'Em andamento' | 'Concluída' | 'Vencida';
 export type Criticidade = 'Crítico' | 'Alto' | 'Médio' | 'Baixo';
 export type ActionPlanOriginType = 'manual' | 'inspection';
+export type ActionPlanModelVersion = 1 | 2;
+export type ActionPlanItemStatus = 'Aberta' | 'Em andamento' | 'Concluída';
 
 export interface InspectionDeviationInput {
   key?: string;
@@ -31,6 +33,7 @@ export interface ActionPlan {
   inspectionId?: string;
   deviationKey?: string;
   originType?: ActionPlanOriginType;
+  modelVersion?: ActionPlanModelVersion;
   /** Erro persistente da última tentativa de sync. */
   syncError?: string;
   /** Registro em conflito — push bloqueado até revisão. */
@@ -48,6 +51,35 @@ export interface AppConfig {
   unidade: string;
   /** Legacy persisted key; in the UI this means pause operational sync. */
   offlineMode: boolean;
+}
+
+export interface ActionPlanItem {
+  id: string;
+  planId: string;
+  deviationKey: string;
+  checklistItemKey: string;
+  tipoDesvio: 'warning' | 'nonconformity';
+  descricaoDesvio: string;
+  acaoCorretiva: string;
+  solucaoAdotada: string;
+  responsavel: string;
+  prazo: string;
+  status: ActionPlanItemStatus;
+  concluidoEm?: string | null;
+  userId?: string;
+  createdAt: string;
+  updatedAt?: string;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  sincronizado?: boolean;
+  pendingDelete?: boolean;
+  syncAction?: 'create' | 'update' | 'delete';
+  syncError?: string;
+  syncBaseUpdatedAt?: string | null;
+  syncConflict?: boolean;
+  syncConflictReason?: string;
+  remoteUpdatedAtAtConflict?: string | null;
+  syncOwnerUserId?: string;
 }
 
 export interface Equipment {

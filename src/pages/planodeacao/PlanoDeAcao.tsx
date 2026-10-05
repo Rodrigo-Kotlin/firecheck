@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useAppStore } from '../../store';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { ActionPlanStatus, Criticidade } from '../../types';
 import { showToast } from '../../hooks/useToasts';
 import {
@@ -27,6 +27,7 @@ import {
 import { canEditActionPlan, canDeleteActionPlan } from '../../services/permissions';
 import { filterControlCenterData, getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
 import { getTodayYmd, normalizeYmd } from '../../utils/equipmentFilters';
+import { deriveActionPlanStatus, getActionPlanProgress, nextActionPlanDeadline } from '../../services/actionPlanItems';
 
 const CRITICIDADE_STYLES: Record<Criticidade, string> = {
   'Crítico': 'bg-red-100 text-critical border-red-200',
@@ -112,14 +113,18 @@ function getEquipLabel(eqId: string, equipments: { id: string; tipo?: string; lo
 }
 
 export default function PlanoDeAcao() {
-  const { actionPlans, addActionPlan, updateActionPlan, deleteActionPlan, equipments, user, users, resolveActionPlanConflictKeepLocal, resolveActionPlanConflictUseRemote } = useAppStore();
+  const { actionPlans, actionPlanItems, addActionPlan, updateActionPlan, deleteActionPlan, equipments, user, users, resolveActionPlanConflictKeepLocal, resolveActionPlanConflictUseRemote } = useAppStore();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const filterOptions = useMemo(() => getControlCenterFilterOptions(equipments), [equipments]);
   const controlCenterFilters = useMemo<ControlCenterFilters>(() => parseControlCenterFilters(searchParams, filterOptions), [searchParams, filterOptions]);
   const scopedPlans = useMemo(
-    () => filterControlCenterData(equipments, [], actionPlans, controlCenterFilters).actionPlans,
-    [equipments, actionPlans, controlCenterFilters],
+    () => filterControlCenterData(equipments, [], actionPlans, controlCenterFilters).actionPlans.map((plan) => {
+      if (plan.modelVersion !== 2) return plan;
+      const items = actionPlanItems.filter((item) => item.planId === plan.id);
+      return { ...plan, status: deriveActionPlanStatus(items), prazo: nextActionPlanDeadline(items) ?? '' };
+    }),
+    [equipments, actionPlans, actionPlanItems, controlCenterFilters],
   );
   const planIdFilter = searchParams.get('planId');
   const overdueFilter = searchParams.get('overdue') === '1';
@@ -317,8 +322,11 @@ export default function PlanoDeAcao() {
           const owner = plan.userId ? users.find((u) => u.id === plan.userId) : null;
           const CriticidadeIcon = CRITICIDADE_ICONS[plan.criticidade];
           const StatusIcon = STATUS_ICONS[plan.status];
-          const prazoWarning = getPrazoWarning(plan.prazo, plan.status);
-          const eqInfo = getEquipLabel(plan.equipmentId, equipments);
+           const prazoWarning = getPrazoWarning(plan.prazo, plan.status);
+           const eqInfo = getEquipLabel(plan.equipmentId, equipments);
+           const consolidatedProgress = plan.modelVersion === 2
+             ? getActionPlanProgress(actionPlanItems.filter((item) => item.planId === plan.id))
+             : null;
 
           return (
             <div
@@ -412,7 +420,8 @@ export default function PlanoDeAcao() {
               </div>
 
               {/* Description */}
-              <p className="text-sm text-gray-700 font-medium bg-gray-50 p-3 rounded-lg border border-gray-100 leading-relaxed mb-3">
+               {consolidatedProgress && <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-semibold text-primary"><span>{consolidatedProgress.concluidas}/{consolidatedProgress.total} concluídas ({consolidatedProgress.percentual}%) · {consolidatedProgress.total - consolidatedProgress.concluidas} pendências abertas</span><Link to={`/planodeacao/${plan.id}`} className="hover:underline">Abrir detalhe</Link></div>}
+               <p className="text-sm text-gray-700 font-medium bg-gray-50 p-3 rounded-lg border border-gray-100 leading-relaxed mb-3">
                 {plan.descricao}
               </p>
 
@@ -432,8 +441,8 @@ export default function PlanoDeAcao() {
                     id={`plan-${plan.id}-responsavel`}
                     type="text"
                     value={plan.responsavel}
-                    onChange={e => editable && updateActionPlan(plan.id, { responsavel: e.target.value })}
-                    readOnly={!editable}
+                     onChange={e => editable && plan.modelVersion !== 2 && updateActionPlan(plan.id, { responsavel: e.target.value })}
+                     readOnly={!editable || plan.modelVersion === 2}
                     placeholder="Nome do responsável..."
                     className="field-input"
                   />
@@ -444,8 +453,8 @@ export default function PlanoDeAcao() {
                     id={`plan-${plan.id}-prazo`}
                     type="date"
                     value={plan.prazo}
-                    onChange={e => editable && updateActionPlan(plan.id, { prazo: e.target.value })}
-                    readOnly={!editable}
+                     onChange={e => editable && plan.modelVersion !== 2 && updateActionPlan(plan.id, { prazo: e.target.value })}
+                     readOnly={!editable || plan.modelVersion === 2}
                     className={`field-input ${prazoWarning?.isVencido ? 'border-critical focus:border-critical' : ''}`}
                   />
                 </div>
@@ -461,9 +470,9 @@ export default function PlanoDeAcao() {
                       <button
                         key={s}
                         type="button"
-                        disabled={!editable}
+                         disabled={!editable || plan.modelVersion === 2}
                         aria-pressed={plan.status === s}
-                        onClick={() => editable && updateActionPlan(plan.id, { status: s })}
+                         onClick={() => editable && plan.modelVersion !== 2 && updateActionPlan(plan.id, { status: s })}
                         className={`h-10 rounded-lg text-[10px] sm:text-[11px] font-black uppercase tracking-wider transition-all border flex items-center justify-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed ${
                           plan.status === s
                             ? STATUS_STYLES[s] + ' border-current'

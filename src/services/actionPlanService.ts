@@ -4,9 +4,13 @@ import {
   actionPlanToDb,
   stripActionPlanSyncMeta,
   type DbPlanoAcao,
+  type DbPlanoAcaoItem,
+  dbToActionPlanItem,
+  actionPlanItemToDb,
+  stripActionPlanItemSyncMeta,
 } from './mappers';
 import { db } from '../db';
-import type { ActionPlan } from '../types';
+import type { ActionPlan, ActionPlanItem } from '../types';
 import type { FetchResult, ServiceResult } from './equipmentService';
 import { isNetworkUnavailableError } from '../utils/network';
 import { canAttemptNetwork } from './networkState';
@@ -153,6 +157,43 @@ export async function softDeleteActionPlanRemote(id: string, userId?: string): P
   }
 
   return { ok: true };
+}
+
+export async function fetchActionPlanItems(): Promise<FetchResult<ActionPlanItem>> {
+  if (!isSupabaseConfigured || !supabase) return { ok: false, data: null, complete: false, network: false };
+  const result = await fetchAllPages(async (from, to) => {
+    const { data, error } = await supabase!.from('planos_acao_itens').select('*').order('id').range(from, to);
+    return { data: data as DbPlanoAcaoItem[] | null, error };
+  });
+  if (result.error) return { ok: false, data: result.rows.map(dbToActionPlanItem), complete: false, network: isNetworkUnavailableError(result.error) };
+  return { ok: true, data: result.rows.map(dbToActionPlanItem), complete: result.complete, network: false };
+}
+
+export async function upsertActionPlanItemRemote(item: ActionPlanItem): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
+  const { error } = await supabase.from('planos_acao_itens').upsert(actionPlanItemToDb(item), { onConflict: 'id' });
+  if (error) return { ok: false, code: isNetworkUnavailableError(error) ? 'network' : 'unknown', message: error.message, network: isNetworkUnavailableError(error) };
+  return { ok: true };
+}
+
+export async function softDeleteActionPlanItemRemote(item: ActionPlanItem, userId?: string): Promise<ServiceResult> {
+  if (!isSupabaseConfigured || !supabase) return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
+  const payload = actionPlanItemToDb({ ...item, deletedAt: new Date().toISOString(), deletedBy: userId ?? null });
+  const { error } = await supabase.from('planos_acao_itens').update(payload).eq('id', item.id);
+  if (error) return { ok: false, code: isNetworkUnavailableError(error) ? 'network' : 'unknown', message: error.message, network: isNetworkUnavailableError(error) };
+  return { ok: true };
+}
+
+export async function carregarPlanosDeAcaoItens(): Promise<ActionPlanItem[]> {
+  const result = await fetchActionPlanItems();
+  if (result.ok && result.data?.length) {
+    for (const item of result.data) {
+      const local = await db.planosAcaoItens.get(item.id);
+      if (!local || local.sincronizado) await db.planosAcaoItens.put({ ...item, sincronizado: true });
+    }
+  }
+  const local = await db.planosAcaoItens.filter((item) => !item.pendingDelete && !item.deletedAt).toArray();
+  return local.map(stripActionPlanItemSyncMeta);
 }
 
 export async function carregarPlanosDeAcao(): Promise<ActionPlan[]> {

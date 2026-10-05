@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanStatus, AppConfig, EquipmentStatus, InspectionDeviationInput } from '../types';
-import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan, type LocalInspectionPhoto } from '../db';
+import type { Equipment, Inspection, Inspector, Stats, ActionPlan, ActionPlanItem, ActionPlanStatus, AppConfig, EquipmentStatus, InspectionDeviationInput } from '../types';
+import { db, type LocalEquipment, type LocalInspection, type LocalActionPlan, type LocalActionPlanItem, type LocalInspectionPhoto } from '../db';
 import { syncAll, pendingSyncCount, conflictCount, isSyncInProgress } from '../services/sync';
 import { carregarEquipamentos, limparCacheLocalDoApp, createEquipmentRemote, updateEquipmentRemote, fetchEquipmentById } from '../services/equipmentService';
 import { carregarInspecoes, fetchInspectionById, updateInspectionRemote, recalculateEquipmentFromLatestInspectionRemote } from '../services/inspectionService';
@@ -15,8 +15,9 @@ import { APP_COMPANY } from '../config/brand';
 import { normalizePersistedConfig, partializeAppState } from './persistence';
 import { inferCriticidade, recomputeStats } from './derived';
 import { migratePersistedActionPlansToDexie } from './actionPlanMigration';
-import { loadPlansFromDexie } from './loaders';
-import { buildCanonicalActionPlanId, shouldCreateLegacyInspectionPlan } from '../services/actionPlanIdentity';
+import { loadPlansFromDexie, loadPlanItemsFromDexie } from './loaders';
+import { shouldCreateLegacyInspectionPlan } from '../services/actionPlanIdentity';
+import { buildActionPlanItemId, buildConsolidatedActionPlanId, deriveActionPlanStatus, nextActionPlanDeadline } from '../services/actionPlanItems';
 import { canStartOperationalSync } from '../services/syncPolicy';
 import {
   loginUser,
@@ -86,6 +87,7 @@ export interface AppState {
   inspections: Inspection[];
   stats: Stats;
   actionPlans: ActionPlan[];
+  actionPlanItems: ActionPlanItem[];
   config: AppConfig;
   currentTab: Tab;
 
@@ -139,6 +141,7 @@ export interface AppState {
   ) => Promise<InspectionSaveResult>;
   addActionPlan: (plan: Omit<ActionPlan, 'id' | 'createdAt' | 'status'> & { status?: ActionPlanStatus }) => Promise<{ ok: boolean; id?: string; error?: string }>;
   updateActionPlan: (id: string, updates: Partial<ActionPlan>) => void;
+  updateActionPlanItem: (id: string, updates: Partial<ActionPlanItem>) => void;
   deleteActionPlan: (id: string) => void;
   deleteEquipment: (id: string) => void;
   deleteInspection: (id: string) => Promise<void>;
@@ -195,10 +198,11 @@ export const useAppStore = create<AppState>()(
 
           if (!report.skipped) {
             // Reload equipments, inspections, and action plans from Dexie
-            const [dbEqs, dbInsps, dbPlans] = await Promise.all([
+            const [dbEqs, dbInsps, dbPlans, dbPlanItems] = await Promise.all([
               db.equipamentos.toArray(),
               db.inspecoes.toArray(),
               loadPlansFromDexie(),
+              loadPlanItemsFromDexie(),
             ]);
 
             const freshEqs: Equipment[] = [];
@@ -225,6 +229,7 @@ export const useAppStore = create<AppState>()(
               equipments: freshEqs,
               inspections: freshInsps,
               actionPlans: dbPlans,
+              actionPlanItems: dbPlanItems,
               stats: recomputeStats(freshEqs),
             });
           }
@@ -247,6 +252,7 @@ export const useAppStore = create<AppState>()(
         inspections: [],
         stats: { total: 0, emDia: 0, pendentes: 0, vencidos: 0, conformidade: 0 },
         actionPlans: [],
+        actionPlanItems: [],
         config: {
            empresa: APP_COMPANY,
            unidade: '',
@@ -299,16 +305,18 @@ export const useAppStore = create<AppState>()(
           // Migrar planos legados do localStorage para Dexie (uma única vez)
           await migratePersistedActionPlansToDexie();
 
-          const [loadedEqs, loadedInsps, loadedPlans] = await Promise.all([
+          const [loadedEqs, loadedInsps, loadedPlans, loadedPlanItems] = await Promise.all([
             carregarEquipamentos(),
             carregarInspecoes(),
             carregarPlanosDeAcao(),
+            loadPlanItemsFromDexie(),
           ]);
 
           set({
             equipments: loadedEqs,
             inspections: loadedInsps,
             actionPlans: loadedPlans,
+            actionPlanItems: loadedPlanItems,
             stats: recomputeStats(loadedEqs),
             user: sessionUser ?? get().user,
             users: [],
@@ -1061,26 +1069,29 @@ export const useAppStore = create<AppState>()(
           // (FOTO-<inspectionId>) — no máximo 1 registro de foto por tentativa.
           const photoId = data.photo ? `FOTO-${inspectionId}` : undefined;
 
-          // Build canonical plans before the transaction. Structured deviations
-          // get one stable record each; the legacy aggregate remains only for
-          // callers that do not provide structured deviations.
+          // Structured deviations produce one consolidated parent and one child
+          // per deviation. Undefined deviations remain the legacy aggregate
+          // path; an explicit empty list means the inspection had no findings.
           const eq = get().equipments.find((e) => e.id === data.equipmentId);
           const now = new Date().toISOString();
           const deviations = data.deviations?.filter((deviation) => deviation.key && deviation.description.trim()) ?? [];
-          const plans: LocalActionPlan[] = deviations.length > 0
-            ? deviations.map((deviation) => ({
-                id: buildCanonicalActionPlanId(inspectionId, deviation.key!),
+          const consolidatedPlan: LocalActionPlan | undefined = deviations.length > 0
+            ? {
+                id: buildConsolidatedActionPlanId(inspectionId),
                 inspectionId,
-                deviationKey: deviation.key,
                 originType: 'inspection',
+                modelVersion: 2,
                 equipmentId: data.equipmentId,
                 local: eq?.local || 'Local não especificado',
-                descricao: `[ORIGEM DA INSPEÇÃO]\nInspeção: ${inspectionId}\nItem: ${deviation.item}\nTipo: ${deviation.severity === 'warning' ? 'Observação' : 'Não conforme'}\nDescrição: ${deviation.description.trim()}`,
-                criticidade: inferCriticidade(deviation.description, eq?.tipo || ''),
+                descricao: `[ORIGEM DA INSPEÇÃO]\nInspeção: ${inspectionId}\n${deviations.length} pendência(s) identificada(s)`,
+                criticidade: inferCriticidade(deviations.map((d) => d.description).join(' '), eq?.tipo || ''),
                 responsavel: '', prazo: '', status: 'Aberta', createdAt: now.split('T')[0], userId,
                 updatedAt: now, sincronizado: false, pendingDelete: false, syncAction: 'create',
                 syncOwnerUserId: userId, deletedAt: null, deletedBy: null,
-              }))
+              }
+            : undefined;
+          const plans: LocalActionPlan[] = consolidatedPlan
+            ? [consolidatedPlan]
             : shouldCreateLegacyInspectionPlan(data.deviations, data.status)
               ? [{
                   id: `PAC-${inspectionId}`, equipmentId: data.equipmentId, local: eq?.local || 'Local não especificado',
@@ -1090,6 +1101,20 @@ export const useAppStore = create<AppState>()(
                   pendingDelete: false, syncAction: 'create', syncOwnerUserId: userId, deletedAt: null, deletedBy: null,
                 }]
               : [];
+          const planItems: LocalActionPlanItem[] = consolidatedPlan
+            ? deviations.map((deviation) => ({
+                id: buildActionPlanItemId(consolidatedPlan.id, deviation.key!),
+                planId: consolidatedPlan.id,
+                deviationKey: deviation.key!,
+                checklistItemKey: deviation.key!,
+                tipoDesvio: deviation.severity,
+                descricaoDesvio: deviation.description.trim(),
+                acaoCorretiva: '', solucaoAdotada: '', responsavel: '', prazo: '', status: 'Aberta',
+                concluidoEm: null, userId, createdAt: now, updatedAt: now,
+                sincronizado: false, pendingDelete: false, syncAction: 'create', syncOwnerUserId: userId,
+                deletedAt: null, deletedBy: null,
+              }))
+            : [];
 
           const stamped: Inspection = {
             id: inspectionId,
@@ -1108,7 +1133,7 @@ export const useAppStore = create<AppState>()(
           //    — e retornamos erro sem falso sucesso (§7/§10/§16–§23).
           try {
             const now = new Date().toISOString();
-            await db.transaction('rw', db.inspecoes, db.fotos, db.equipamentos, db.planosAcao, async () => {
+            await db.transaction('rw', [db.inspecoes, db.fotos, db.equipamentos, db.planosAcao, db.planosAcaoItens], async () => {
               await db.inspecoes.put({
                 ...stamped,
                 sincronizado: false,
@@ -1149,6 +1174,7 @@ export const useAppStore = create<AppState>()(
               // Plano DENTRO da transação (nunca fire-and-forget): se este put
               // falhar a transação inteira faz rollback.
               for (const plan of plans) await db.planosAcao.put(plan);
+              for (const item of planItems) await db.planosAcaoItens.put(item);
             });
           } catch (err) {
             console.error('[store.addInspection] erro ao persistir inspeção no Dexie:', err);
@@ -1174,6 +1200,7 @@ export const useAppStore = create<AppState>()(
               equipments: updatedEquipments,
               stats: recomputeStats(updatedEquipments),
               actionPlans: plans.length > 0 ? [...plans.map(stripActionPlanSyncMeta), ...state.actionPlans] : state.actionPlans,
+              actionPlanItems: planItems.length > 0 ? [...planItems, ...state.actionPlanItems] : state.actionPlanItems,
             };
           });
 
@@ -1235,25 +1262,81 @@ export const useAppStore = create<AppState>()(
           void runSync().then(() => get().refreshPendingCount());
         },
 
+        updateActionPlanItem: (id, updates) => {
+          const now = new Date().toISOString();
+          void (async () => {
+            const item = await db.planosAcaoItens.get(id);
+            if (!item) return;
+            const nextItem = {
+              ...item,
+              ...updates,
+              sincronizado: false,
+              syncAction: 'update' as const,
+              syncOwnerUserId: get().user?.id,
+              updatedAt: now,
+              ...(updates.status === 'Concluída' ? { concluidoEm: now } : updates.status ? { concluidoEm: null } : {}),
+            } as LocalActionPlanItem;
+            const siblings = await db.planosAcaoItens.where('planId').equals(item.planId).toArray();
+            const nextSiblings = siblings.map((sibling) => sibling.id === id ? nextItem : sibling);
+            const parent = await db.planosAcao.get(item.planId);
+            await db.transaction('rw', [db.planosAcaoItens, db.planosAcao], async () => {
+              await db.planosAcaoItens.put(nextItem);
+              if (parent) {
+                await db.planosAcao.update(parent.id, {
+                  status: deriveActionPlanStatus(nextSiblings),
+                  prazo: nextActionPlanDeadline(nextSiblings) ?? '',
+                  sincronizado: false,
+                  syncAction: 'update',
+                  syncOwnerUserId: get().user?.id,
+                  updatedAt: now,
+                });
+              }
+            });
+            set((state) => ({
+              actionPlanItems: state.actionPlanItems.map((current) => current.id === id ? { ...current, ...nextItem } : current),
+              actionPlans: state.actionPlans.map((current) => current.id === item.planId && parent
+                ? { ...current, status: deriveActionPlanStatus(nextSiblings), prazo: nextActionPlanDeadline(nextSiblings) ?? '', updatedAt: now }
+                : current),
+            }));
+          })();
+          void runSync().then(() => get().refreshPendingCount());
+        },
+
         deleteActionPlan: (id) => {
           const now = new Date().toISOString();
           void db.planosAcao.get(id).then((plan) => {
             if (!plan) return;
-            if (plan.sincronizado) {
-              void db.planosAcao.update(id, {
-                pendingDelete: true,
-                sincronizado: false,
-                syncAction: 'delete',
-                syncOwnerUserId: get().user?.id,
-                deletedAt: now,
-                updatedAt: now,
-              } as Partial<LocalActionPlan>);
-            } else {
-              void db.planosAcao.delete(id);
-            }
+            void db.transaction('rw', [db.planosAcao, db.planosAcaoItens], async () => {
+              if (plan.sincronizado) {
+                await db.planosAcao.update(id, {
+                  pendingDelete: true,
+                  sincronizado: false,
+                  syncAction: 'delete',
+                  syncOwnerUserId: get().user?.id,
+                  deletedAt: now,
+                  updatedAt: now,
+                } as Partial<LocalActionPlan>);
+                const children = await db.planosAcaoItens.where('planId').equals(id).toArray();
+                for (const child of children) {
+                  await db.planosAcaoItens.update(child.id, {
+                    pendingDelete: true,
+                    sincronizado: false,
+                    syncAction: 'delete',
+                    syncOwnerUserId: get().user?.id,
+                    deletedAt: now,
+                    deletedBy: get().user?.id ?? null,
+                    updatedAt: now,
+                  });
+                }
+              } else {
+                await db.planosAcao.delete(id);
+                await db.planosAcaoItens.where('planId').equals(id).delete();
+              }
+            });
           });
           set((state) => ({
             actionPlans: state.actionPlans.filter((ap) => ap.id !== id),
+            actionPlanItems: state.actionPlanItems.filter((item) => item.planId !== id),
           }));
           void runSync().then(() => get().refreshPendingCount());
         },
