@@ -30,7 +30,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus, Criticidade } from '../../types';
 import { deleteInspectionDraft, deleteInspectionDraftByKey, loadInspectionDraft, saveInspectionDraft, createInspectionDraft, getInspectionDraftKey, type InspectionDraft } from '../../services/inspectionDraftService';
 import { InspectionDraftSession } from '../../services/inspectionDraftSession';
-import { buildActionPlanDescription, toActionPlanCandidate, type ActionPlanCandidate } from './inspectionActionPlanMapper';
+import { toActionPlanCandidate, type ActionPlanCandidate } from './inspectionActionPlanMapper';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
 import { buildInspectionNotes, buildInspectionPayload, deriveEvidenceRequirement, deriveInspectionReadiness, deriveInspectionStatus, getChecklistProgress, getChecklistRemainingMessage, getDeviationDescriptionMessage, getDeviationValidationMessage, getEvidenceInstruction, getEvidenceValidationMessage, getInspectionDeviations, getInspectionResultPresentation, isChecklistComplete, validateInspectionResult, type ChecklistValue, type EvidenceRequirement, type InspectionDeviation, type InspectionResult } from './inspectionWorkflow';
 import { InspectionChecklist } from './InspectionChecklist';
@@ -43,7 +43,7 @@ import {
   type PhotoDraft,
 } from './inspectionPhoto';
 import { CHECKLIST_ALARME, CHECKLIST_EXTINTOR, CHECKLIST_HIDRANTE, CHECKLIST_ILUMINACAO, type ChecklistItemDefinition } from './inspectionChecklistDefinitions';
-import { buildCanonicalActionPlanId } from '../../services/actionPlanIdentity';
+import { buildConsolidatedActionPlanId } from '../../services/actionPlanItems';
 
 function formatInspectionDate(value: string): string {
   if (!value) return '—';
@@ -476,7 +476,7 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
 }
 
 export default function Inspecionar() {
-  const { equipments, addInspection, addActionPlan, user } = useAppStore();
+  const { equipments, addInspection, user } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -825,26 +825,13 @@ export default function Inspecionar() {
     actionPlanCreationLocksRef.current.add(candidate.item);
     updateActionPlanCandidate(candidate.item, { creating: true, planError: undefined });
     try {
-      const result = await addActionPlan({
-        equipmentId: selectedEquipment.id,
-        local: `${selectedEquipment.local} (${selectedEquipment.setor})`,
-        descricao: buildActionPlanDescription({
-          inspectionId: inspectionIdRef.current,
-          equipmentId: selectedEquipment.id,
-          inspectionDate: completedInspectionDateRef.current || new Date().toISOString().split('T')[0],
-          inspectionResult,
-          deviation: candidate,
-        }),
-        criticidade: candidate.criticidade,
-        responsavel: candidate.responsavel,
-        prazo: candidate.prazo,
-        status: 'Aberta',
+      // addInspection already persisted one consolidated parent and all child
+      // items atomically. This review action only acknowledges that parent;
+      // it must never create one legacy plan per deviation.
+      updateActionPlanCandidate(candidate.item, {
+        creating: false,
+        planId: buildConsolidatedActionPlanId(inspectionIdRef.current),
       });
-      if (result.ok) {
-        updateActionPlanCandidate(candidate.item, { creating: false, planId: result.id });
-      } else {
-        updateActionPlanCandidate(candidate.item, { creating: false, planError: result.error ?? 'Não foi possível criar a ação no dispositivo.' });
-      }
     } finally {
       actionPlanCreationLocksRef.current.delete(candidate.item);
     }
@@ -935,7 +922,7 @@ export default function Inspecionar() {
         .filter((candidate): candidate is ActionPlanCandidate => candidate !== null)
         .map((candidate) => ({
           ...candidate,
-          planId: candidate.key ? buildCanonicalActionPlanId(inspectionId, candidate.key) : undefined,
+           planId: candidate.key ? buildConsolidatedActionPlanId(inspectionId) : undefined,
         }));
       setActionPlanCandidates(candidates);
       setActionPlanStage(candidates.length > 0 ? 'review' : 'none');
