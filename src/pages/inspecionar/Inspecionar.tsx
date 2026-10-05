@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, type FormEvent } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import {
-  compressInspectionImage,
+  processInspectionPhoto,
   PHOTO_MAX_WIDTH,
 } from '../../services/photoService';
 import { showToast } from '../../hooks/useToasts';
@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { EquipmentStatus, Criticidade } from '../../types';
-import { deleteInspectionDraft, deleteInspectionDraftByKey, loadInspectionDraft, saveInspectionDraft, createInspectionDraft, getInspectionDraftKey, type InspectionDraft } from '../../services/inspectionDraftService';
+import { deleteInspectionDraft, deleteInspectionDraftByKey, loadInspectionDraft, saveInspectionDraft, patchInspectionDraft, createInspectionDraft, getInspectionDraftKey, type InspectionDraft } from '../../services/inspectionDraftService';
 import { InspectionDraftSession } from '../../services/inspectionDraftSession';
 import { toActionPlanCandidate, type ActionPlanCandidate } from './inspectionActionPlanMapper';
 import { INSPECTOR_OPTIONS } from '../../config/inspectors';
@@ -37,7 +37,6 @@ import { InspectionChecklist } from './InspectionChecklist';
 import {
   createPreviewUrl,
   formatBytes,
-  PHOTO_ERROR_MSG,
   PHOTO_MAX_BYTES,
   revokePreviewUrl,
   type PhotoDraft,
@@ -210,6 +209,7 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
 
   const handleFile = async (file: File | null | undefined) => {
     if (!file) return;
+    if (loading) return;
     setError(null);
     if (!file.type.startsWith('image/')) {
       const msg = 'Selecione um arquivo de imagem válido (JPG, PNG ou WEBP).';
@@ -226,7 +226,7 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
     setLoading(true);
     onProcessingChange?.(true);
     try {
-      const compressed = await compressInspectionImage(file);
+      const compressed = await processInspectionPhoto(file);
       onChange({
         blob: compressed.blob,
         previewUrl: createPreviewUrl(compressed.blob),
@@ -242,7 +242,9 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
         duration: 2500,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : PHOTO_ERROR_MSG;
+      const msg = err instanceof Error && err.message.includes('A inspeção continua salva')
+        ? err.message
+        : 'Não foi possível processar esta foto neste dispositivo. A inspeção continua salva. Tente capturar novamente.';
       setError(msg);
       showToast({ kind: 'error', title: 'Falha ao processar foto', description: msg });
     } finally {
@@ -279,6 +281,11 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
           <div className="absolute bottom-2 left-2 px-2 py-1 rounded-md bg-black/60 text-white text-[10px] font-bold tabular-nums">
             {value.width}×{value.height} · {formatBytes(value.size)}
           </div>
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-white text-xs font-bold" role="status">
+              Processando foto...
+            </div>
+          )}
         </div>
 
         {offline && (
@@ -302,7 +309,7 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
             <button
               type="button"
               onClick={() => galleryInputRef.current?.click()}
-              disabled={disabled}
+              disabled={disabled || loading}
               className="btn-ghost btn-sm btn-auto"
             >
               <ImagePlus className="w-4 h-4" />
@@ -311,7 +318,7 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
             <button
               type="button"
               onClick={() => setConfirmRemove(true)}
-              disabled={disabled}
+              disabled={disabled || loading}
               className="btn-ghost btn-sm btn-auto text-critical hover:bg-red-50"
             >
               <Trash2 className="w-4 h-4" />
@@ -380,7 +387,7 @@ function PhotoCapture({ value, onChange, requirement, disabled = false, online, 
           <div className="flex flex-col items-center justify-center gap-2 py-3" role="status" aria-live="polite">
             <Loader2 className="w-7 h-7 text-blue-500 animate-spin" />
             <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">
-              Otimizando imagem...
+              Processando foto...
             </span>
             <span className="text-[10px] text-blue-600/80 font-medium">
               Redimensionando para {PHOTO_MAX_WIDTH}px
@@ -508,6 +515,7 @@ export default function Inspecionar() {
   const draftCreatedAtRef = useRef<string | undefined>(undefined);
   const draftUpdatedAtRef = useRef<string | undefined>(undefined);
   const autosaveSequenceRef = useRef(0);
+  const savedPhotoBlobRef = useRef<Blob | null | undefined>(undefined);
 
   // Idempotência de submissão: lock síncrono (imediato, sem depender do render)
   // + identidade estável da tentativa (submissionId → inspectionId). Retry da
@@ -663,16 +671,34 @@ export default function Inspecionar() {
         createdAt: draftCreatedAtRef.current,
         updatedAt: now,
       });
-      await saveInspectionDraft(draft);
+      const photoChanged = photoOverride !== undefined || draft.photo?.blob !== savedPhotoBlobRef.current;
+      const fields = {
+        ownerUserId: draft.ownerUserId,
+        equipmentId: draft.equipmentId,
+        checklist: draft.checklist,
+        deviationNotes: draft.deviationNotes,
+        inspectionResult: draft.inspectionResult,
+        inspectorName: draft.inspectorName,
+        nextInspectionDate: draft.nextInspectionDate,
+        generalNotes: draft.generalNotes,
+        createdAt: draft.createdAt,
+        updatedAt: draft.updatedAt,
+      };
+      const patched = !photoChanged && await patchInspectionDraft(draft.key, fields);
+      if (!patched) await saveInspectionDraft(draft);
       if (sequence === autosaveSequenceRef.current) {
         draftCreatedAtRef.current = draft.createdAt;
         draftUpdatedAtRef.current = draft.updatedAt;
         draftDirtyRef.current = false;
+        savedPhotoBlobRef.current = draft.photo?.blob ?? null;
         setDraftStatus('saved');
       }
       return true;
     } catch (error) {
       console.error('[inspection-draft] autosave failed', error instanceof Error ? error.message : 'unknown error');
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        setErrorMsg('Não há espaço disponível para salvar o rascunho neste dispositivo. Libere espaço e tente novamente.');
+      }
       if (sequence === autosaveSequenceRef.current) setDraftStatus('error');
       return false;
     }
@@ -747,6 +773,7 @@ export default function Inspecionar() {
     setValidadeDate(getDefaultNextInspectionDate());
     setObservacoes('');
     setPhotoDraft(null);
+    savedPhotoBlobRef.current = undefined;
     setDraftStatus('idle');
     draftDirtyRef.current = false;
     draftCreatedAtRef.current = undefined;
@@ -782,7 +809,9 @@ export default function Inspecionar() {
       }
     } else {
       setPhotoDraft(null);
+      savedPhotoBlobRef.current = undefined;
     }
+    savedPhotoBlobRef.current = draft.photo?.blob ?? null;
     draftDirtyRef.current = false;
     setDraftStatus('saved');
     resetDraftPrompt();

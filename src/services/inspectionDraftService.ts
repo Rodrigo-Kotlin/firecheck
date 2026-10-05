@@ -100,6 +100,18 @@ export async function saveInspectionDraft(draft: InspectionDraft): Promise<void>
   });
 }
 
+export type InspectionDraftFields = Omit<InspectionDraft, 'key' | 'version' | 'photo'>;
+
+/** Update form fields without structured-cloning the unchanged photo Blob. */
+export async function patchInspectionDraft(key: string, fields: InspectionDraftFields): Promise<boolean> {
+  return db.transaction('rw', db.inspectionDrafts, async () => {
+    const existing = await db.inspectionDrafts.get(key);
+    if (!existing || existing.updatedAt > fields.updatedAt) return false;
+    await db.inspectionDrafts.update(key, fields);
+    return true;
+  });
+}
+
 export async function loadInspectionDraft(ownerUserId: string, equipmentId: string): Promise<InspectionDraftLoad> {
   if (!ownerUserId || !equipmentId) return { draft: null, invalid: false };
   const raw = await db.inspectionDrafts.get(getInspectionDraftKey(ownerUserId, equipmentId));

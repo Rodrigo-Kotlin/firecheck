@@ -42,6 +42,8 @@ export const PHOTO_TARGET_MAX_BYTES = 800 * 1024;
  *  resolution before this cap is applied. Behavior on 48 MP photos must be
  *  validated on a real device. */
 export const PHOTO_MAX_MEGAPIXELS = 25;
+export const PHOTO_FALLBACK_WIDTH = 960;
+export const PHOTO_LAST_RESORT_WIDTH = 768;
 
 export type CompressedMime = 'image/jpeg' | 'image/webp';
 
@@ -53,6 +55,18 @@ export interface CompressOptions {
   quality?: number;
   /** Prefer WebP when the browser supports it. Defaults to true. */
   preferWebP?: boolean;
+}
+
+export type PhotoProcessingErrorCode = 'PHOTO_DECODE_FAILED' | 'PHOTO_MEMORY_PRESSURE' | 'PHOTO_ENCODE_FAILED' | 'PHOTO_PROCESSING_FAILED';
+
+export class PhotoProcessingError extends Error {
+  readonly code: PhotoProcessingErrorCode;
+
+  constructor(code: PhotoProcessingErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'PhotoProcessingError';
+    this.code = code;
+  }
 }
 
 export interface CompressedImage {
@@ -109,24 +123,27 @@ function detectWebPSupport(): boolean {
   return webpSupportCache;
 }
 
-/** Read a `File` as a `data:` URL. */
-function readFileAsDataUrl(file: File | Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Não foi possível ler o arquivo de imagem.'));
-    reader.onload = () => resolve(reader.result as string);
-    reader.readAsDataURL(file);
-  });
-}
-
-/** Decode a data URL into an `HTMLImageElement`. */
-function decodeImage(src: string): Promise<HTMLImageElement> {
+/** Decode through an object URL without retaining a base64 copy. */
+function decodeImage(blob: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onerror = () =>
-      reject(new Error('Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.'));
-    img.onload = () => resolve(img);
-    img.src = src;
+    const url = URL.createObjectURL(blob);
+    const cleanup = () => {
+      URL.revokeObjectURL(url);
+      img.onload = null;
+      img.onerror = null;
+    };
+    img.onerror = () => {
+      cleanup();
+      reject(new PhotoProcessingError('PHOTO_DECODE_FAILED', 'Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.'));
+    };
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      img.onload = null;
+      img.onerror = null;
+      resolve(img);
+    };
+    img.src = url;
   });
 }
 
@@ -207,18 +224,25 @@ export async function compressInspectionImage(
     if (typeof createImageBitmap === 'function') {
       bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
     } else {
-      const dataUrl = await readFileAsDataUrl(file);
-      img = await decodeImage(dataUrl);
+      img = await decodeImage(file);
     }
   } catch (err) {
-    console.warn('[photo.compress] falha ao decodificar:', err);
-    throw new Error('Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.', { cause: err });
+    bitmap?.close();
+    throw err instanceof PhotoProcessingError
+      ? err
+      : new PhotoProcessingError(
+          err instanceof DOMException && err.name === 'InvalidStateError' ? 'PHOTO_MEMORY_PRESSURE' : 'PHOTO_DECODE_FAILED',
+          'Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.',
+          { cause: err },
+        );
   }
 
   const width = bitmap ? bitmap.width : (img?.naturalWidth ?? 0);
   const height = bitmap ? bitmap.height : (img?.naturalHeight ?? 0);
   if (width <= 0 || height <= 0) {
-    throw new Error('Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.');
+    bitmap?.close();
+    if (img) img.src = '';
+    throw new PhotoProcessingError('PHOTO_PROCESSING_FAILED', 'Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.');
   }
 
   try {
@@ -236,7 +260,7 @@ export async function compressInspectionImage(
     canvas.height = outHeight;
     const ctx = canvas.getContext('2d');
     if (!ctx) {
-      throw new Error('Seu navegador não suporta o processamento de imagem.');
+      throw new PhotoProcessingError('PHOTO_MEMORY_PRESSURE', 'Seu navegador não conseguiu reservar memória para esta foto.');
     }
     // White backdrop: JPEG has no alpha; avoids black padding around pngs.
     ctx.fillStyle = '#ffffff';
@@ -262,10 +286,10 @@ export async function compressInspectionImage(
           blob = jpeg.blob ?? jpeg.best!;
           finalMime = 'image/jpeg';
         } else {
-          throw new Error('Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.');
+          throw new PhotoProcessingError('PHOTO_ENCODE_FAILED', 'Não foi possível codificar esta foto.');
         }
       } else {
-        throw new Error('Não foi possível processar esta imagem. Tente novamente ou escolha outra foto.');
+        throw new PhotoProcessingError('PHOTO_ENCODE_FAILED', 'Não foi possível codificar esta foto.');
       }
     }
 
@@ -288,7 +312,36 @@ export async function compressInspectionImage(
     };
   } finally {
     bitmap?.close();
+    if (img) {
+      img.src = '';
+      img.onload = null;
+      img.onerror = null;
+    }
   }
+}
+
+/** Process at most three strategies. Lower resolutions are only attempted
+ * after a recoverable processing failure. */
+export async function processInspectionPhoto(file: File, options: CompressOptions = {}): Promise<CompressedInspectionImage> {
+  const strategies = [
+    { maxWidth: options.maxWidth ?? PHOTO_MAX_WIDTH, quality: options.quality ?? PHOTO_QUALITY },
+    { maxWidth: PHOTO_FALLBACK_WIDTH, quality: 0.74 },
+    { maxWidth: PHOTO_LAST_RESORT_WIDTH, quality: 0.68 },
+  ];
+  let lastError: unknown;
+  for (let index = 0; index < strategies.length; index += 1) {
+    try {
+      const result = await compressInspectionImage(file, { ...options, ...strategies[index] });
+      if (import.meta.env.DEV && index > 0) console.log(`[photo.compress] fallback=${index} max=${strategies[index].maxWidth}`);
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (error instanceof PhotoProcessingError && error.code === 'PHOTO_DECODE_FAILED') break;
+    }
+  }
+  throw lastError instanceof PhotoProcessingError
+    ? lastError
+    : new PhotoProcessingError('PHOTO_MEMORY_PRESSURE', 'Não foi possível processar esta foto neste dispositivo. A inspeção continua salva. Tente capturar novamente.', { cause: lastError });
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +360,12 @@ export function dataUrlToBlob(dataUrl: string): Blob {
 
 /** Read a Blob as a base64 data URL (used for previews). */
 export function blobToDataUrl(blob: Blob): Promise<string> {
-  return readFileAsDataUrl(blob);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Não foi possível ler a imagem.'));
+    reader.onload = () => resolve(reader.result as string);
+    reader.readAsDataURL(blob);
+  });
 }
 
 /** Resolve the uploadable bytes for a photo row — prefers the Blob produced by

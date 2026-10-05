@@ -4,12 +4,16 @@ const memory = vi.hoisted(() => new Map<string, unknown>());
 const draftTable = vi.hoisted(() => ({
   get: async (key: string) => memory.get(key),
   put: async (value: { key: string }) => { memory.set(value.key, value); },
+  update: async (key: string, fields: Record<string, unknown>) => {
+    const existing = memory.get(key);
+    if (existing) memory.set(key, { ...(existing as object), ...fields });
+  },
   delete: async (key: string) => { memory.delete(key); },
   clear: async () => { memory.clear(); },
 }));
 const fakeDb = vi.hoisted(() => ({
   inspectionDrafts: draftTable,
-  transaction: async (_mode: string, _table: unknown, callback: () => Promise<void>) => callback(),
+  transaction: async <T>(_mode: string, _table: unknown, callback: () => Promise<T>) => callback(),
 }));
 
 vi.mock('../db', () => ({ db: fakeDb }));
@@ -19,6 +23,7 @@ import {
   deleteInspectionDraft,
   getInspectionDraftKey,
   loadInspectionDraft,
+  patchInspectionDraft,
   saveInspectionDraft,
 } from './inspectionDraftService';
 
@@ -89,5 +94,28 @@ describe('inspection draft repository', () => {
     await saveInspectionDraft(newer);
     await saveInspectionDraft(older);
     await expect(loadInspectionDraft('user-a', 'EXT-001')).resolves.toEqual({ draft: newer, invalid: false });
+  });
+
+  it('patches form fields without replacing the existing photo Blob', async () => {
+    const blob = new Blob(['photo'], { type: 'image/jpeg' });
+    const value = draft('user-a', 'EXT-001', {
+      photo: { blob, mimeType: 'image/jpeg', width: 1280, height: 720, sizeBytes: blob.size },
+    });
+    await saveInspectionDraft(value);
+    await expect(patchInspectionDraft(value.key, {
+      ownerUserId: value.ownerUserId,
+      equipmentId: value.equipmentId,
+      checklist: value.checklist,
+      deviationNotes: value.deviationNotes,
+      inspectionResult: value.inspectionResult,
+      inspectorName: value.inspectorName,
+      nextInspectionDate: value.nextInspectionDate,
+      generalNotes: 'texto alterado',
+      createdAt: value.createdAt,
+      updatedAt: '2027-01-03T00:00:00.000Z',
+    })).resolves.toBe(true);
+    const loaded = (await loadInspectionDraft('user-a', 'EXT-001')).draft;
+    expect(loaded?.photo?.blob).toBe(blob);
+    expect(loaded?.generalNotes).toBe('texto alterado');
   });
 });

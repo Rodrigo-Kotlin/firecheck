@@ -1178,11 +1178,14 @@ export const useAppStore = create<AppState>()(
             });
           } catch (err) {
             console.error('[store.addInspection] erro ao persistir inspeção no Dexie:', err);
+            const quotaExceeded = err instanceof DOMException && err.name === 'QuotaExceededError';
             return {
               ok: false,
               inspectionSaved: false,
               photoSaved: !data.photo,
-              error: 'Não foi possível salvar a inspeção no dispositivo. Nenhuma alteração foi concluída.',
+              error: quotaExceeded
+                ? 'Não há espaço disponível para salvar esta foto neste dispositivo. Libere espaço e tente novamente.'
+                : 'Não foi possível salvar a inspeção no dispositivo. Nenhuma alteração foi concluída.',
             };
           }
 
