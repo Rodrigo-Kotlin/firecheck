@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSimulatorStore } from './simulatorStore';
+import { SIMULATOR_ASSESSMENT_QUESTIONS } from './simulatorTraining';
 
 describe('simulator store', () => {
   beforeEach(() => useSimulatorStore.getState().reset());
@@ -117,5 +118,66 @@ describe('simulator store', () => {
     store.simulateOnline();
     expect(useSimulatorStore.getState().activeSession?.simulatedSyncState).toBe('synced');
     expect(navigator.onLine).toBe(original);
+  });
+
+  it('starts a temporary guided training with participant data only in the store', () => {
+    const store = useSimulatorStore.getState();
+    store.startTraining({ name: 'Maria Silva', role: 'Brigadista' }, 'guided');
+    expect(useSimulatorStore.getState().training).toMatchObject({ mode: 'guided', participant: { name: 'Maria Silva', role: 'Brigadista' }, status: 'in_progress' });
+  });
+
+  it('keeps guided scenarios in the configured order while allowing free mode independently', () => {
+    const store = useSimulatorStore.getState();
+    store.startTraining({ name: 'Maria', role: '' }, 'guided');
+    store.startSession('S02-02');
+    expect(useSimulatorStore.getState().activeSession).toBeNull();
+    store.startSession('S02-01');
+    expect(useSimulatorStore.getState().activeSession?.scenarioId).toBe('S02-01');
+    store.resetTraining();
+    store.startTraining({ name: 'Maria', role: '' }, 'free');
+    store.startSession('S02-08');
+    expect(useSimulatorStore.getState().activeSession?.scenarioId).toBe('S02-08');
+  });
+
+  it('increments attempts and preserves the best scenario score', () => {
+    const store = useSimulatorStore.getState();
+    store.startTraining({ name: 'Maria', role: '' }, 'guided');
+    store.startSession('S02-01');
+    store.setInspectionResult('conforme');
+    store.completeSession();
+    expect(useSimulatorStore.getState().training?.scenarioResults['S02-01'].attempts).toBe(1);
+    store.resetSession();
+    store.setInspectionResult('conforme');
+    store.completeSession();
+    expect(useSimulatorStore.getState().training?.scenarioResults['S02-01'].attempts).toBe(2);
+    expect(useSimulatorStore.getState().training?.scenarioResults['S02-01'].bestScore).toBe(30);
+  });
+
+  it('blocks incomplete assessment, locks submitted answers and supports a new attempt', () => {
+    const store = useSimulatorStore.getState();
+    store.startTraining({ name: 'Maria', role: '' }, 'guided');
+    const training = useSimulatorStore.getState().training!;
+    useSimulatorStore.setState({ training: { ...training, scenarioResults: Object.fromEntries(store.scenarios.map((scenario) => [scenario.id, { scenarioId: scenario.id, attempts: 1, score: 100, bestScore: 100, completed: true, startedAt: training.startedAt, completedAt: training.startedAt, selectedResult: scenario.expectedResult, expectedResult: scenario.expectedResult, checklistCorrect: scenario.checklist.length, checklistTotal: scenario.checklist.length, evidenceRegistered: false, actionPlanProgress: null }])) } });
+    store.resetAssessment();
+    expect(store.submitAssessment()).toBe(false);
+    expect(useSimulatorStore.getState().assessmentMessage).toContain('Faltam 8');
+    for (const question of SIMULATOR_ASSESSMENT_QUESTIONS) store.setAssessmentAnswer(question.id, question.correctOptionId);
+    expect(store.submitAssessment()).toBe(true);
+    expect(useSimulatorStore.getState().training?.finalAssessment).toMatchObject({ score: 100, correct: 8, submitted: true, attempts: 1 });
+    store.setAssessmentAnswer('ASSESS-SIM-01', 'b');
+    expect(useSimulatorStore.getState().training?.finalAssessment?.answers['ASSESS-SIM-01']).toBe('a');
+    store.resetAssessment();
+    expect(useSimulatorStore.getState().training?.finalAssessment?.submitted).toBe(false);
+  });
+
+  it('resetTraining removes participant, results, drafts and active session', () => {
+    const store = useSimulatorStore.getState();
+    store.startTraining({ name: 'Maria', role: '' }, 'guided');
+    store.startSession('S02-07');
+    store.simulateInterruption();
+    store.resetTraining();
+    expect(useSimulatorStore.getState().training).toBeNull();
+    expect(useSimulatorStore.getState().activeSession).toBeNull();
+    expect(useSimulatorStore.getState().simulatedDraft).toBeNull();
   });
 });
