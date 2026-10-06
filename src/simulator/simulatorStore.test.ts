@@ -180,4 +180,17 @@ describe('simulator store', () => {
     expect(useSimulatorStore.getState().activeSession).toBeNull();
     expect(useSimulatorStore.getState().simulatedDraft).toBeNull();
   });
+
+  it('cleans in-memory evidence when the simulator is exited', () => {
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const store = useSimulatorStore.getState();
+    store.startTraining({ name: 'Maria', role: '' }, 'free');
+    store.startSession('S02-03');
+    store.addEvidence(new Blob(['photo'], { type: 'image/jpeg' }), 'CHK-SIM-03-01');
+    const preview = useSimulatorStore.getState().activeSession!.evidence[0].previewUrl;
+    store.reset();
+    expect(revoke).toHaveBeenCalledWith(preview);
+    expect(useSimulatorStore.getState().training).toBeNull();
+    revoke.mockRestore();
+  });
 });
