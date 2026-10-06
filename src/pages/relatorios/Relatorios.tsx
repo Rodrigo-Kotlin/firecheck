@@ -13,7 +13,7 @@ import { buildHistoryEntries, filterHistoryEntries, scopeReportData } from './re
 import { getHistoryStatusFromQuery, HISTORY_STATUS_BADGE, type HistoryEntry, type HistoryStatus } from './reportTypes';
 import { individualReportFilename, monthlyReportFilename } from './reportFileNames';
 import { formatDateBR, formatDateTimeBR, getLocalDateISO } from '../../utils/date';
-import { fitReportImage, inspectionsForReportMonth, resolveInspectionPhotos, resolveInspectionPhotosForInspections, type ResolvedReportPhoto } from './reportPhotos';
+import { fitReportImage, getPhotoGridCellLayout, getPhotoGridPosition, inspectionsForReportMonth, resolveInspectionPhotos, resolveInspectionPhotosForInspections, type ResolvedReportPhoto } from './reportPhotos';
 
 const PDF_COLORS = {
   primary: [11, 107, 58] as [number, number, number],
@@ -210,19 +210,6 @@ function drawSectionHeader(ctx: DrawCtx, num: number, title: string) {
   ctx.doc.setLineWidth(0.2);
   ctx.doc.line(PDF_MARGIN + 30, ctx.y, PDF_PAGE.w - PDF_MARGIN, ctx.y);
   ctx.y += 7;
-}
-
-function drawSubsectionHeader(ctx: DrawCtx, title: string) {
-  ensureSpace(ctx, 12);
-  ctx.doc.setFont('helvetica', 'bold');
-  ctx.doc.setFontSize(9);
-  ctx.doc.setTextColor(...PDF_COLORS.primaryDark);
-  ctx.doc.text(title.toUpperCase(), PDF_MARGIN, ctx.y);
-  ctx.y += 5;
-  ctx.doc.setDrawColor(...PDF_COLORS.border);
-  ctx.doc.setLineWidth(0.2);
-  ctx.doc.line(PDF_MARGIN, ctx.y, PDF_PAGE.w - PDF_MARGIN, ctx.y);
-  ctx.y += 5;
 }
 
 function drawKVGrid(ctx: DrawCtx, items: Array<[string, string]>, cols: 2 | 3 = 2) {
@@ -426,60 +413,125 @@ async function blobToPdfImage(blob: Blob, hintedWidth?: number, hintedHeight?: n
   }
 }
 
-function drawPhotoUnavailable(ctx: DrawCtx) {
-  ensureSpace(ctx, 13);
-  ctx.doc.setFillColor(...PDF_COLORS.bgLight);
-  ctx.doc.setDrawColor(...PDF_COLORS.border);
-  ctx.doc.roundedRect(PDF_MARGIN, ctx.y, PDF_CONTENT_W, 10, 1.5, 1.5, 'FD');
-  ctx.doc.setFont('helvetica', 'italic');
-  ctx.doc.setFontSize(8);
+type PhotoEvidenceItem = {
+  resolved: ResolvedReportPhoto;
+  equipmentId: string;
+  inspectionDate: string;
+  location?: string;
+  result: string;
+};
+
+function reportResultLabel(status: string): string {
+  if (status === 'regular') return 'Conforme';
+  if (status === 'observacao') return 'Observação';
+  if (status === 'vencido') return 'Não Conforme';
+  if (status === 'pendente') return 'Pendente';
+  if (status === 'em_manutencao') return 'Em manutenção';
+  if (status === 'inativo') return 'Inativo';
+  if (status === 'substituido') return 'Substituído';
+  if (status === 'extraviado') return 'Extraviado';
+  return status || 'Sem resultado';
+}
+
+function preparePhotoGridPage(ctx: DrawCtx) {
+  if (ctx.y + 150 > PDF_FOOTER_Y - 6) {
+    drawFooter(ctx);
+    addPage(ctx);
+  }
+}
+
+function drawPhotoCaption(ctx: DrawCtx, item: PhotoEvidenceItem, index: number, x: number, cellW: number, captionY: number) {
+  const centerX = x + cellW / 2;
   ctx.doc.setTextColor(...PDF_COLORS.textSubtle);
-  ctx.doc.text('Evidência fotográfica indisponível no momento da geração do relatório.', PDF_MARGIN + 5, ctx.y + 6.5);
-  ctx.y += 14;
+  ctx.doc.setFont('helvetica', 'normal');
+  ctx.doc.setFontSize(6.5);
+  ctx.doc.text(`Evidência fotográfica ${index + 1}`, centerX, captionY, { align: 'center' });
+
+  ctx.doc.setTextColor(...PDF_COLORS.text);
+  ctx.doc.setFont('helvetica', 'bold');
+  ctx.doc.setFontSize(7.5);
+  const timestamp = item.resolved.photo.createdAt ? formatDateTimeBR(item.resolved.photo.createdAt) : '';
+  const tagDate = `${item.equipmentId} · ${formatDateBR(item.inspectionDate)}${timestamp && timestamp !== '—' ? ` ${timestamp.slice(11)}` : ''}`;
+  ctx.doc.text(tagDate, centerX, captionY + 6, { align: 'center' });
+
+  let nextY = captionY + 11;
+  if (item.location) {
+    ctx.doc.setFont('helvetica', 'normal');
+    ctx.doc.setFontSize(6.5);
+    ctx.doc.setTextColor(...PDF_COLORS.textMuted);
+    const locationLines = ctx.doc.splitTextToSize(item.location, cellW - 8).slice(0, 2);
+    ctx.doc.text(locationLines, centerX, nextY, { align: 'center' });
+    nextY += locationLines.length * 3.5;
+  }
+
+  ctx.doc.setFont('helvetica', 'bold');
+  ctx.doc.setFontSize(6.5);
+  ctx.doc.setTextColor(...PDF_COLORS.textMuted);
+  ctx.doc.text(`Resultado: ${item.result}`, centerX, nextY + 2, { align: 'center' });
 }
 
 async function drawPhotoEvidence(
   ctx: DrawCtx,
-  resolvedPhotos: ResolvedReportPhoto[],
-  equipmentId: string,
-  inspectionId: string,
-  inspectionDate: string,
+  items: PhotoEvidenceItem[],
 ) {
-  if (resolvedPhotos.length === 0) {
+  if (items.length === 0) {
     drawEmptyState(ctx, 'Não há evidência fotográfica registrada para esta inspeção.');
     return;
   }
 
-  for (const [index, resolved] of resolvedPhotos.entries()) {
-    if (!resolved.blob) {
-      drawPhotoUnavailable(ctx);
+  const gridGap = 5;
+  const gridTopByPage = new Map<number, number>();
+  const gridLayout = (gridTop: number) => {
+    const layout = getPhotoGridCellLayout(PDF_CONTENT_W, PDF_FOOTER_Y - 6 - gridTop, gridGap);
+    return { cellW: layout.cellWidth, cellH: layout.cellHeight, imageAreaH: layout.imageHeight };
+  };
+
+  for (const [index, item] of items.entries()) {
+    const position = getPhotoGridPosition(index);
+    if (position.pageIndex > 0 && position.row === 0 && position.column === 0) {
+      ctx.y = gridTopByPage.get(position.pageIndex - 1)! + gridLayout(gridTopByPage.get(position.pageIndex - 1)!).cellH * 2 + gridGap + 4;
+      drawFooter(ctx);
+      addPage(ctx);
+    }
+
+    if (!gridTopByPage.has(position.pageIndex)) gridTopByPage.set(position.pageIndex, ctx.y);
+    const gridTop = gridTopByPage.get(position.pageIndex)!;
+    const { cellW, cellH, imageAreaH } = gridLayout(gridTop);
+    const cellX = PDF_MARGIN + position.column * (cellW + gridGap);
+    const cellY = gridTop + position.row * (cellH + gridGap);
+    const captionY = cellY + imageAreaH + 6;
+
+    if (!item.resolved.blob) {
+      console.error('[reports.photo]', item.resolved.photo.id, 'Evidência indisponível no momento da geração.');
+      ctx.doc.setFont('helvetica', 'italic');
+      ctx.doc.setFontSize(7);
+      ctx.doc.setTextColor(...PDF_COLORS.textSubtle);
+      const unavailable = ctx.doc.splitTextToSize('Evidência indisponível', cellW - 8);
+      ctx.doc.text(unavailable, cellX + cellW / 2, cellY + imageAreaH / 2, { align: 'center' });
+      drawPhotoCaption(ctx, item, index, cellX, cellW, captionY);
       continue;
     }
 
     try {
-      const image = await blobToPdfImage(resolved.blob, resolved.photo.width, resolved.photo.height);
-      const maxW = PDF_CONTENT_W;
-      const maxH = 100;
-      const { width, height } = fitReportImage(image.width, image.height, maxW, maxH);
-      ensureSpace(ctx, height + 18);
-      ctx.doc.addImage(image.dataUrl, 'JPEG', PDF_MARGIN, ctx.y, width, height, undefined, 'MEDIUM');
-      ctx.y += height + 4;
-      ctx.doc.setFont('helvetica', 'bold');
-      ctx.doc.setFontSize(7.5);
-      ctx.doc.setTextColor(...PDF_COLORS.text);
-      ctx.doc.text(`Evidência fotográfica ${index + 1}`, PDF_MARGIN, ctx.y);
-      ctx.doc.setFont('helvetica', 'normal');
-      ctx.doc.setTextColor(...PDF_COLORS.textMuted);
-      ctx.doc.setFontSize(7);
-      const formattedTimestamp = resolved.photo.createdAt ? formatDateTimeBR(resolved.photo.createdAt) : '';
-      const timestamp = formattedTimestamp && formattedTimestamp !== '—' ? ` · ${formattedTimestamp}` : '';
-      ctx.doc.text(`Equipamento: ${equipmentId} · Inspeção ${inspectionId}: ${formatDateBR(inspectionDate)}${timestamp}`, PDF_MARGIN, ctx.y + 4);
-      ctx.y += 11;
+      const image = await blobToPdfImage(item.resolved.blob, item.resolved.photo.width, item.resolved.photo.height);
+      const { width, height } = fitReportImage(image.width, image.height, cellW - 8, imageAreaH - 4);
+      const imageX = cellX + (cellW - width) / 2;
+      const imageY = cellY + (imageAreaH - height) / 2;
+      ctx.doc.addImage(image.dataUrl, 'JPEG', imageX, imageY, width, height, undefined, 'MEDIUM');
     } catch (error) {
-      console.error('[reports.photo]', resolved.photo.id, error);
-      drawPhotoUnavailable(ctx);
+      console.error('[reports.photo]', item.resolved.photo.id, error);
+      ctx.doc.setFont('helvetica', 'italic');
+      ctx.doc.setFontSize(7);
+      ctx.doc.setTextColor(...PDF_COLORS.textSubtle);
+      ctx.doc.text('Evidência indisponível', cellX + cellW / 2, cellY + imageAreaH / 2, { align: 'center' });
     }
+    drawPhotoCaption(ctx, item, index, cellX, cellW, captionY);
   }
+
+  const lastPosition = getPhotoGridPosition(items.length - 1);
+  const lastTop = gridTopByPage.get(lastPosition.pageIndex)!;
+  const { cellH } = gridLayout(lastTop);
+  ctx.y = lastTop + cellH * 2 + gridGap + 4;
 }
 
 async function drawMonthlyPhotoAppendix(
@@ -491,31 +543,32 @@ async function drawMonthlyPhotoAppendix(
   const periodInspections = inspectionsForReportMonth(inspections, monthKey);
   const resolvedByInspection = await resolveInspectionPhotosForInspections(periodInspections);
   const entries = periodInspections.filter((inspection) => resolvedByInspection.has(inspection.id));
-  const photoCount = entries.reduce((total, inspection) => total + (resolvedByInspection.get(inspection.id)?.length ?? 0), 0);
+  const items: PhotoEvidenceItem[] = entries.flatMap((inspection) => {
+    const equipment = equipments.find((item) => item.id === inspection.equipmentId);
+    const location = [equipment?.setor, equipment?.local].filter(Boolean).join(' · ') || undefined;
+    return (resolvedByInspection.get(inspection.id) ?? []).map((resolved) => ({
+      resolved,
+      equipmentId: inspection.equipmentId,
+      inspectionDate: inspection.data,
+      location,
+      result: reportResultLabel(inspection.status),
+    }));
+  });
 
-  if (entries.length === 0) {
+  if (items.length === 0) {
+    drawSectionHeader(ctx, 7, 'Evidências Fotográficas do Período');
     drawEmptyState(ctx, 'Nenhuma evidência fotográfica registrada no período.');
     return;
   }
 
-  ensureSpace(ctx, 12);
+  preparePhotoGridPage(ctx);
+  drawSectionHeader(ctx, 7, 'Evidências Fotográficas do Período');
   ctx.doc.setFont('helvetica', 'bold');
   ctx.doc.setFontSize(8);
   ctx.doc.setTextColor(...PDF_COLORS.textMuted);
-  ctx.doc.text(`Evidências fotográficas: ${photoCount} foto(s) em ${entries.length} inspeção(ões).`, PDF_MARGIN, ctx.y);
+  ctx.doc.text(`Evidências fotográficas: ${items.length} foto(s) em ${entries.length} inspeção(ões).`, PDF_MARGIN, ctx.y);
   ctx.y += 8;
-
-  for (const inspection of entries) {
-    const equipment = equipments.find((item) => item.id === inspection.equipmentId);
-    drawSubsectionHeader(ctx, `Equipamento ${inspection.equipmentId}`);
-    drawKVGrid(ctx, [
-      ['Tag / Identificação', inspection.equipmentId],
-      ['Setor / Local', `${equipment?.setor ?? '—'} / ${equipment?.local ?? '—'}`],
-      ['Inspeção', formatDateBR(inspection.data)],
-      ['Resultado', inspection.status.toUpperCase()],
-    ], 2);
-    await drawPhotoEvidence(ctx, resolvedByInspection.get(inspection.id) ?? [], inspection.equipmentId, inspection.id, inspection.data);
-  }
+  await drawPhotoEvidence(ctx, items);
 }
 
 async function generateIndividualPDF(entry: HistoryEntry, company: string, unit: string, equipment?: Equipment) {
@@ -619,8 +672,15 @@ async function generateIndividualPDF(entry: HistoryEntry, company: string, unit:
   drawSectionHeader(ctx, 5, 'Plano de Ação');
   drawEmptyState(ctx, 'Sem plano de ação vinculado a esta inspeção no momento da emissão.');
 
+  if (photos.length > 0) preparePhotoGridPage(ctx);
   drawSectionHeader(ctx, 6, 'Evidências Fotográficas');
-  await drawPhotoEvidence(ctx, photos, entry.equipId, entry.id, entry.dataISO);
+  await drawPhotoEvidence(ctx, photos.map((resolved) => ({
+    resolved,
+    equipmentId: entry.equipId,
+    inspectionDate: entry.dataISO,
+    location: [equipment?.setor, equipment?.local].filter(Boolean).join(' · ') || undefined,
+    result: reportResultLabel(entry.statusCode),
+  })));
 
   drawSectionHeader(ctx, 7, 'Conclusão');
   ensureSpace(ctx, 30);

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LocalInspectionPhoto } from '../../db';
-import { dedupeResolvedReportPhotos, fitReportImage, inspectionsForReportMonth, resolveInspectionPhotoBlob, sortInspectionPhotos, type ResolvedReportPhoto } from './reportPhotos';
+import { dedupeResolvedReportPhotos, fitReportImage, getPhotoGridCellLayout, getPhotoGridPosition, inspectionsForReportMonth, resolveInspectionPhotoBlob, sortInspectionPhotos, type ResolvedReportPhoto } from './reportPhotos';
 
 function photo(overrides: Partial<LocalInspectionPhoto> = {}): LocalInspectionPhoto {
   return {
@@ -13,6 +13,38 @@ function photo(overrides: Partial<LocalInspectionPhoto> = {}): LocalInspectionPh
 }
 
 describe('report photo resolution', () => {
+  it('maps four photos to a deterministic 2x2 page grid', () => {
+    expect([0, 1, 2, 3, 4, 8].map(getPhotoGridPosition)).toEqual([
+      { pageIndex: 0, row: 0, column: 0 },
+      { pageIndex: 0, row: 0, column: 1 },
+      { pageIndex: 0, row: 1, column: 0 },
+      { pageIndex: 0, row: 1, column: 1 },
+      { pageIndex: 1, row: 0, column: 0 },
+      { pageIndex: 2, row: 0, column: 0 },
+    ]);
+  });
+
+  it.each([
+    [1, [1]],
+    [2, [2]],
+    [3, [3]],
+    [4, [4]],
+    [5, [4, 1]],
+    [8, [4, 4]],
+    [9, [4, 4, 1]],
+  ])('places %i photos in deterministic page groups', (count, expected) => {
+    const groups = Array.from({ length: count }, (_, index) => getPhotoGridPosition(index).pageIndex)
+      .reduce<number[]>((result, pageIndex) => {
+        result[pageIndex] = (result[pageIndex] ?? 0) + 1;
+        return result;
+      }, []);
+    expect(groups).toEqual(expected);
+  });
+
+  it('allocates equal cells and reserves caption space', () => {
+    expect(getPhotoGridCellLayout(180, 240)).toEqual({ cellWidth: 87.5, cellHeight: 117.5, imageHeight: 86.95, gap: 5 });
+  });
+
   it('fits vertical and horizontal images without stretching or enlarging', () => {
     expect(fitReportImage(600, 1200, 180, 100)).toEqual({ width: 50, height: 100 });
     expect(fitReportImage(1200, 600, 180, 100)).toEqual({ width: 180, height: 90 });

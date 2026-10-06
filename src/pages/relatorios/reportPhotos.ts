@@ -7,6 +7,26 @@ export type ResolvedReportPhoto = {
   source: 'local-blob' | 'legacy-base64' | 'storage' | 'unavailable';
 };
 
+export type PhotoGridPosition = { pageIndex: number; row: 0 | 1; column: 0 | 1 };
+
+export type PhotoGridCellLayout = { cellWidth: number; cellHeight: number; imageHeight: number; gap: number };
+
+export function getPhotoGridPosition(index: number): PhotoGridPosition {
+  const pageIndex = Math.floor(index / 4);
+  const relativeIndex = index % 4;
+  return {
+    pageIndex,
+    row: relativeIndex < 2 ? 0 : 1,
+    column: relativeIndex % 2 === 0 ? 0 : 1,
+  };
+}
+
+export function getPhotoGridCellLayout(contentWidth: number, availableHeight: number, gap = 5): PhotoGridCellLayout {
+  const cellWidth = (contentWidth - gap) / 2;
+  const cellHeight = (availableHeight - gap) / 2;
+  return { cellWidth, cellHeight, imageHeight: cellHeight * 0.74, gap };
+}
+
 export function fitReportImage(width: number, height: number, maxWidth: number, maxHeight: number): { width: number; height: number } {
   const scale = Math.min(maxWidth / Math.max(width, 1), maxHeight / Math.max(height, 1), 1);
   return { width: width * scale, height: height * scale };
