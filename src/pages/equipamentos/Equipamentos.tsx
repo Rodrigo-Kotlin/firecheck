@@ -1,14 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { formatDateBR } from '../../utils/date';
-import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight, Trash2, AlertOctagon } from 'lucide-react';
+import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight, Trash2, AlertOctagon, LayoutGrid, List } from 'lucide-react';
 import { canEditEquipment, canDeleteEquipment } from '../../services/permissions';
 import { showToast } from '../../hooks/useToasts';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import { getDashboardGroupByView, getEquipmentDashboardGroups, getTodayYmd, isEquipmentDashboardView, type EquipmentDashboardView } from '../../utils/equipmentFilters';
 import { filterControlCenterData, getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
 import { getControlCenterEquipmentViewIds } from '../../utils/controlCenterDrilldown';
+import EquipmentList from '../../components/EquipmentList';
+import { DEADLINE_RESULT_META, OPERATIONAL_STATUS_LABEL, getEquipmentPresentation, getEquipmentStorage, persistEquipmentViewMode, readEquipmentViewMode, TECHNICAL_RESULT_META, type EquipmentViewMode } from '../../utils/equipmentView';
 
 const CATEGORIES = [
   { label: 'Tudo', filter: 'Tudo' },
@@ -50,6 +52,11 @@ export default function Equipamentos() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeChip, setActiveChip] = useState('Tudo');
+  const [viewMode, setViewMode] = useState<EquipmentViewMode>(() => readEquipmentViewMode(getEquipmentStorage()));
+
+  useEffect(() => {
+    persistEquipmentViewMode(getEquipmentStorage(), viewMode);
+  }, [viewMode]);
 
   const viewParam = searchParams.get('view');
   const view = isEquipmentDashboardView(viewParam) ? viewParam : null;
@@ -92,17 +99,11 @@ export default function Equipamentos() {
     return matchesSearch && matchesCategory;
   });
 
-  const STATUS_STYLES: Record<string, { border: string; pill: string; label: string }> = {
-    regular:       { border: 'border-l-success',  pill: 'bg-green-100 text-success',     label: 'Conforme' },
-    pendente:      { border: 'border-l-pending',  pill: 'bg-amber-100 text-pending',     label: 'Pendente' },
-    vencido:       { border: 'border-l-critical', pill: 'bg-red-100 text-critical',      label: 'Vencido' },
-    observacao:    { border: 'border-l-gray-300', pill: 'bg-gray-100 text-gray-500',     label: 'Observação' },
-    em_manutencao: { border: 'border-l-blue-500', pill: 'bg-blue-100 text-blue-600',     label: 'Em manutenção' },
-    inativo:       { border: 'border-l-gray-400', pill: 'bg-gray-200 text-gray-600',     label: 'Inativo' },
-    substituido:   { border: 'border-l-purple-500', pill: 'bg-purple-100 text-purple-600', label: 'Substituído' },
-    extraviado:    { border: 'border-l-red-500',  pill: 'bg-red-100 text-red-600',       label: 'Extraviado' },
-  };
-  const getStatusStyle = (status: string) => STATUS_STYLES[status] ?? STATUS_STYLES.observacao;
+  const todayYmd = getTodayYmd();
+  const presentations = useMemo(
+    () => new Map(filtered.map(eq => [eq.id, getEquipmentPresentation(eq, inspections, todayYmd)])),
+    [filtered, inspections, todayYmd],
+  );
 
   const hasActiveFilters = search.length > 0 || activeChip !== 'Tudo' || view !== null || ccView !== null || Boolean(controlCenterFilters.setor || controlCenterFilters.local || controlCenterFilters.tipo);
 
@@ -145,6 +146,8 @@ export default function Equipamentos() {
     deleteEquipment(deleteTarget);
     showToast({ kind: 'success', title: 'Equipamento excluído.' });
   };
+
+  const openEquipment = (id: string) => navigate(`/equipamentos/${encodeURIComponent(id)}`);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -205,6 +208,30 @@ export default function Equipamentos() {
         )}
       </div>
 
+      <div className="flex items-center justify-between gap-3">
+        <span className="label-uppercase">Visualização</span>
+        <div className="inline-flex items-center gap-1 p-1 bg-gray-100 border border-gray-200 rounded-lg" role="group" aria-label="Modo de visualização dos equipamentos">
+          <button
+            type="button"
+            aria-pressed={viewMode === 'cards'}
+            onClick={() => setViewMode('cards')}
+            className={`h-9 px-3 flex items-center gap-1.5 rounded-md text-xs font-bold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${viewMode === 'cards' ? 'bg-white text-primary shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}
+          >
+            <LayoutGrid className="w-4 h-4" aria-hidden="true" />
+            <span>Cards</span>
+          </button>
+          <button
+            type="button"
+            aria-pressed={viewMode === 'list'}
+            onClick={() => setViewMode('list')}
+            className={`h-9 px-3 flex items-center gap-1.5 rounded-md text-xs font-bold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${viewMode === 'list' ? 'bg-white text-primary shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}
+          >
+            <List className="w-4 h-4" aria-hidden="true" />
+            <span>Lista</span>
+          </button>
+        </div>
+      </div>
+
       {/* Filter Chips — scrollable on mobile, no overlays on top */}
       <div className="flex gap-2 overflow-x-auto overflow-y-hidden pb-2 -mx-4 sm:mx-0 px-4 sm:px-0 pr-5 sm:pr-0 scroll-px-4 scrollbar-none">
         {CATEGORIES.map((cat) => {
@@ -225,21 +252,26 @@ export default function Equipamentos() {
         })}
       </div>
 
-      {/* Equipment List */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-20">
-        {filtered.map((eq) => {
-          const lastInsp = inspections.find(i => i.equipmentId === eq.id);
-          const isExpiring = eq.status === 'vencido' || eq.status === 'pendente';
-          const editable = canEditEquipment(user, eq);
-          const deletable = canDeleteEquipment(user, eq);
-          const status = getStatusStyle(eq.status);
+      {/* Equipment presentation */}
+      {viewMode === 'list' ? (
+        <EquipmentList equipments={filtered} presentations={presentations} user={user} onOpen={openEquipment} onDelete={setDeleteTarget} />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-20">
+          {filtered.map((eq) => {
+            const presentation = presentations.get(eq.id);
+            if (!presentation) return null;
+            const editable = canEditEquipment(user, eq);
+            const deletable = canDeleteEquipment(user, eq);
+            const status = TECHNICAL_RESULT_META[presentation.technicalResult];
+            const deadline = DEADLINE_RESULT_META[presentation.deadlineResult];
+            const operationalLabel = OPERATIONAL_STATUS_LABEL[eq.status];
 
-          return (
-            <div
-              key={eq.id}
-              onClick={() => navigate(`/equipamentos/${eq.id}`)}
-              className={`card-subtle bg-white border-l-[3px] ${status.border} p-4 sm:p-5 flex flex-col gap-3 cursor-pointer active:scale-[0.99]`}
-            >
+            return (
+              <div
+                key={eq.id}
+                onClick={() => openEquipment(eq.id)}
+                className={`card-subtle bg-white border-l-[3px] ${status.border} p-4 sm:p-5 flex flex-col gap-3 cursor-pointer active:scale-[0.99]`}
+              >
               {/* Top: code (mono) + status pill + leitura + chevron */}
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
@@ -247,6 +279,7 @@ export default function Equipamentos() {
                     {eq.id}
                   </span>
                   <span className={`pill ${status.pill}`}>{status.label}</span>
+                  {operationalLabel && <span className="pill bg-gray-100 text-gray-500">{operationalLabel}</span>}
                   {(eq.syncConflict || eq.syncError === 'conflict') && (
                     <span
                       className="pill bg-red-100 text-critical border border-red-200"
@@ -310,61 +343,62 @@ export default function Equipamentos() {
               <div className="pt-2.5 border-t border-gray-50 space-y-1.5">
                 <div className="flex items-center gap-1.5 text-[11px] text-gray-500 font-medium">
                   <Calendar className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="truncate">Última: {lastInsp ? lastInsp.data : 'Nenhuma'}</span>
+                  <span className="truncate">Última: {presentation.latestInspection ? formatDateBR(presentation.latestInspection.data) : 'Nenhuma'}</span>
                 </div>
-                {isExpiring && eq.dataProximaInspecao && (
-                  <div className="flex items-center gap-1.5 text-[11px] text-critical font-bold uppercase tracking-wider">
+                {presentation.nextInspectionYmd && presentation.deadlineResult !== 'sem_prazo' && (
+                  <div className={`flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider ${presentation.deadlineResult === 'vencido' ? 'text-critical' : presentation.deadlineResult === 'proximo' ? 'text-pending' : 'text-gray-500'}`}>
                     <AlertCircle className="w-3.5 h-3.5" />
-                    <span>Próx: {formatDateBR(eq.dataProximaInspecao)}</span>
+                    <span>Próx: {formatDateBR(presentation.nextInspectionYmd)} · {deadline.label}</span>
                   </div>
                 )}
               </div>
-            </div>
-          );
-        })}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-        {filtered.length === 0 && (
-          <div className="col-span-full card-subtle bg-white text-center py-14 px-6 space-y-3">
-            <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mx-auto">
-              <Search className="w-6 h-6 text-gray-400" />
-            </div>
-            <div>
-              {view && baseList.length === 0 ? (
-                <>
-                  <p className="text-sm font-bold text-gray-700">{viewMeta?.emptyTitle}</p>
-                  <p className="text-xs text-gray-400 mt-1">{viewMeta?.emptyText}</p>
-                </>
-              ) : hasActiveFilters ? (
-                <>
-                  <p className="text-sm font-bold text-gray-700">Nenhum equipamento encontrado</p>
-                  <p className="text-xs text-gray-400 mt-1">Ajuste os filtros ou cadastre um novo equipamento.</p>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm font-bold text-gray-700">Nenhum equipamento cadastrado</p>
-                  <p className="text-xs text-gray-400 mt-1">Cadastre o primeiro equipamento para iniciar as inspeções.</p>
-                </>
-              )}
-            </div>
-            {view && baseList.length === 0 && (
-              <button
-                onClick={clearViewFilter}
-                className="btn-ghost btn-sm btn-auto mt-1"
-              >
-                Limpar filtro
-              </button>
-            )}
-            {hasActiveFilters && !(view && baseList.length === 0) && (
-              <button
-                onClick={clearFilters}
-                className="btn-ghost btn-sm btn-auto mt-1"
-              >
-                Limpar filtros
-              </button>
+      {filtered.length === 0 && (
+        <div className="card-subtle bg-white text-center py-14 px-6 space-y-3">
+          <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mx-auto">
+            <Search className="w-6 h-6 text-gray-400" />
+          </div>
+          <div>
+            {view && baseList.length === 0 ? (
+              <>
+                <p className="text-sm font-bold text-gray-700">{viewMeta?.emptyTitle}</p>
+                <p className="text-xs text-gray-400 mt-1">{viewMeta?.emptyText}</p>
+              </>
+            ) : hasActiveFilters ? (
+              <>
+                <p className="text-sm font-bold text-gray-700">Nenhum equipamento encontrado</p>
+                <p className="text-xs text-gray-400 mt-1">Ajuste os filtros ou cadastre um novo equipamento.</p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-bold text-gray-700">Nenhum equipamento cadastrado</p>
+                <p className="text-xs text-gray-400 mt-1">Cadastre o primeiro equipamento para iniciar as inspeções.</p>
+              </>
             )}
           </div>
-        )}
-      </div>
+          {view && baseList.length === 0 && (
+            <button
+              onClick={clearViewFilter}
+              className="btn-ghost btn-sm btn-auto mt-1"
+            >
+              Limpar filtro
+            </button>
+          )}
+          {hasActiveFilters && !(view && baseList.length === 0) && (
+            <button
+              onClick={clearFilters}
+              className="btn-ghost btn-sm btn-auto mt-1"
+            >
+              Limpar filtros
+            </button>
+          )}
+        </div>
+      )}
 
       {/* FAB "+" */}
       <button
