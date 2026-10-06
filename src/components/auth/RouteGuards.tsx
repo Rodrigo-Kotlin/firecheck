@@ -18,7 +18,7 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (!authReady) return <GuardLoading />;
   if (!user) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    return <Navigate to="/login" replace state={{ from: { pathname: location.pathname, search: location.search, hash: location.hash } }} />;
   }
   return <>{children}</>;
 }
@@ -26,9 +26,12 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 export function AdminRoute({ children }: { children: ReactNode }) {
   const authReady = useAppStore((state) => state.authReady);
   const user = useAppStore((state) => state.user);
+  const location = useLocation();
 
   if (!authReady) return <GuardLoading />;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: { pathname: location.pathname, search: location.search, hash: location.hash } }} />;
+  }
   if (!isAdmin(user)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }

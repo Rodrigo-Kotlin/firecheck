@@ -13,6 +13,7 @@ import InspectionsByPeriodChart from '../../components/charts/InspectionsByPerio
 import ActionPlansChart from '../../components/charts/ActionPlansChart';
 import SectorOccurrencesChart from '../../components/charts/SectorOccurrencesChart';
 import PeriodSelector from '../../components/charts/PeriodSelector';
+import { getPriorityEmptyStateCopy } from '../../utils/dashboardEmptyState';
 
 type PriorityItem = {
   id: string;
@@ -103,6 +104,7 @@ export default function Dashboard() {
     [equipments, inspections, actionPlans, filters],
   );
   const filteredView = hasControlCenterFilters(filters);
+  const priorityEmptyState = getPriorityEmptyStateCopy(filteredView);
 
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
@@ -403,10 +405,15 @@ export default function Dashboard() {
             <div className="w-12 h-12 bg-green-50 text-success rounded-full flex items-center justify-center">
               <ShieldCheck className="w-6 h-6" />
             </div>
-            <p className="text-sm font-bold text-gray-700">Nenhuma prioridade identificada</p>
-            <p className="text-xs text-gray-400 max-w-xs">
-              Todos os equipamentos operacionais estão em conformidade.
-            </p>
+             <p className="text-sm font-bold text-gray-700">{priorityEmptyState.title}</p>
+             <p className="text-xs text-gray-400 max-w-xs">
+               {priorityEmptyState.description}
+             </p>
+             {filteredView && (
+               <button type="button" onClick={clearControlCenterFilters} className="btn-ghost btn-sm btn-auto mt-1">
+                 Limpar filtros
+               </button>
+             )}
           </div>
         ) : (
           <div className="space-y-2">

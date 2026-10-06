@@ -8,6 +8,7 @@ import { usePwaUpdate } from './hooks/usePwaUpdate';
 import { useAppStore } from './store';
 import { AdminRoute, ProtectedRoute } from './components/auth/RouteGuards';
 import AppErrorBoundary from './components/ErrorBoundary';
+import NotFound from './pages/NotFound';
 
 const Login = lazy(() => import('./pages/login/Login'));
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'));
@@ -115,17 +116,18 @@ export default function App() {
             <Route path="planodeacao" element={<PlanoDeAcao />} />
             <Route path="planodeacao/:id" element={<PlanoDeAcaoDetalhe />} />
             <Route path="configuracoes" element={<Configuracoes />} />
-            <Route
+           <Route
               path="admin/usuarios"
               element={
                 <AdminRoute>
                   <AdminUsuarios />
                 </AdminRoute>
-              }
-            />
-          </Route>
+               }
+             />
+             <Route path="*" element={<NotFound />} />
+           </Route>
 
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
         <Toaster />

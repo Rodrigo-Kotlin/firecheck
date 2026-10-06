@@ -1,16 +1,19 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { Eye, EyeOff, LogIn } from 'lucide-react';
 import { showToast } from '../../hooks/useToasts';
 import { isAuthError } from '../../services/authService';
 import { isSupabaseConfigured } from '../../lib/supabase';
 import { APP_NAME } from '../../config/brand';
+import { getSafeReturnLocation } from '../../utils/navigation';
 
 const LAST_EMAIL_KEY = 'firecheck-last-email';
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnToRef = useRef(getSafeReturnLocation(location.state?.from));
   const user = useAppStore((s) => s.user);
   const authReady = useAppStore((s) => s.authReady);
   const authLoading = useAppStore((s) => s.authLoading);
@@ -26,7 +29,9 @@ export default function Login() {
 
   useEffect(() => {
     if (authReady && user) {
-      void navigate('/', { replace: true });
+      const destination = returnToRef.current ?? '/';
+      returnToRef.current = null;
+      void navigate(destination, { replace: true });
     }
   }, [authReady, user, navigate]);
 
@@ -62,7 +67,6 @@ export default function Login() {
       await login(email, password);
       localStorage.setItem(LAST_EMAIL_KEY, email.trim().toLowerCase());
       showToast({ kind: 'success', title: 'Bem-vindo de volta!' });
-      void navigate('/', { replace: true });
     } catch (err) {
       handleAuthError(err);
     } finally {

@@ -11,6 +11,7 @@ import { filterControlCenterData, getControlCenterFilterOptions, parseControlCen
 import { getControlCenterEquipmentViewIds } from '../../utils/controlCenterDrilldown';
 import EquipmentList from '../../components/EquipmentList';
 import { DEADLINE_RESULT_META, OPERATIONAL_STATUS_LABEL, getEquipmentPresentation, getEquipmentStorage, persistEquipmentViewMode, readEquipmentViewMode, TECHNICAL_RESULT_META, type EquipmentViewMode } from '../../utils/equipmentView';
+import { clearEquipmentFilterParams, hasEquipmentFilterParams } from '../../utils/equipmentNavigation';
 
 const CATEGORIES = [
   { label: 'Tudo', filter: 'Tudo' },
@@ -105,7 +106,16 @@ export default function Equipamentos() {
     [filtered, inspections, todayYmd],
   );
 
-  const hasActiveFilters = search.length > 0 || activeChip !== 'Tudo' || view !== null || ccView !== null || Boolean(controlCenterFilters.setor || controlCenterFilters.local || controlCenterFilters.tipo);
+  const hasActiveFilters = search.length > 0 || activeChip !== 'Tudo' || hasEquipmentFilterParams(searchParams);
+  const activeFilterSummary = [
+    search ? 'busca' : '',
+    activeChip !== 'Tudo' ? activeChip : '',
+    controlCenterFilters.tipo ? `tipo: ${controlCenterFilters.tipo}` : '',
+    controlCenterFilters.setor ? `setor: ${controlCenterFilters.setor}` : '',
+    controlCenterFilters.local ? `local: ${controlCenterFilters.local}` : '',
+    viewMeta?.title ?? '',
+    ccView ? 'Central de Controle' : '',
+  ].filter(Boolean).join(' · ');
 
   // Atualiza a URL preservando os demais parâmetros (ex.: `q` ao limpar `view`).
   const patchSearchParams = (changes: Record<string, string | null>) => {
@@ -126,12 +136,8 @@ export default function Equipamentos() {
     patchSearchParams({ q: value || null });
   };
 
-  const clearViewFilter = () => {
-    patchSearchParams({ view: null });
-  };
-
   const clearFilters = () => {
-    patchSearchParams({ view: null, ccView: null, sector: null, setor: null, local: null, tipo: null, q: null });
+    setSearchParams((prev) => clearEquipmentFilterParams(prev), { replace: true });
     setActiveChip('Tudo');
   };
 
@@ -159,18 +165,21 @@ export default function Equipamentos() {
             {view ? viewMeta?.title : ccView ? 'Visão da Central de Controle' : 'Inventário de Dispositivos'}
           </h1>
           <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">
-            {filtered.length} de {baseList.length} {baseList.length === 1 ? 'item' : 'itens'}
+             {filtered.length} de {baseList.length} {baseList.length === 1 ? 'item' : 'itens'}
           </p>
         </div>
         {hasActiveFilters && (
-          <button
-            type="button"
-            onClick={clearViewFilter}
-            className="h-10 px-3 flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 whitespace-nowrap min-h-0 min-w-0"
-            aria-label="Limpar filtro de visão"
-          >
-            Limpar filtros
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="hidden sm:inline text-[11px] text-gray-400" role="status">Filtro ativo: {activeFilterSummary}</span>
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="h-10 px-3 flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 whitespace-nowrap min-h-0 min-w-0"
+              aria-label="Limpar todos os filtros"
+            >
+              Limpar filtros
+            </button>
+          </div>
         )}
         <button
           onClick={() => navigate('/scan')}
@@ -384,7 +393,7 @@ export default function Equipamentos() {
           </div>
           {view && baseList.length === 0 && (
             <button
-              onClick={clearViewFilter}
+               onClick={clearFilters}
               className="btn-ghost btn-sm btn-auto mt-1"
             >
               Limpar filtro

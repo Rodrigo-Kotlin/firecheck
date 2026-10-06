@@ -11,6 +11,7 @@ import { SyncStatusBadge } from './SyncStatusBadge';
 import { BottomNav } from './BottomNav';
 import { Sidebar } from './Sidebar';
 import { APP_NAME } from '../../config/brand';
+import { getAppTitle } from '../../utils/appTitle';
 
 export default function AppLayout() {
   useAutoSync();
@@ -91,16 +92,7 @@ export default function AppLayout() {
     void triggerSync();
   };
 
-  const currentTitle = location.pathname === '/qrcodes' ? 'QR Codes'
-    : location.pathname === '/planodeacao' ? 'Plano de Ação'
-    : location.pathname === '/admin/usuarios' ? 'Usuários'
-    : location.pathname === '/configuracoes' ? 'Configurações'
-    : location.pathname === '/simulador' ? 'Simulador'
-    : location.pathname === '/' ? 'Dashboard'
-    : location.pathname === '/equipamentos' || location.pathname.startsWith('/equipamentos/') ? 'Equipamentos'
-    : location.pathname === '/inspecionar' ? 'Inspecionar'
-    : location.pathname === '/scan' ? 'Escanear QR'
-    : APP_NAME;
+  const currentTitle = getAppTitle(location.pathname);
   const initials = user?.nome
     ? user.nome.split(' ').slice(0, 2).map(name => name[0]).join('').toUpperCase()
     : 'EF';

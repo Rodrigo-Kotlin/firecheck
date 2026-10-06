@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { AdminRoute } from './RouteGuards';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { AdminRoute, ProtectedRoute } from './RouteGuards';
 
 let currentUser: { id: string; nome: string; cargo: string; role: 'admin' | 'inspector' } | null = null;
 
@@ -40,3 +40,24 @@ describe('AdminRoute', () => {
     expect(screen.getByText('segredo administrativo')).toBeTruthy();
   });
 });
+
+describe('ProtectedRoute', () => {
+  it('preserves the protected destination including query and hash', () => {
+    currentUser = null;
+    render(
+      <MemoryRouter initialEntries={['/equipamentos?ccView=attention#lista']}>
+        <Routes>
+          <Route path="/equipamentos" element={<ProtectedRoute><span>equipamentos</span></ProtectedRoute>} />
+          <Route path="/login" element={<LoginDestination />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('/equipamentos?ccView=attention#lista')).toBeTruthy();
+  });
+});
+
+function LoginDestination() {
+  const location = useLocation();
+  const from = location.state?.from;
+  return <span>{`${from.pathname}${from.search}${from.hash}`}</span>;
+}
