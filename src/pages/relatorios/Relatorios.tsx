@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { FileText, ChevronDown, ShieldCheck, AlertOctagon, ClipboardList, Trash2 } from 'lucide-react';
@@ -12,7 +12,8 @@ import { APP_NAME } from '../../config/brand';
 import { buildHistoryEntries, filterHistoryEntries, scopeReportData } from './reportData';
 import { getHistoryStatusFromQuery, HISTORY_STATUS_BADGE, type HistoryEntry, type HistoryStatus } from './reportTypes';
 import { individualReportFilename, monthlyReportFilename } from './reportFileNames';
-import { formatDateBR, getLocalDateISO } from '../../utils/date';
+import { formatDateBR, formatDateTimeBR, getLocalDateISO } from '../../utils/date';
+import { fitReportImage, inspectionsForReportMonth, resolveInspectionPhotos, resolveInspectionPhotosForInspections, type ResolvedReportPhoto } from './reportPhotos';
 
 const PDF_COLORS = {
   primary: [11, 107, 58] as [number, number, number],
@@ -211,6 +212,19 @@ function drawSectionHeader(ctx: DrawCtx, num: number, title: string) {
   ctx.y += 7;
 }
 
+function drawSubsectionHeader(ctx: DrawCtx, title: string) {
+  ensureSpace(ctx, 12);
+  ctx.doc.setFont('helvetica', 'bold');
+  ctx.doc.setFontSize(9);
+  ctx.doc.setTextColor(...PDF_COLORS.primaryDark);
+  ctx.doc.text(title.toUpperCase(), PDF_MARGIN, ctx.y);
+  ctx.y += 5;
+  ctx.doc.setDrawColor(...PDF_COLORS.border);
+  ctx.doc.setLineWidth(0.2);
+  ctx.doc.line(PDF_MARGIN, ctx.y, PDF_PAGE.w - PDF_MARGIN, ctx.y);
+  ctx.y += 5;
+}
+
 function drawKVGrid(ctx: DrawCtx, items: Array<[string, string]>, cols: 2 | 3 = 2) {
   const colW = PDF_CONTENT_W / cols;
   const rowH = 13;
@@ -349,9 +363,165 @@ function drawStatusPill(ctx: DrawCtx, x: number, y: number, label: string, color
   return w;
 }
 
-function generateIndividualPDF(entry: HistoryEntry, company: string, unit: string, equipment?: Equipment) {
+type PdfImage = { dataUrl: string; width: number; height: number };
+
+async function blobToPdfImage(blob: Blob, hintedWidth?: number, hintedHeight?: number): Promise<PdfImage> {
+  const maxSide = 1200;
+  let bitmap: ImageBitmap | null = null;
+  let objectUrl: string | null = null;
+
+  try {
+    if (typeof createImageBitmap === 'function') {
+      bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const canvasContext = canvas.getContext('2d');
+      if (!canvasContext) throw new Error('Canvas indisponível para preparar evidência.');
+      canvasContext.drawImage(bitmap, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      canvas.width = 1;
+      canvas.height = 1;
+      return { dataUrl, width, height };
+    }
+
+    if (typeof Image !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+      objectUrl = URL.createObjectURL(blob);
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const element = new Image();
+        element.onload = () => resolve(element);
+        element.onerror = () => reject(new Error('Imagem não pôde ser decodificada.'));
+        element.src = objectUrl!;
+      });
+      const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const canvasContext = canvas.getContext('2d');
+      if (!canvasContext) throw new Error('Canvas indisponível para preparar evidência.');
+      canvasContext.drawImage(image, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      canvas.width = 1;
+      canvas.height = 1;
+      return { dataUrl, width, height };
+    }
+
+    const reader = new FileReader();
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error('Imagem não pôde ser lida.'));
+      reader.readAsDataURL(blob);
+    });
+    return { dataUrl, width: hintedWidth ?? 4, height: hintedHeight ?? 3 };
+  } finally {
+    if (bitmap) bitmap.close();
+    if (objectUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+}
+
+function drawPhotoUnavailable(ctx: DrawCtx) {
+  ensureSpace(ctx, 13);
+  ctx.doc.setFillColor(...PDF_COLORS.bgLight);
+  ctx.doc.setDrawColor(...PDF_COLORS.border);
+  ctx.doc.roundedRect(PDF_MARGIN, ctx.y, PDF_CONTENT_W, 10, 1.5, 1.5, 'FD');
+  ctx.doc.setFont('helvetica', 'italic');
+  ctx.doc.setFontSize(8);
+  ctx.doc.setTextColor(...PDF_COLORS.textSubtle);
+  ctx.doc.text('Evidência fotográfica indisponível no momento da geração do relatório.', PDF_MARGIN + 5, ctx.y + 6.5);
+  ctx.y += 14;
+}
+
+async function drawPhotoEvidence(
+  ctx: DrawCtx,
+  resolvedPhotos: ResolvedReportPhoto[],
+  equipmentId: string,
+  inspectionId: string,
+  inspectionDate: string,
+) {
+  if (resolvedPhotos.length === 0) {
+    drawEmptyState(ctx, 'Não há evidência fotográfica registrada para esta inspeção.');
+    return;
+  }
+
+  for (const [index, resolved] of resolvedPhotos.entries()) {
+    if (!resolved.blob) {
+      drawPhotoUnavailable(ctx);
+      continue;
+    }
+
+    try {
+      const image = await blobToPdfImage(resolved.blob, resolved.photo.width, resolved.photo.height);
+      const maxW = PDF_CONTENT_W;
+      const maxH = 100;
+      const { width, height } = fitReportImage(image.width, image.height, maxW, maxH);
+      ensureSpace(ctx, height + 18);
+      ctx.doc.addImage(image.dataUrl, 'JPEG', PDF_MARGIN, ctx.y, width, height, undefined, 'MEDIUM');
+      ctx.y += height + 4;
+      ctx.doc.setFont('helvetica', 'bold');
+      ctx.doc.setFontSize(7.5);
+      ctx.doc.setTextColor(...PDF_COLORS.text);
+      ctx.doc.text(`Evidência fotográfica ${index + 1}`, PDF_MARGIN, ctx.y);
+      ctx.doc.setFont('helvetica', 'normal');
+      ctx.doc.setTextColor(...PDF_COLORS.textMuted);
+      ctx.doc.setFontSize(7);
+      const formattedTimestamp = resolved.photo.createdAt ? formatDateTimeBR(resolved.photo.createdAt) : '';
+      const timestamp = formattedTimestamp && formattedTimestamp !== '—' ? ` · ${formattedTimestamp}` : '';
+      ctx.doc.text(`Equipamento: ${equipmentId} · Inspeção ${inspectionId}: ${formatDateBR(inspectionDate)}${timestamp}`, PDF_MARGIN, ctx.y + 4);
+      ctx.y += 11;
+    } catch (error) {
+      console.error('[reports.photo]', resolved.photo.id, error);
+      drawPhotoUnavailable(ctx);
+    }
+  }
+}
+
+async function drawMonthlyPhotoAppendix(
+  ctx: DrawCtx,
+  inspections: Inspection[],
+  equipments: Equipment[],
+  monthKey: string,
+) {
+  const periodInspections = inspectionsForReportMonth(inspections, monthKey);
+  const resolvedByInspection = await resolveInspectionPhotosForInspections(periodInspections);
+  const entries = periodInspections.filter((inspection) => resolvedByInspection.has(inspection.id));
+  const photoCount = entries.reduce((total, inspection) => total + (resolvedByInspection.get(inspection.id)?.length ?? 0), 0);
+
+  if (entries.length === 0) {
+    drawEmptyState(ctx, 'Nenhuma evidência fotográfica registrada no período.');
+    return;
+  }
+
+  ensureSpace(ctx, 12);
+  ctx.doc.setFont('helvetica', 'bold');
+  ctx.doc.setFontSize(8);
+  ctx.doc.setTextColor(...PDF_COLORS.textMuted);
+  ctx.doc.text(`Evidências fotográficas: ${photoCount} foto(s) em ${entries.length} inspeção(ões).`, PDF_MARGIN, ctx.y);
+  ctx.y += 8;
+
+  for (const inspection of entries) {
+    const equipment = equipments.find((item) => item.id === inspection.equipmentId);
+    drawSubsectionHeader(ctx, `Equipamento ${inspection.equipmentId}`);
+    drawKVGrid(ctx, [
+      ['Tag / Identificação', inspection.equipmentId],
+      ['Setor / Local', `${equipment?.setor ?? '—'} / ${equipment?.local ?? '—'}`],
+      ['Inspeção', formatDateBR(inspection.data)],
+      ['Resultado', inspection.status.toUpperCase()],
+    ], 2);
+    await drawPhotoEvidence(ctx, resolvedByInspection.get(inspection.id) ?? [], inspection.equipmentId, inspection.id, inspection.data);
+  }
+}
+
+async function generateIndividualPDF(entry: HistoryEntry, company: string, unit: string, equipment?: Equipment) {
   const doc = new jsPDF();
   const ctx = makeCtx(doc, entry.id, company, unit);
+  const photos = await resolveInspectionPhotos(entry.id);
 
   drawCover(ctx, {
     reportType: 'Relatório de Inspeção',
@@ -450,7 +620,7 @@ function generateIndividualPDF(entry: HistoryEntry, company: string, unit: strin
   drawEmptyState(ctx, 'Sem plano de ação vinculado a esta inspeção no momento da emissão.');
 
   drawSectionHeader(ctx, 6, 'Evidências Fotográficas');
-  drawEmptyState(ctx, 'Nenhuma evidência fotográfica anexada a este relatório.');
+  await drawPhotoEvidence(ctx, photos, entry.equipId, entry.id, entry.dataISO);
 
   drawSectionHeader(ctx, 7, 'Conclusão');
   ensureSpace(ctx, 30);
@@ -512,7 +682,7 @@ function generateIndividualPDF(entry: HistoryEntry, company: string, unit: strin
   doc.save(individualReportFilename(entry.equipId, entry.id));
 }
 
-function generateMonthlyPDF(
+async function generateMonthlyPDF(
   stats: Stats,
   inspections: Inspection[],
   equipments: Equipment[],
@@ -634,10 +804,7 @@ function generateMonthlyPDF(
     );
   }
 
-  drawSectionHeader(ctx, 6, 'Evidências Fotográficas');
-  drawEmptyState(ctx, 'Nenhuma evidência fotográfica agregada no relatório mensal.');
-
-  drawSectionHeader(ctx, 7, 'Conclusão');
+  drawSectionHeader(ctx, 6, 'Conclusão');
   ensureSpace(ctx, 36);
 
   const conclH = 28;
@@ -689,6 +856,9 @@ function generateMonthlyPDF(
     ctx.y += wrapped.length * 4 + 1;
   });
 
+  drawSectionHeader(ctx, 7, 'Evidências Fotográficas do Período');
+  await drawMonthlyPhotoAppendix(ctx, inspections, equipments, getLocalDateISO(now).slice(0, 7));
+
   drawFooter(ctx);
   doc.save(monthlyReportFilename(now.getMonth() + 1, now.getFullYear()));
 }
@@ -712,6 +882,8 @@ export default function Relatorios() {
   });
   const [visibleCount, setVisibleCount] = useState(4);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const reportGenerationLock = useRef(false);
 
   const urlStatusFilter = searchParams.has('status') ? getHistoryStatusFromQuery(searchParams.get('status')) : statusFilter;
 
@@ -756,9 +928,29 @@ export default function Relatorios() {
     showToast({ kind: 'success', title: 'Relatório excluído.' });
   };
 
+  const runReportGeneration = async (generate: () => Promise<void>) => {
+    if (reportGenerationLock.current) return;
+    reportGenerationLock.current = true;
+    setIsGeneratingReport(true);
+    try {
+      await generate();
+      showToast({ kind: 'success', title: 'Relatório gerado.' });
+    } catch (error) {
+      console.error('[reports.generate]', error);
+      showToast({ kind: 'error', title: 'Erro ao gerar relatório.', description: 'O relatório não pôde ser concluído.' });
+    } finally {
+      reportGenerationLock.current = false;
+      setIsGeneratingReport(false);
+    }
+  };
+
   const handleIndividualPDF = (h: HistoryEntry) => {
     const eq = equipments.find(e => e.id === h.equipId);
-    generateIndividualPDF(h, config.empresa, config.unidade, eq);
+    void runReportGeneration(() => generateIndividualPDF(h, config.empresa, config.unidade, eq));
+  };
+
+  const handleMonthlyPDF = () => {
+    void runReportGeneration(() => generateMonthlyPDF(stats, inspections, equipments, config.empresa, config.unidade));
   };
 
   return (
@@ -772,12 +964,13 @@ export default function Relatorios() {
           </h1>
         </div>
         <button
-          onClick={() => generateMonthlyPDF(stats, inspections, equipments, config.empresa, config.unidade)}
+          onClick={handleMonthlyPDF}
           className="btn-primary btn-sm btn-auto"
+          disabled={isGeneratingReport}
           type="button"
         >
           <FileText className="w-4 h-4" />
-          <span className="hidden sm:inline">Relatório</span> Mensal
+          {isGeneratingReport ? 'Gerando...' : <><span className="hidden sm:inline">Relatório</span> Mensal</>}
         </button>
       </header>
 
@@ -951,7 +1144,8 @@ export default function Relatorios() {
                   </div>
                   <button
                     onClick={() => handleIndividualPDF(h)}
-                    className="w-10 h-10 flex items-center justify-center bg-gray-50 border border-gray-100 hover:bg-red-50 hover:border-primary rounded-lg transition-all min-h-0 min-w-0"
+                    className="w-10 h-10 flex items-center justify-center bg-gray-50 border border-gray-100 hover:bg-red-50 hover:border-primary rounded-lg transition-all min-h-0 min-w-0 disabled:opacity-50"
+                    disabled={isGeneratingReport}
                     title="Gerar PDF"
                     aria-label="Gerar PDF do relatório"
                     type="button"
