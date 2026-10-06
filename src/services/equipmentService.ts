@@ -15,6 +15,7 @@ import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
 import { isNetworkUnavailableError } from '../utils/network';
 import { canAttemptNetwork } from './networkState';
 import { fetchAllPages } from './pagination';
+import { assertOperationalWriteAllowed } from '../runtime/writeFence';
 
 const isDev = import.meta.env.DEV;
 
@@ -111,6 +112,7 @@ export async function fetchEquipmentById(id: string): Promise<ServiceResult> {
 }
 
 export async function createEquipmentRemote(eq: Equipment): Promise<ServiceResult> {
+  assertOperationalWriteAllowed('createEquipmentRemote');
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
@@ -144,6 +146,7 @@ export async function createEquipmentRemote(eq: Equipment): Promise<ServiceResul
 }
 
 export async function updateEquipmentRemote(eq: Equipment): Promise<ServiceResult> {
+  assertOperationalWriteAllowed('updateEquipmentRemote');
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
@@ -204,6 +207,7 @@ export async function upsertEquipment(eq: Equipment): Promise<boolean> {
 }
 
 export async function deleteEquipment(id: string): Promise<boolean> {
+  assertOperationalWriteAllowed('deleteEquipment');
   if (!isSupabaseConfigured || !supabase) {
     notConfigured<boolean>('deleteEquipment');
     return false;
@@ -229,6 +233,7 @@ export async function deleteEquipment(id: string): Promise<boolean> {
  *  skip rows the caller cannot modify). Falls back to the SECURITY DEFINER RPC
  *  `soft_delete_equipment` when the UPDATE matches 0 rows. */
 export async function softDeleteEquipment(id: string, userId?: string): Promise<ServiceResult> {
+  assertOperationalWriteAllowed('softDeleteEquipment');
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.' };
   }
@@ -303,6 +308,7 @@ export async function applyEquipmentInspectionStatusRemote(
   inspectionDate?: string,
   nextInspectionDate?: string,
 ): Promise<ServiceResult> {
+  assertOperationalWriteAllowed('applyEquipmentInspectionStatusRemote');
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.' };
   }

@@ -26,6 +26,7 @@ const PlanoDeAcaoDetalhe = lazy(() => import('./pages/planodeacao/PlanoDeAcaoDet
 const Configuracoes = lazy(() => import('./pages/configuracoes/Configuracoes'));
 const AdminUsuarios = lazy(() => import('./pages/admin/AdminUsuarios'));
 const Relatorios = lazy(() => import('./pages/relatorios/Relatorios'));
+const Simulador = lazy(() => import('./pages/simulador/Simulador'));
 
 function LoadingSpinner() {
   return (
@@ -82,6 +83,8 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+
+          <Route path="/simulador" element={<AdminRoute><Simulador /></AdminRoute>} />
 
           <Route
             path="/"

@@ -93,6 +93,7 @@ export default function AppLayout() {
     : location.pathname === '/planodeacao' ? 'Plano de Ação'
     : location.pathname === '/admin/usuarios' ? 'Usuários'
     : location.pathname === '/configuracoes' ? 'Configurações'
+    : location.pathname === '/simulador' ? 'Simulador'
     : location.pathname === '/' ? 'Dashboard'
     : location.pathname === '/equipamentos' || location.pathname.startsWith('/equipamentos/') ? 'Equipamentos'
     : location.pathname === '/inspecionar' ? 'Inspecionar'

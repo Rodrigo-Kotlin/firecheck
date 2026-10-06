@@ -46,6 +46,7 @@ import {
   stripActionPlanItemSyncMeta,
 } from './mappers';
 import { getInspectionPhotoBlob, mimeToExtension, uploadInspectionPhotoBlob, removeInspectionPhotoObject } from './photoService';
+import { assertOperationalWriteAllowed } from '../runtime/writeFence';
 import type { Equipment } from '../types';
 import { syncEquipmentQrFields } from '../utils/equipmentIdentity';
 import { isNetworkUnavailableError } from '../utils/network';
@@ -1486,6 +1487,7 @@ async function pullInspectionPhotos(): Promise<PullResult> {
 export async function syncAll(
   options: SyncOptions = {},
 ): Promise<SyncReport> {
+  assertOperationalWriteAllowed('syncAll');
   if (_syncInProgress) {
     if (import.meta.env.DEV) console.log('[sync] sync já em andamento — ignorando chamada concorrente');
     return skip('sync-in-progress');

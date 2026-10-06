@@ -15,6 +15,7 @@ import type { FetchResult, ServiceResult } from './equipmentService';
 import { isNetworkUnavailableError } from '../utils/network';
 import { canAttemptNetwork } from './networkState';
 import { fetchAllPages } from './pagination';
+import { assertOperationalWriteAllowed } from '../runtime/writeFence';
 
 const isDev = import.meta.env.DEV;
 
@@ -39,6 +40,7 @@ export async function fetchActionPlans(): Promise<FetchResult<ActionPlan>> {
 }
 
 export async function createActionPlanRemote(plan: ActionPlan): Promise<ServiceResult> {
+  assertOperationalWriteAllowed('createActionPlanRemote');
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
@@ -72,6 +74,7 @@ export async function createActionPlanRemote(plan: ActionPlan): Promise<ServiceR
 }
 
 export async function updateActionPlanRemote(plan: ActionPlan): Promise<ServiceResult> {
+  assertOperationalWriteAllowed('updateActionPlanRemote');
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
@@ -124,6 +127,7 @@ export async function fetchActionPlanById(id: string): Promise<ServiceResult<Act
 }
 
 export async function softDeleteActionPlanRemote(id: string, userId?: string): Promise<ServiceResult> {
+  assertOperationalWriteAllowed('softDeleteActionPlanRemote');
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
@@ -170,6 +174,7 @@ export async function fetchActionPlanItems(): Promise<FetchResult<ActionPlanItem
 }
 
 export async function upsertActionPlanItemRemote(item: ActionPlanItem): Promise<ServiceResult> {
+  assertOperationalWriteAllowed('upsertActionPlanItemRemote');
   if (!isSupabaseConfigured || !supabase) return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   const { error } = await supabase.from('planos_acao_itens').upsert(actionPlanItemToDb(item), { onConflict: 'id' });
   if (error) return { ok: false, code: isNetworkUnavailableError(error) ? 'network' : 'unknown', message: error.message, network: isNetworkUnavailableError(error) };
@@ -177,6 +182,7 @@ export async function upsertActionPlanItemRemote(item: ActionPlanItem): Promise<
 }
 
 export async function softDeleteActionPlanItemRemote(item: ActionPlanItem, userId?: string): Promise<ServiceResult> {
+  assertOperationalWriteAllowed('softDeleteActionPlanItemRemote');
   if (!isSupabaseConfigured || !supabase) return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   const payload = actionPlanItemToDb({ ...item, deletedAt: new Date().toISOString(), deletedBy: userId ?? null });
   const { error } = await supabase.from('planos_acao_itens').update(payload).eq('id', item.id);

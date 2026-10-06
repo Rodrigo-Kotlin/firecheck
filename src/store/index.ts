@@ -18,6 +18,7 @@ import { migratePersistedActionPlansToDexie } from './actionPlanMigration';
 import { loadPlansFromDexie, loadPlanItemsFromDexie } from './loaders';
 import { shouldCreateLegacyInspectionPlan } from '../services/actionPlanIdentity';
 import { buildActionPlanItemId, buildConsolidatedActionPlanId, deriveActionPlanStatus, nextActionPlanDeadline } from '../services/actionPlanItems';
+import { assertOperationalWriteAllowed } from '../runtime/writeFence';
 import { canStartOperationalSync } from '../services/syncPolicy';
 import { getLocalDateISO } from '../utils/date';
 import {
@@ -551,6 +552,7 @@ export const useAppStore = create<AppState>()(
         // Mutations
         // -----------------------------------------------------------------
         addEquipment: async (newEq): Promise<EquipmentResult> => {
+          assertOperationalWriteAllowed('addEquipment');
           const now = new Date().toISOString();
           const stamped: Equipment = {
             ...newEq,
@@ -621,6 +623,7 @@ export const useAppStore = create<AppState>()(
         },
 
         updateEquipment: async (id, updates): Promise<EquipmentResult> => {
+          assertOperationalWriteAllowed('updateEquipment');
           const current = get().equipments.find((e) => e.id === id);
           if (!current) {
             return { ok: false, mode: 'local', message: 'Equipamento não encontrado.' };
@@ -689,6 +692,7 @@ export const useAppStore = create<AppState>()(
         },
 
         updateInspection: async (id, updates): Promise<InspectionSaveResult> => {
+          assertOperationalWriteAllowed('updateInspection');
           // Inspeções compartilhadas: admin ou inspetor podem editar qualquer uma.
           if (!canEditInspection(get().user, {})) {
             return { ok: false, mode: 'local', message: 'Sem permissão para editar inspeções.' };
@@ -924,6 +928,7 @@ export const useAppStore = create<AppState>()(
         },
 
         deleteEquipment: (id) => {
+          assertOperationalWriteAllowed('deleteEquipment');
           const userId = get().user?.id;
           const now = new Date().toISOString();
           set((state) => {
@@ -946,6 +951,7 @@ export const useAppStore = create<AppState>()(
         },
 
         deleteInspection: async (id) => {
+          assertOperationalWriteAllowed('deleteInspection');
           // Guarda de permissão: somente ADMIN pode excluir inspeções.
           if (!canDeleteInspection(get().user, { userId: get().inspections.find((i) => i.id === id)?.userId })) {
             console.warn('[store.deleteInspection] Sem permissão para excluir inspeção — admin apenas.');
@@ -973,6 +979,7 @@ export const useAppStore = create<AppState>()(
         },
 
         addInspection: async (data) => {
+          assertOperationalWriteAllowed('addInspection');
           const inspectionId = data.inspectionId;
           // A pending mutation is always owned by the authenticated session,
           // never by a caller-supplied identity from cached/UI data.
@@ -1215,6 +1222,7 @@ export const useAppStore = create<AppState>()(
         },
 
         addActionPlan: async (plan) => {
+          assertOperationalWriteAllowed('addActionPlan');
           const now = new Date().toISOString();
           const id = `PAC-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           const newPlan: ActionPlan = {
@@ -1249,6 +1257,7 @@ export const useAppStore = create<AppState>()(
         },
 
         updateActionPlan: (id, updates) => {
+          assertOperationalWriteAllowed('updateActionPlan');
           const now = new Date().toISOString();
           void db.planosAcao.update(id, {
             ...updates,
@@ -1267,6 +1276,7 @@ export const useAppStore = create<AppState>()(
         },
 
         updateActionPlanItem: (id, updates) => {
+          assertOperationalWriteAllowed('updateActionPlanItem');
           const now = new Date().toISOString();
           void (async () => {
             const item = await db.planosAcaoItens.get(id);
@@ -1307,6 +1317,7 @@ export const useAppStore = create<AppState>()(
         },
 
         deleteActionPlan: (id) => {
+          assertOperationalWriteAllowed('deleteActionPlan');
           const now = new Date().toISOString();
           void db.planosAcao.get(id).then((plan) => {
             if (!plan) return;

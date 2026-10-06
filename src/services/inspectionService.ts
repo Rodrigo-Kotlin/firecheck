@@ -13,6 +13,7 @@ import type { FetchResult, ServiceResult } from './equipmentService';
 import { isNetworkUnavailableError } from '../utils/network';
 import { canAttemptNetwork } from './networkState';
 import { fetchAllPages } from './pagination';
+import { assertOperationalWriteAllowed } from '../runtime/writeFence';
 
 const isDev = import.meta.env.DEV;
 
@@ -82,6 +83,7 @@ async function fetchInspectionRowById(
 export async function upsertInspection(
   insp: Inspection,
 ): Promise<{ ok: boolean; row?: DbInspecao; message?: string; network?: boolean }> {
+  assertOperationalWriteAllowed('upsertInspection');
   if (!isSupabaseConfigured || !supabase) {
     console.warn('[inspection.upsert] Supabase não configurado — ignorando.');
     return { ok: false, message: 'Supabase não configurado.', network: false };
@@ -159,6 +161,7 @@ export type InspectionUpdateResult =
 export async function updateInspectionRemote(
   input: UpdateInspectionRemoteInput,
 ): Promise<InspectionUpdateResult> {
+  assertOperationalWriteAllowed('updateInspectionRemote');
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }
@@ -256,6 +259,7 @@ export async function recalculateEquipmentFromLatestInspectionRemote(
   nextInspectionDate?: string,
   triggerInspectionId?: string,
 ): Promise<ServiceResult<Record<string, unknown>>> {
+  assertOperationalWriteAllowed('recalculateEquipmentFromLatestInspectionRemote');
   if (!isSupabaseConfigured || !supabase) {
     return { ok: false, code: 'network', message: 'Supabase não configurado.', network: false };
   }

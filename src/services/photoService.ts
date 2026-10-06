@@ -13,6 +13,7 @@
  */
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { isNetworkUnavailableError } from '../utils/network';
+import { assertOperationalWriteAllowed } from '../runtime/writeFence';
 
 export const PHOTO_BUCKET = 'inspection-photos';
 
@@ -413,6 +414,7 @@ export async function uploadInspectionPhotoBlob(
   path: string,
   blob: Blob,
 ): Promise<{ ok: boolean; path?: string; error?: { message?: string; code?: string }; network?: boolean }> {
+  assertOperationalWriteAllowed('uploadInspectionPhotoBlob');
   if (!isSupabaseConfigured || !supabase) {
     console.warn('[photo.upload] Supabase não configurado — foto permanece local.');
     return { ok: false, error: { message: 'Supabase não configurado.' }, network: false };
@@ -438,6 +440,7 @@ export async function uploadInspectionPhotoBlob(
 
 /** Delete a storage object (best-effort). */
 export async function removeInspectionPhotoObject(path: string): Promise<void> {
+  assertOperationalWriteAllowed('removeInspectionPhotoObject');
   if (!isSupabaseConfigured || !supabase) return;
   try {
     await supabase.storage.from(PHOTO_BUCKET).remove([path]);

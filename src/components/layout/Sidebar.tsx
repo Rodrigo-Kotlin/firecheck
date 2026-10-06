@@ -2,7 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Shield, QrCode, FileBarChart, X,
   ClipboardList, Settings, LogOut,
-  CloudOff, Users, AlertOctagon,
+  CloudOff, Users, AlertOctagon, GraduationCap,
 } from 'lucide-react';
 import { useAppStore } from '../../store';
 import { isAdmin } from '../../services/permissions';
@@ -81,6 +81,7 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
     { label: 'Plano de Ação', icon: ClipboardList, path: '/planodeacao' },
     { label: 'Configurações', icon: Settings, path: '/configuracoes' },
     ...(isAdmin(user) ? [{ label: 'Usuários', icon: Users, path: '/admin/usuarios' }] : []),
+    ...(isAdmin(user) ? [{ label: 'Simulador', icon: GraduationCap, path: '/simulador' }] : []),
   ];
 
   return (
