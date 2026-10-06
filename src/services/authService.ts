@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { AuthError as SupabaseAuthError, Session } from '@supabase/supabase-js';
 import type { Inspector, UserProfile } from '../types';
 import { canAttemptNetwork } from './networkState';
+import { assertOperationalWriteAllowed } from '../runtime/writeFence';
 
 // ---------------------------------------------------------------------------
 // Autenticação via Supabase Auth + tabela `public.profiles`.
@@ -344,6 +345,7 @@ export async function setUserRole(
   id: string,
   role: 'admin' | 'inspector',
 ): Promise<void> {
+  assertOperationalWriteAllowed('setUserRole');
   if (!supabase) {
     throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
   }
@@ -352,6 +354,7 @@ export async function setUserRole(
 }
 
 export async function deleteUser(id: string): Promise<void> {
+  assertOperationalWriteAllowed('deleteUser');
   if (!supabase) {
     throw authError('NOT_CONFIGURED', 'Supabase não está configurado neste ambiente.');
   }

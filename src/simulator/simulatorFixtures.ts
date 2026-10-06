@@ -50,4 +50,20 @@ export const SIMULATOR_EQUIPMENT_FIXTURES: readonly SimulatorEquipment[] = [
     status: 'regular',
     descricao: 'Equipamento fictício para treinamento de hidrantes.',
   },
+  {
+    id: 'EXT-SIM-005',
+    tipo: 'Extintor',
+    modelo: 'ABC 6 kg',
+    local: 'Sala técnica simulada',
+    status: 'regular',
+    descricao: 'Equipamento regular com prazo próximo para treinamento.',
+  },
+  {
+    id: 'EXT-SIM-006',
+    tipo: 'Extintor',
+    modelo: 'ABC 6 kg',
+    local: 'Depósito simulado',
+    status: 'regular',
+    descricao: 'Equipamento regular com prazo vencido para treinamento.',
+  },
 ];

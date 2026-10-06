@@ -4,20 +4,31 @@ import { useSimulatorStore } from './simulatorStore';
 describe('simulator store', () => {
   beforeEach(() => useSimulatorStore.getState().reset());
 
-  it('loads fictional fixtures and changes only in memory', () => {
-    const initial = useSimulatorStore.getState().equipment;
-    expect(initial.map((equipment) => equipment.id)).toContain('EXT-SIM-001');
-
-    useSimulatorStore.getState().updateEquipmentStatus('EXT-SIM-001', 'observacao');
-    expect(useSimulatorStore.getState().equipment.find((equipment) => equipment.id === 'EXT-SIM-001')?.status).toBe('observacao');
+  it('starts a cloned session without mutating the catalog', () => {
+    const store = useSimulatorStore.getState();
+    const original = store.scenarios[0].initialEquipment.description;
+    store.startSession('S02-01');
+    const session = useSimulatorStore.getState().activeSession;
+    expect(session?.scenarioId).toBe('S02-01');
+    expect(session?.selectedEquipment).not.toBe(store.scenarios[0].initialEquipment);
+    expect(useSimulatorStore.getState().scenarios[0].initialEquipment.description).toBe(original);
   });
 
-  it('restores fixtures on reset', () => {
-    useSimulatorStore.getState().selectEquipment('EXT-SIM-002');
-    useSimulatorStore.getState().updateEquipmentStatus('EXT-SIM-002', 'vencido');
-    useSimulatorStore.getState().reset();
+  it('preserves answers until reset and then clears the session', () => {
+    const store = useSimulatorStore.getState();
+    store.startSession('S02-02');
+    store.setChecklistAnswer('CHK-SIM-02-02', { selectedResult: 'observacao', studentNote: 'Desgaste visível.' });
+    expect(useSimulatorStore.getState().activeSession?.answers['CHK-SIM-02-02'].studentNote).toBe('Desgaste visível.');
+    store.resetSession();
+    expect(useSimulatorStore.getState().activeSession?.answers).toEqual({});
+  });
 
-    expect(useSimulatorStore.getState().selectedEquipmentId).toBeNull();
-    expect(useSimulatorStore.getState().equipment.find((equipment) => equipment.id === 'EXT-SIM-002')?.status).toBe('observacao');
+  it('allows an incorrect result and explains it after completion', () => {
+    const store = useSimulatorStore.getState();
+    store.startSession('S02-03');
+    store.setInspectionResult('conforme');
+    store.completeSession();
+    expect(useSimulatorStore.getState().activeSession?.completed).toBe(true);
+    expect(useSimulatorStore.getState().activeSession?.feedback?.correct).toBe(false);
   });
 });
