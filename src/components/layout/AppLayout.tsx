@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { Menu, User, Download, RefreshCw, Wifi, WifiOff, AlertOctagon, Plus } from 'lucide-react';
@@ -19,6 +19,8 @@ export default function AppLayout() {
   const location = useLocation();
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [sideMenuOpen, setSideMenuOpen] = useState(false);
+  const sideMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeSideMenu = useCallback(() => setSideMenuOpen(false), []);
   const [installing, setInstalling] = useState(false);
   const install = usePwaInstall();
   const lastConnectivityRef = useRef(isOnline);
@@ -114,7 +116,7 @@ export default function AppLayout() {
 
   return (
     <div className="app-shell">
-      <Sidebar open={sideMenuOpen} onClose={() => setSideMenuOpen(false)} isOnline={isOnline} />
+      <Sidebar open={sideMenuOpen} onClose={closeSideMenu} isOnline={isOnline} triggerRef={sideMenuTriggerRef} />
 
       <div className="app-content flex flex-col min-h-screen">
         {!isOnline && <OfflineBanner pending={pending} variant="mobile" />}
@@ -122,6 +124,7 @@ export default function AppLayout() {
         <header className="bg-white border-b border-gray-100 px-3 sm:px-6 py-2 sm:py-2.5 flex items-center justify-between gap-2 sticky top-0 z-20">
           <div className="flex items-center gap-2 min-w-0">
             <button
+              ref={sideMenuTriggerRef}
               onClick={() => setSideMenuOpen(true)}
               className="lg:hidden flex items-center justify-center text-gray-600 hover:text-gray-900 bg-gray-50 rounded-lg p-2 min-h-0 min-w-0"
               aria-label="Abrir menu"

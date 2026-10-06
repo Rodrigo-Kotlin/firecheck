@@ -9,7 +9,7 @@ import ConfirmDialog from '../../components/ConfirmDialog';
 import type { Inspection, Equipment, Stats } from '../../types';
 import { getControlCenterFilterOptions, parseControlCenterFilters, type ControlCenterFilters } from '../../utils/controlCenterFilters';
 import { APP_NAME } from '../../config/brand';
-import { buildHistoryEntries, filterHistoryEntries, scopeReportData } from './reportData';
+import { buildHistoryEntries, buildReportStats, filterHistoryEntries, scopeReportData } from './reportData';
 import { getHistoryStatusFromQuery, HISTORY_STATUS_BADGE, type HistoryEntry, type HistoryStatus } from './reportTypes';
 import { individualReportFilename, monthlyReportFilename } from './reportFileNames';
 import { formatDateBR, formatDateTimeBR, getLocalDateISO } from '../../utils/date';
@@ -748,10 +748,11 @@ async function generateMonthlyPDF(
   equipments: Equipment[],
   company: string,
   unit: string,
+  monthKey: string,
 ) {
   const doc = new jsPDF();
-  const ctx = makeCtx(doc, `MENSAL-${getLocalDateISO().slice(0, 7)}`, company, unit);
-  const now = new Date();
+  const ctx = makeCtx(doc, `MENSAL-${monthKey}`, company, unit);
+  const now = new Date(`${monthKey}-01T12:00:00`);
   const mes = now.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 
   drawCover(ctx, {
@@ -924,7 +925,7 @@ async function generateMonthlyPDF(
 }
 
 export default function Relatorios() {
-  const { inspections, stats, equipments, config, user, deleteInspection, resolveInspectionConflictKeepLocal, resolveInspectionConflictUseRemote } = useAppStore();
+  const { inspections, equipments, config, user, deleteInspection, resolveInspectionConflictKeepLocal, resolveInspectionConflictUseRemote } = useAppStore();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const filterOptions = useMemo(() => getControlCenterFilterOptions(equipments), [equipments]);
@@ -962,6 +963,16 @@ export default function Relatorios() {
   }, [history, search, dateFilter, dateFrom, dateTo, urlStatusFilter]);
 
   const visible = filtered.slice(0, visibleCount);
+
+  const reportInspectionIds = useMemo(() => new Set(filtered.map((entry) => entry.id)), [filtered]);
+  const reportInspections = useMemo(
+    () => scopedInspections.filter((inspection) => reportInspectionIds.has(inspection.id)),
+    [scopedInspections, reportInspectionIds],
+  );
+  const reportEquipments = useMemo(
+    () => scopedReportData.equipments.filter((equipment) => reportInspections.some((inspection) => inspection.equipmentId === equipment.id)),
+    [reportInspections, scopedReportData.equipments],
+  );
 
   const { totalInspecoes, conformesCount, pendentesCriticos, conformidadePct } = scopedReportData.summary;
 
@@ -1010,7 +1021,8 @@ export default function Relatorios() {
   };
 
   const handleMonthlyPDF = () => {
-    void runReportGeneration(() => generateMonthlyPDF(stats, inspections, equipments, config.empresa, config.unidade));
+    const monthKey = (dateFilter || dateFrom || getLocalDateISO()).slice(0, 7);
+    void runReportGeneration(() => generateMonthlyPDF(buildReportStats(reportEquipments), reportInspections, reportEquipments, config.empresa, config.unidade, monthKey));
   };
 
   return (

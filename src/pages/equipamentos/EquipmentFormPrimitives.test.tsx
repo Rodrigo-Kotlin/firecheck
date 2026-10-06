@@ -43,4 +43,20 @@ describe('equipment form primitives', () => {
     expect(select).toBeTruthy();
     expect(screen.getByRole('option', { name: 'regular' })).toBeTruthy();
   });
+
+  it('associates hint and error content and propagates validation state', () => {
+    render(
+      <FormField label="Identificação" required hint="Use o código da etiqueta." error="Campo obrigatório" htmlFor="equipment-id">
+        <input id="equipment-id" />
+      </FormField>,
+    );
+
+    const input = screen.getByRole('textbox', { name: /Identificação/ });
+    expect(input.getAttribute('aria-describedby')).toBe('equipment-id-hint equipment-id-error');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(input.getAttribute('aria-required')).toBe('true');
+    expect(input.hasAttribute('required')).toBe(true);
+    expect(screen.getByText('Use o código da etiqueta.').id).toBe('equipment-id-hint');
+    expect(screen.getByText('Campo obrigatório').parentElement?.id).toBe('equipment-id-error');
+  });
 });

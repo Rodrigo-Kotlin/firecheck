@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { formatDateBR } from '../../utils/date';
 import { Search, QrCode, Plus, Calendar, AlertCircle, MapPin, Lock, ChevronRight, Trash2, AlertOctagon, LayoutGrid, List } from 'lucide-react';
@@ -266,12 +266,15 @@ export default function Equipamentos() {
             const deadline = DEADLINE_RESULT_META[presentation.deadlineResult];
             const operationalLabel = OPERATIONAL_STATUS_LABEL[eq.status];
 
-            return (
+              return (
               <div
                 key={eq.id}
-                onClick={() => openEquipment(eq.id)}
-                className={`card-subtle bg-white border-l-[3px] ${status.border} p-4 sm:p-5 flex flex-col gap-3 cursor-pointer active:scale-[0.99]`}
+                className={`relative card-subtle bg-white border-l-[3px] ${status.border} p-4 sm:p-5`}
               >
+                <Link
+                  to={`/equipamentos/${encodeURIComponent(eq.id)}`}
+                  className="flex flex-col gap-3 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                >
               {/* Top: code (mono) + status pill + leitura + chevron */}
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
@@ -299,20 +302,6 @@ export default function Equipamentos() {
                       <Lock className="w-3 h-3" />
                       Leitura
                     </span>
-                  )}
-                  {deletable && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteTarget(eq.id);
-                      }}
-                      className="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0 transition-colors"
-                      aria-label={`Excluir ${eq.id}`}
-                      title="Excluir equipamento"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
                   )}
                   <ChevronRight className="w-4 h-4 text-gray-300" aria-hidden="true" />
                 </div>
@@ -352,6 +341,18 @@ export default function Equipamentos() {
                   </div>
                 )}
               </div>
+                </Link>
+                {deletable && (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(eq.id)}
+                    className="absolute right-4 top-4 w-8 h-8 flex items-center justify-center text-gray-300 hover:text-critical hover:bg-red-50 rounded-lg min-h-0 min-w-0 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                    aria-label={`Excluir ${eq.id}`}
+                    title="Excluir equipamento"
+                  >
+                    <Trash2 className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                )}
               </div>
             );
           })}

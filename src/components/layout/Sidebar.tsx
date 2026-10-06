@@ -1,4 +1,5 @@
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useRef, type RefObject } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Shield, QrCode, FileBarChart, X,
   ClipboardList, Settings, LogOut,
@@ -14,21 +15,59 @@ type SidebarProps = {
   open: boolean;
   onClose: () => void;
   isOnline: boolean;
+  triggerRef?: RefObject<HTMLButtonElement | null>;
 };
 
-export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
+export function Sidebar({ open, onClose, isOnline, triggerRef }: SidebarProps) {
   const { user, config, syncEnabled, syncing, pending, conflictCounts, triggerSync, logout } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation();
+  const sidebarRef = useRef<HTMLElement>(null);
+  const wasOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (!open) {
+      if (wasOpenRef.current) triggerRef?.current?.focus();
+      wasOpenRef.current = false;
+      return;
+    }
+    wasOpenRef.current = true;
+
+    const sidebar = sidebarRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    sidebar?.querySelector<HTMLElement>('[data-sidebar-close], a, button')?.focus();
+
+    const focusableSelector = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !sidebar) return;
+      const focusable = Array.from(sidebar.querySelectorAll<HTMLElement>(focusableSelector));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open, onClose, triggerRef]);
 
   const initials = user?.nome
     ? user.nome.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase()
     : 'EF';
-
-  const handleNavigate = (path: string) => {
-    onClose();
-    navigate(path);
-  };
 
   const handleLogout = () => {
     void logout();
@@ -93,6 +132,7 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
       />
 
       <aside
+        ref={sidebarRef}
         className={`app-sidebar ${open ? 'open' : ''}`}
         aria-label="Menu principal"
       >
@@ -110,6 +150,7 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
             onClick={onClose}
             className="lg:hidden text-white/80 hover:text-white p-1.5 min-h-0 min-w-0 rounded"
             aria-label="Fechar menu"
+            data-sidebar-close="true"
           >
             <X className="w-5 h-5" />
           </button>
@@ -135,9 +176,11 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
         <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
           <div className="label-uppercase px-3 py-2">Navegação</div>
           {navItems.map(item => (
-            <button
+            <Link
               key={item.path}
-              onClick={() => handleNavigate(item.path)}
+              to={item.path}
+              onClick={onClose}
+              aria-current={isActive(item.path) ? 'page' : undefined}
               className={`w-full flex items-center gap-3 h-11 px-3 rounded-lg font-bold text-sm transition-all text-left ${
                 isActive(item.path)
                   ? 'bg-primary text-white shadow-sm'
@@ -146,7 +189,7 @@ export function Sidebar({ open, onClose, isOnline }: SidebarProps) {
             >
               <item.icon className={`w-5 h-5 flex-shrink-0 ${isActive(item.path) ? 'text-white' : 'text-gray-400'}`} />
               <span className="truncate">{item.label}</span>
-            </button>
+            </Link>
           ))}
         </nav>
 

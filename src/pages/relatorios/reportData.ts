@@ -57,6 +57,20 @@ export function buildReportSummary(scopedInspections: Inspection[], scopedEquipm
   };
 }
 
+export function buildReportStats(equipment: Equipment[]) {
+  const emDia = equipment.filter((item) => item.status === 'regular').length;
+  const pendentes = equipment.filter((item) => item.status === 'pendente').length;
+  const vencidos = equipment.filter((item) => item.status === 'vencido' || item.status === 'extraviado').length;
+  const observacao = equipment.filter((item) => item.status === 'observacao' || item.status === 'em_manutencao' || item.status === 'inativo' || item.status === 'substituido').length;
+  return {
+    total: equipment.length,
+    emDia,
+    pendentes,
+    vencidos,
+    conformidade: equipment.length ? Math.round(((emDia + observacao) / equipment.length) * 100) : 0,
+  };
+}
+
 export function scopeReportData(
   equipments: Equipment[],
   inspections: Inspection[],

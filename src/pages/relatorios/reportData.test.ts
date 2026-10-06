@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHistoryEntries, buildReportSummary, filterHistoryEntries } from './reportData';
+import { buildHistoryEntries, buildReportStats, buildReportSummary, filterHistoryEntries } from './reportData';
 import type { Equipment, Inspection } from '../../types';
 
 const equipment = (overrides: Partial<Equipment> = {}): Equipment => ({
@@ -31,5 +31,14 @@ describe('report data composition', () => {
       equipment(), equipment({ id: 'EQ-2', status: 'observacao' }), equipment({ id: 'EQ-3', status: 'vencido' }),
     ]);
     expect(result).toEqual({ totalInspecoes: 2, conformesCount: 2, pendentesCriticos: 1, conformidadePct: 67 });
+  });
+
+  it('builds monthly generation stats from the scoped equipment set', () => {
+    expect(buildReportStats([
+      equipment({ id: 'EQ-1', status: 'regular' }),
+      equipment({ id: 'EQ-2', status: 'observacao' }),
+      equipment({ id: 'EQ-3', status: 'pendente' }),
+      equipment({ id: 'EQ-4', status: 'vencido' }),
+    ])).toEqual({ total: 4, emDia: 1, pendentes: 1, vencidos: 1, conformidade: 50 });
   });
 });

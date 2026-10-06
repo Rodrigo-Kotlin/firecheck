@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import type { FieldErrors, FieldValues, UseFormRegister } from 'react-hook-form';
 import { AlertCircle, type LucideIcon } from 'lucide-react';
 import { type FieldConfig } from '../../constants/equipmentFormConfig';
@@ -34,19 +34,30 @@ export type FormFieldProps = {
 };
 
 export function FormField({ label, required, error, hint, htmlFor, children }: FormFieldProps) {
+  const hintId = htmlFor && hint ? `${htmlFor}-hint` : undefined;
+  const errorId = htmlFor && error ? `${htmlFor}-error` : undefined;
+  const describedBy = [hintId, errorId].filter(Boolean).join(' ') || undefined;
+  const field = isValidElement(children) ? cloneElement(children as ReactElement<Record<string, unknown>>, {
+    'aria-describedby': describedBy,
+    'aria-invalid': error ? 'true' : undefined,
+    'aria-required': required ? 'true' : undefined,
+    required: required || undefined,
+  }) : children;
+
   return (
     <div>
       <label htmlFor={htmlFor} className="field-label flex items-baseline gap-1">
         <span>{label}</span>
         {required && <span className="text-critical text-xs font-black" aria-label="obrigatório">*</span>}
       </label>
-      {children}
+      {field}
+      {hint && <span id={hintId} className="field-hint">{hint}</span>}
       {error ? (
-        <span className="field-error flex items-center gap-1 mt-1.5">
+        <span id={errorId} className="field-error flex items-center gap-1 mt-1.5">
           <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
           <span>{error}</span>
         </span>
-      ) : hint ? <span className="field-hint">{hint}</span> : null}
+      ) : null}
     </div>
   );
 }

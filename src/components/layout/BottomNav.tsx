@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Shield, QrCode, FileBarChart, Menu } from 'lucide-react';
 import { useAppStore, type Tab } from '../../store';
 
@@ -17,6 +17,7 @@ const tabs = [
 export function BottomNav({ onOpenSideMenu }: BottomNavProps) {
   const navigate = useNavigate();
   const { currentTab, setCurrentTab } = useAppStore();
+  const location = useLocation();
 
   const handleClick = (tab: typeof tabs[number]) => {
     if (tab.isMenu) {
@@ -41,6 +42,7 @@ export function BottomNav({ onOpenSideMenu }: BottomNavProps) {
               onClick={() => handleClick(tab)}
               className="bottom-nav-fab"
               aria-label="Escanear QR Code"
+              aria-current={location.pathname.startsWith('/scan') ? 'page' : undefined}
             >
               <div className="bottom-nav-fab__inner">
                 <QrCode className="w-6 h-6 text-white" />
@@ -63,13 +65,14 @@ export function BottomNav({ onOpenSideMenu }: BottomNavProps) {
           );
         }
 
-        const isActive = currentTab === tab.id;
+        const isActive = currentTab === tab.id || (tab.path === '/' ? location.pathname === '/' : location.pathname.startsWith(tab.path));
         return (
           <button
             key={tab.id}
             onClick={() => handleClick(tab)}
             className={`bottom-nav-tab ${isActive ? 'bottom-nav-tab--active' : ''}`}
             aria-label={tab.label}
+            aria-current={isActive ? 'page' : undefined}
           >
             <tab.icon className="w-5 h-5 mb-0.5" />
             <span className="bottom-nav-tab__label">{tab.label}</span>
